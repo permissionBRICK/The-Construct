@@ -96,7 +96,10 @@ public static class LocalVmAdoption
             ?? throw new VmAdoptionException("conflict", "The engine has no TLS certificate for the guest to verify.");
         var serviceUrl = $"https://{options.PublicHost}:{options.ApiPort()}";
 
-        // The old client's choices, plus what keeps a later reprovision from the engine service-managed.
+        var guest = await ReachGuestAsync(services, options, name, facts, request.SshPrivateKey, progress, ct);
+
+        // The old client's choices, the coding agents the VM has, and what keeps a later reprovision from the engine
+        // service-managed.
         var desired = LegacyClientSettings.ToDesired(request.Settings, request.InstanceState);
         desired = desired with
         {
@@ -107,6 +110,7 @@ public static class LocalVmAdoption
                 ExternalHost = options.PublicHost,
                 ExternalSshPort = port,
             },
+            CodingAgents = guest.CodingAgents,
         };
         // Tied to this VM's record, so a later VM of the same name does not inherit them.
         var created = (await vms.GetAsync(name, ct))?.Created;
@@ -114,7 +118,7 @@ public static class LocalVmAdoption
             new StoredDesiredState(desired, ProvisionScript.DesiredHash(desired), clock.UtcNow, actor, created), ct);
         progress.Report($"Stored the provisioning settings the old client kept ({desired.Projects.Count} project(s))");
 
-        await EnrollGuestAsync(services, options, name, user.Name, facts, port, serviceUrl, certificate, request.SshPrivateKey, progress, ct);
+        await EnrollGuestAsync(services, guest, name, user.Name, port, serviceUrl, certificate, options, progress, ct);
 
         if (await vms.GetAsync(name, ct) is { } registered)
             await vms.UpdateAsync(registered with { SshForwardPort = port, State = VmState.Running }, ct);
@@ -124,8 +128,11 @@ public static class LocalVmAdoption
         return new LocalAdoptionResult(name, user.Name, port, incarnation.ToString("D"), facts.Cpu, ramMb, diskGb, serviceUrl);
     }
 
-    private static async Task EnrollGuestAsync(IServiceProvider services, ConstructdOptions options, string name, string owner,
-        HypervisorVmFacts facts, int port, string serviceUrl, string certificate, string privateKey, IProgress<string> progress, CancellationToken ct)
+    /// <summary>The guest reached with the old client's key and proven to be this VM, with the coding agents it has.</summary>
+    private sealed record ReachedGuest(SshTarget Target, string MachineId, IReadOnlyList<string>? CodingAgents);
+
+    private static async Task<ReachedGuest> ReachGuestAsync(IServiceProvider services, ConstructdOptions options, string name,
+        HypervisorVmFacts facts, string privateKey, IProgress<string> progress, CancellationToken ct)
     {
         var endpoint = await services.GetRequiredService<IHypervisorDriver>().GetEndpointAsync(name, ct)
             ?? throw new VmAdoptionException("guest", "The VM has no SSH endpoint.");
@@ -141,15 +148,27 @@ public static class LocalVmAdoption
         if (!OperatingSystem.IsWindows()) File.SetUnixFileMode(keyFile, UnixFileMode.UserRead | UnixFileMode.UserWrite);
         var target = new SshTarget(endpoint.SshHost, endpoint.SshPort, "root", keyFile, Path.Combine(keyDir, "known_hosts"));
 
-        // The guest the key reached has to be this VM: its firmware id is the one Hyper-V reports.
+        // The guest the key reached has to be this VM: its firmware id is the one Hyper-V reports. The coding agents it
+        // was provisioned with (AI_TOOLS in its config) follow, when it names them.
         var identity = new Lines();
-        var read = await ssh.RunAsync(target, "cat /etc/machine-id /sys/class/dmi/id/product_uuid", null, identity, TimeSpan.FromMinutes(2), ct);
-        if (read != 0 || identity.Items.Count != 2) throw new VmAdoptionException("guest", $"Could not read the guest's identity over SSH (exit {read}).");
+        var read = await ssh.RunAsync(target, IdentityCommand, null, identity, TimeSpan.FromMinutes(2), ct);
+        if (read != 0 || identity.Items.Count is not (2 or 3)) throw new VmAdoptionException("guest", $"Could not read the guest's identity over SSH (exit {read}).");
         var machineId = identity.Items[0].Trim();
         if (!Guid.TryParse(identity.Items[1].Trim(), out var guestFirmware) || !Guid.TryParse(facts.FirmwareId, out var vmFirmware) ||
             guestFirmware == Guid.Empty || guestFirmware != vmFirmware)
             throw new VmAdoptionException("guest", "The guest reached over SSH is not this Hyper-V VM; nothing was changed in it.");
         progress.Report("The guest's firmware id matches the Hyper-V VM");
+        return new ReachedGuest(target, machineId, identity.Items.Count == 3 ? CodingAgents.FromAiTools(identity.Items[2]) : null);
+    }
+
+    public const string IdentityCommand =
+        "cat /etc/machine-id /sys/class/dmi/id/product_uuid && { sed -n 's/^AI_TOOLS=//p' /etc/construct/config.env 2>/dev/null | head -n 1; true; }";
+
+    private static async Task EnrollGuestAsync(IServiceProvider services, ReachedGuest guest, string name, string owner, int port,
+        string serviceUrl, string certificate, ConstructdOptions options, IProgress<string> progress, CancellationToken ct)
+    {
+        var ssh = services.GetRequiredService<ISshRunner>();
+        var (target, machineId) = (guest.Target, guest.MachineId);
 
         // Issued only once the guest is known; a repeat replaces the earlier token.
         var token = await ((IVmTokenIssuer)services.GetRequiredService<ITokenService>()).IssueVmTokenAsync(name, VmTokenKind.Primary, ct);

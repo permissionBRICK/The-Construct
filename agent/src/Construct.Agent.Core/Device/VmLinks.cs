@@ -251,6 +251,46 @@ public sealed class VmLinks : IAsyncDisposable
         if (!await forwarder.CloseAsync(id, ct).ConfigureAwait(false)) throw new AgentFailure(404, "no-forward", "No such forward.");
     }
 
+    /// <summary>
+    /// A tunnel from this device's <c>127.0.0.1:<paramref name="port"/></c> to the same loopback port on a running VM,
+    /// over its link (a sign-in's redirect, 11.8); null when the port is taken on this device. Disposing it closes it.
+    /// </summary>
+    public async Task<IAsyncDisposable?> OpenLoopbackTunnelAsync(string engine, string vm, int port, CancellationToken ct)
+    {
+        var transport = Transport(engine, vm);
+        var reservation = _ports.TryReserve(port);
+        if (reservation is null) return null;
+        ISupervisedProcess? process = null;
+        try
+        {
+            if (!await transport.ProbePortAsync(port, "127.0.0.1", ct).ConfigureAwait(false)) return null;
+            var spec = new TunnelSpec(port, port);
+            process = _processes.Start(c => transport.SpawnTunnel(spec, c), new(TimeSpan.FromMilliseconds(1200)), _ => { });
+            if (!await process.FirstAttempt.WaitAsync(ct).ConfigureAwait(false)) return null;
+            var tunnel = new LoopbackTunnel(process, reservation);
+            process = null;
+            reservation = null;
+            return tunnel;
+        }
+        finally
+        {
+            if (process is not null) await process.DisposeAsync().ConfigureAwait(false);
+            reservation?.Dispose();
+        }
+    }
+
+    private sealed class LoopbackTunnel(ISupervisedProcess process, IDisposable reservation) : IAsyncDisposable
+    {
+        private int _closed;
+
+        public async ValueTask DisposeAsync()
+        {
+            if (Interlocked.Exchange(ref _closed, 1) != 0) return;
+            try { await process.DisposeAsync().ConfigureAwait(false); }
+            finally { reservation.Dispose(); }
+        }
+    }
+
     /// <summary>Switches the microphone passthrough for a VM; the choice is kept for its next start.</summary>
     public async Task<AudioView> SetMicAsync(string engine, string vm, bool on, CancellationToken ct)
     {

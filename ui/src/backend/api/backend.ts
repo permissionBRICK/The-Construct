@@ -2,15 +2,17 @@ import createClient, { type Client } from 'openapi-fetch';
 import type { paths as AgentPaths } from '../generated/agent';
 import type { paths as EnginePaths } from '../generated/engine';
 import type {
-  Backend, CreateVmRequest, Feature, FirstRunRequest, Host, HostProbe, HostUser, HostVm, Job, JobKind, Open, Prefs, ProfileSave, SettingsPatch, State, Upgrade, VaultMode, VaultRequest, Vm, WinKey,
+  AgentId, Backend, CreateVmRequest, Feature, FirstRunRequest, Host, HostProbe, HostUser, HostVm, Job, JobKind, Open, Prefs, ProfileSave, SettingsPatch, SignIn, SignInInput, State, Upgrade,
+  VaultMode, VaultRequest, Vm, WinKey,
 } from '../types';
 import { followEvents, type AgentEventData } from './events';
 import { openExternal } from '../../ui/shell';
+import { agentList, agentSwitches, DEFAULT_AGENTS } from '../../model/settings';
 import {
   updateRunning, allowanceOf, codeGroups, hostVersion, jobKey, problemText, splitJobKey, toCert, toConfig, toDevice, toHostJob, toHostUser, toHostVm, toJob,
   toMedia, toStatus, toUpdates, toUsage, toVm, toWindows, vmKey, toSecret, toLeases, toVaultEvent, toApproval, toEntryRequest, toProfile, splitRequestKey, VM_JOB_KINDS,
-  settingsFields, withDesired, toLink, toEverything, hostKind, toIsos, toRepair, REPAIRABLE, upgradeStep, toUpgradeItem,
-  type RepairSession, type RepairLine, type UpgradeView,
+  settingsFields, withDesired, codingAgents, toLink, toEverything, hostKind, toIsos, toRepair, REPAIRABLE, upgradeStep, toUpgradeItem,
+  type RepairSession, type RepairLine, type UpgradeView, type AgentSignIn,
   type DeviceItem, type ProfileResponse, type AuditEntry, type EngineView, type Health, type HostUpdateStatus, type HttpsStatus, type JobResponse, type MediaItem, type TokenSummary,
   type UsageSummary, type UserDetail, type VmParts, type VmResponse, type WhoAmI, type HostStatus, type HostConfig, type HostWindows, type HostCapabilities, type IsoCatalog,
   type ConnectionView, type ProvisionSettings,
@@ -38,6 +40,16 @@ const PREFS_KEY = 'construct.prefs';
 const DISMISSED_KEY = 'construct.dismissed';
 
 interface Started { kind: JobKind; from?: string; to?: string; freshImage?: boolean; backupId?: string }
+
+/** A coding agent's sign-in this device follows (see ApiBackend.signIn). */
+interface SignInAt {
+  engine: string; vm: string; vmId: string; agent: AgentId; id: string | null; revision: number;
+  /** Started as a browser sign-in (Codex's differs from its device code). */
+  browser: boolean;
+  forward: 'none' | 'asked' | 'open' | 'failed';
+  /** The sign-in session whose redirect the device forwards. */
+  forwarded?: string;
+}
 
 interface AdminData {
   users: HostUser[];
@@ -193,7 +205,7 @@ export class ApiBackend implements Backend {
       device: { name: '' }, version: '', release: null, vms: [], hosts: [], projects: [], sync: { when: '–', remote: '', rev: '' }, jobs: [],
       vaultRequests: [], secrets: [], leases: [], devices: [], history: [], vaultModes: [], problems: {}, pairing: null, revocation: null, handout: null,
       prefs: { channel: 'stable', theme: p.theme ?? 'auto', scheme: p.scheme ?? 'green', autoUpdate: false, startWithOs: false, notifications: false },
-      upgrade: null, notice: null, na: API_GAPS, firstRun: null, everything: null,
+      upgrade: null, notice: null, na: API_GAPS, firstRun: null, everything: null, signIn: null,
     };
   }
 
@@ -732,6 +744,19 @@ export class ApiBackend implements Backend {
         if (engine && vm && id && this.slices.has(engine)) void this.readRepair(engine, vm, id);
         return;
       }
+      case 'agent-sign-in.output': case 'agent-sign-in.ended': {
+        const at = this.signInAt;
+        const vm = typeof data?.vm === 'string' ? data.vm : null;
+        // Its output may come before the start's answer named the session.
+        if (at && engine === at.engine && vm?.toLowerCase() === at.vm.toLowerCase() && (id === at.id || at.id === null)) void this.readSignIn();
+        return;
+      }
+      case 'agent-notice.changed': {
+        // A lost sign-in appeared, cleared or was put away (on any device): the VM's agents again.
+        const vm = typeof data?.vm === 'string' ? data.vm : null;
+        if (engine && vm && this.slices.has(engine)) void this.readAgents(engine, vm);
+        return;
+      }
       case 'job.started': case 'job.progress': case 'job.ended':
         if (engine && id && this.slices.has(engine)) void this.readJob(engine, id);
         return;
@@ -746,6 +771,7 @@ export class ApiBackend implements Backend {
         if (engine && this.slices.has(engine)) void this.refreshEngine(engine);
         return;
       case 'engine.reset':
+        if (engine && engine === this.signInAt?.engine) void this.readSignIn();
         if (engine && this.slices.has(engine)) {
           // An engine restart ends every repair session: forget them, and ask each failed job's VM again.
           const sl = this.slices.get(engine)!;
@@ -1036,6 +1062,169 @@ export class ApiBackend implements Backend {
       .then(() => this.readRepair(x.engine, x.vm, sid));
   }
 
+  /* --- signing in to the coding agents --- */
+
+  /** The sign-in this device follows: where it runs, and its session and the revision read once the engine named it.
+      `forward`: the device agent's forward of its redirect (11.8, "No pasted code"), asked for once per sign-in. */
+  private signInAt: SignInAt | null = null;
+  private signInReads: Promise<void> = Promise.resolve();
+
+  /** One at a time: the engine ends a sign-in already running on the VM. OpenCode asks for an OpenRouter key first
+      (nothing runs on the VM until it is given); `list` is OpenCode's own list. */
+  signIn(vmId: string, agent: AgentId, how?: 'list') {
+    if (agent === 'opencode' && how !== 'list') {
+      if (this.signInAt) this.closeSignIn();
+      this.emit({ signIn: { vmId, agent, state: 'key', text: '' } });
+      return;
+    }
+    this.startSignIn(vmId, agent, { browser: true });
+  }
+
+  signInWithKey(vmId: string, key: string) {
+    if (key) this.startSignIn(vmId, 'opencode', { browser: true, provider: 'openrouter', secret: key });
+  }
+
+  /** This device forwards a sign-in's loopback redirect, so the engine is told it may use a browser sign-in
+      (`browser`); Codex's start without it is the fallback when the forward fails. A secret (OpenRouter's key) goes
+      to the sign-in once the engine named it, and is dropped then. */
+  private startSignIn(vmId: string, agent: AgentId, o: { browser: boolean; provider?: 'openrouter'; secret?: string }) {
+    const ref = this.vmRef(vmId);
+    if (!ref) return;
+    const at: SignInAt = { engine: ref.engine, vm: ref.name, vmId, agent, id: null, revision: -1, browser: o.browser, forward: 'none' };
+    this.signInAt = at;
+    this.emit({ signIn: { vmId, agent, state: 'starting', text: '' } });
+    let secret = o.secret;
+    void (async () => {
+      try {
+        const body = { browser: o.browser, ...(o.provider ? { provider: o.provider } : {}) };
+        const r = await ok(this.engine(at.engine).POST('/api/v1/vms/{name}/agents/{agent}/sign-in', { params: { path: { name: at.vm, agent } }, body }));
+        // Put away before the engine answered: it ends there too (one another start replaced is over already).
+        if (this.signInAt !== at && r.state === 'running') this.endSignIn(at, r.id);
+        if (secret && this.signInAt === at && r.state === 'running') {
+          const input = { secret, session: r.id };
+          secret = undefined;
+          void this.run(() => ok(this.engine(at.engine).POST('/api/v1/vms/{name}/agents/{agent}/sign-in/input', { params: { path: { name: at.vm, agent } }, body: input })));
+        }
+        secret = undefined;
+        this.storeSignIn(at, r);
+      } catch (e) {
+        secret = undefined;
+        if (this.signInAt === at) this.emit({ signIn: { vmId, agent, state: 'failed', text: errText(e) } });
+      }
+    })();
+  }
+
+  /** Reads the followed sign-in after an event about it, one read at a time. */
+  private readSignIn(): Promise<void> {
+    const at = this.signInAt;
+    if (!at) return this.signInReads;
+    this.signInReads = this.signInReads.then(async () => {
+      if (this.signInAt !== at) return;
+      try {
+        this.storeSignIn(at, await ok(this.engine(at.engine).GET('/api/v1/vms/{name}/agents/{agent}/sign-in', { params: { path: { name: at.vm, agent: at.agent } } })));
+      } catch (e) {
+        // Gone (another device started one, the engine restarted): over, with the last text.
+        const cur = this.s.signIn;
+        if (e instanceof ApiError && e.status === 404 && this.signInAt === at && cur) this.emit({ signIn: { ...cur, state: 'stopped' } });
+      }
+    });
+    return this.signInReads;
+  }
+
+  /** Shows what the sign-in's terminal shows. One that signed in goes away; the VM's agents are read again. */
+  private storeSignIn(at: SignInAt, r: AgentSignIn) {
+    // Another one's, or older than what was read (answers may cross).
+    if (this.signInAt !== at || r.agent !== at.agent || (at.id && at.id !== r.id) || r.revision < at.revision) return;
+    at.id = r.id;
+    at.revision = r.revision;
+    const state: SignIn['state'] | 'done' = r.state === 'running' ? 'running' : r.outcome === 'done' ? 'done' : r.outcome === 'stopped' ? 'stopped' : 'failed';
+    if (state !== 'running') {
+      void this.readAgents(at.engine, at.vm);
+      this.endForward(at);
+    }
+    if (state === 'done') {
+      this.signInAt = null;
+      this.emit({ signIn: null });
+      return;
+    }
+    // The CLI opened a link that returns to its own port on the VM: this device forwards that port and opens it.
+    if (state === 'running' && r.browser?.port && at.forward === 'none') {
+      at.forward = 'asked';
+      void this.forwardSignIn(at, r.id);
+    }
+    // An ended sign-in's terminal text is gone on the engine: the panel keeps what it showed last.
+    const text = r.text || (r.state === 'running' ? '' : this.s.signIn?.text ?? '');
+    this.emit({ signIn: { vmId: at.vmId, agent: at.agent, state, text, ...(state === 'running' && at.forward === 'open' ? { browser: true } : {}) } });
+  }
+
+  /** Asks the device agent to forward the sign-in's redirect and open its link. When it cannot (no link to the VM,
+      the port taken here), the panel stays as it is: the CLI's text and the reply field; Codex, whose browser sign-in
+      takes no pasted code, starts again with the device code. */
+  private async forwardSignIn(at: SignInAt, session: string) {
+    try {
+      await ok(this.agent.POST('/api/connections/{engine}/{vm}/sign-in', { params: { path: { engine: at.engine, vm: at.vm } }, body: { agent: at.agent, session } }));
+      if (this.signInAt !== at) { void this.agent.DELETE('/api/connections/{engine}/{vm}/sign-in', { params: { path: { engine: at.engine, vm: at.vm }, query: { session } } }).catch(() => {}); return; }
+      at.forwarded = session;
+      at.forward = 'open';
+      const cur = this.s.signIn;
+      if (cur?.state === 'running') this.emit({ signIn: { ...cur, browser: true } });
+    } catch {
+      if (this.signInAt !== at) return;
+      at.forward = 'failed';
+      if (at.agent === 'codex' && at.browser) this.startSignIn(at.vmId, at.agent, { browser: false });
+    }
+  }
+
+  /** Closes the device's forward of a sign-in that is over, by its session: a newer sign-in's forward stays (the agent
+      closes it by itself too). */
+  private endForward(at: SignInAt) {
+    if (at.forward !== 'open' || !at.forwarded) return;
+    at.forward = 'failed';
+    void this.agent.DELETE('/api/connections/{engine}/{vm}/sign-in', { params: { path: { engine: at.engine, vm: at.vm }, query: { session: at.forwarded } } }).catch(() => {});
+  }
+
+  /** Types into the followed sign-in, named by its session: input meant for it never reaches a newer one. */
+  signInInput(input: SignInInput) {
+    const at = this.signInAt;
+    if (!at?.id || this.s.signIn?.state !== 'running') return;
+    const body = { ...input, session: at.id };
+    void this.run(() => ok(this.engine(at.engine).POST('/api/v1/vms/{name}/agents/{agent}/sign-in/input', { params: { path: { name: at.vm, agent: at.agent } }, body })));
+  }
+
+  closeSignIn() {
+    const at = this.signInAt;
+    const running = this.s.signIn?.state === 'running' || this.s.signIn?.state === 'starting';
+    this.signInAt = null;
+    this.emit({ signIn: null });
+    // Before the engine named it, the start's answer ends it.
+    if (at?.id && running) this.endSignIn(at, at.id);
+    if (at) this.endForward(at);
+  }
+
+  dismissSignInNotice(vmId: string, agent: AgentId) {
+    const ref = this.vmRef(vmId);
+    if (!ref) return;
+    void this.run(() => ok(this.engine(ref.engine).DELETE('/api/v1/vms/{name}/agents/{agent}/notice', { params: { path: { name: ref.name, agent } } })))
+      .then(() => this.readAgents(ref.engine, ref.name));
+  }
+
+  /** Ends one sign-in on the engine, by its session: a newer one on the VM is left alone. */
+  private endSignIn(at: { engine: string; vm: string; agent: AgentId }, session: string) {
+    void this.engine(at.engine).DELETE('/api/v1/vms/{name}/agents/{agent}/sign-in', { params: { path: { name: at.vm, agent: at.agent }, query: { session } } }).catch(() => {});
+  }
+
+  /** The VM's coding agents again (versions, signed in). */
+  private async readAgents(engine: string, vm: string) {
+    const sl = this.slices.get(engine);
+    if (!sl) return;
+    try {
+      const agents = await ok(this.engine(engine).GET('/api/v1/vms/{name}/agents', { params: { path: { name: vm } } }));
+      const key = [...sl.parts.keys()].find(k => k.toLowerCase() === vm.toLowerCase()) ?? vm;
+      sl.parts.set(key, { ...(sl.parts.get(key) ?? {}), agents });
+      this.compose();
+    } catch { /* shown as it was */ }
+  }
+
   /** Reads one job after an event about it. A job that ended stays ended whatever an older read says. */
   private async readJob(engine: string, id: string) {
     const sl = this.slices.get(engine);
@@ -1226,9 +1415,10 @@ export class ApiBackend implements Backend {
     const path = { params: { path: { name: ref.name } } };
     if (patch.disk || patch.hw?.checkpoints !== undefined || patch.hw?.startWithHost !== undefined) { this.note(NA); return; }
     if (patch.services?.t3ProxyUrl !== undefined || patch.identity?.historyDays !== undefined) { this.note(NA); return; }
-    if (patch.services || patch.identity || patch.swap) {
+    if (patch.services || patch.identity || patch.agents || patch.swap) {
       // Stored for the next reprovision; the VM itself stays as it is until then (7.5).
-      void this.run(() => this.changeDesired(ref.engine, ref.name, settingsFields(patch)), 'Saved, applies at the next reprovision', ref.engine);
+      const agents = patch.agents && ((cur: string[]) => agentList({ ...agentSwitches(cur), ...patch.agents }));
+      void this.run(() => this.changeDesired(ref.engine, ref.name, settingsFields(patch), undefined, agents), 'Saved, applies at the next reprovision', ref.engine);
       return;
     }
     void this.run(async () => {
@@ -1244,19 +1434,21 @@ export class ApiBackend implements Backend {
 
   /** Reads the VM's desired state from its engine, changes the named fields (and the projects), and stores it whole,
       so fields this page does not show are kept as the engine holds them. */
-  private changeDesired(engine: string, name: string, fields: Partial<ProvisionSettings>, projects?: (current: string[]) => string[]): Promise<void> {
+  private changeDesired(engine: string, name: string, fields: Partial<ProvisionSettings>, projects?: (current: string[]) => string[],
+    agents?: (current: string[]) => string[]): Promise<void> {
     // One save per VM at a time: each reads what the one before it stored, so neither drops the other's change.
     const key = vmKey(engine, name.toLowerCase());
-    const next = (this.desiredSaves.get(key) ?? Promise.resolve()).catch(() => {}).then(() => this.storeDesired(engine, name, fields, projects));
+    const next = (this.desiredSaves.get(key) ?? Promise.resolve()).catch(() => {}).then(() => this.storeDesired(engine, name, fields, projects, agents));
     this.desiredSaves.set(key, next);
     return next;
   }
 
-  private async storeDesired(engine: string, name: string, fields: Partial<ProvisionSettings>, projects?: (current: string[]) => string[]) {
+  private async storeDesired(engine: string, name: string, fields: Partial<ProvisionSettings>, projects?: (current: string[]) => string[],
+    agents?: (current: string[]) => string[]) {
     const c = this.engine(engine);
     const path = { params: { path: { name } } };
     const now = await ok(c.GET('/api/v1/vms/{name}/desired', path));
-    const next = withDesired(now.desired, fields, projects?.(now.desired?.projects ?? []));
+    const next = withDesired(now.desired, fields, projects?.(now.desired?.projects ?? []), agents?.(codingAgents(now.desired)));
     await ok(c.PUT('/api/v1/vms/{name}/desired', { ...path, body: next }));
   }
 
@@ -1390,12 +1582,12 @@ export class ApiBackend implements Backend {
       try {
         const engine = req.where === 'local' ? await this.localEngine() : await this.addEngine(req.hostAddress ?? '', windows ? null : req.token ?? null, req.pin ?? null, undefined, windows);
         // One request: the engine creates the VM with its recommended size and provisions it with these settings
-        // (none chosen yet: the guest's defaults; Settings changes them later).
+        // (the coding agents chosen; nothing else chosen yet: the guest's defaults; Settings changes them later).
         const c = this.engine(engine);
         const d = await ok(c.GET('/api/v1/vm-defaults'));
         // The engine recommends nothing when no VM fits into the host's free memory.
         if (!(d.recommendedRamGb >= 1)) throw new Error(req.where === 'local' ? 'This PC has too little free memory for a VM' : 'The host has too little free memory for a VM');
-        const r = await ok(this.agent.POST('/api/engines/{engine}/vms', { params: { path: { engine } }, body: { name, ramGb: d.recommendedRamGb, diskGb: d.recommendedDiskGb, desired: { projects: [], settings: {} } } as never }));
+        const r = await ok(this.agent.POST('/api/engines/{engine}/vms', { params: { path: { engine } }, body: { name, ramGb: d.recommendedRamGb, diskGb: d.recommendedDiskGb, desired: { projects: [], settings: {}, codingAgents: req.agents ?? DEFAULT_AGENTS } } as never }));
         await this.refreshEngine(engine);
         await this.track(engine, r.jobId, { kind: 'create' });
       } catch (e) {

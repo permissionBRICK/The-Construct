@@ -1,4 +1,24 @@
-import type { SettingsPatch, VmSettings } from '../backend/types';
+import type { AgentId, SettingsPatch, VmSettings } from '../backend/types';
+
+/** The coding agents a VM can have, in the order the pages list them, with the engine's tool id for their version and
+    whether a new VM gets them (S32). */
+export const AGENTS: readonly { id: AgentId; tool: string; name: string; byDefault: boolean }[] = [
+  { id: 'claude-code', tool: 'claude', name: 'Claude Code', byDefault: true },
+  { id: 'codex', tool: 'codex', name: 'Codex', byDefault: true },
+  { id: 'opencode', tool: 'opencode', name: 'OpenCode', byDefault: true },
+  { id: 'antigravity', tool: 'antigravity', name: 'Antigravity', byDefault: false },
+];
+
+/** The agents a VM has without a choice of its own. */
+export const DEFAULT_AGENTS: AgentId[] = AGENTS.filter(a => a.byDefault).map(a => a.id);
+
+/** A list of agent ids as one switch per agent; ids this UI does not know are left out. */
+export function agentSwitches(on: readonly string[]): Record<AgentId, boolean> {
+  return Object.fromEntries(AGENTS.map(a => [a.id, on.includes(a.id)])) as Record<AgentId, boolean>;
+}
+
+/** The switches as the engine's list, in the order above. */
+export const agentList = (on: Partial<Record<AgentId, boolean>>): AgentId[] => AGENTS.filter(a => on[a.id]).map(a => a.id);
 
 /** When a settings group takes effect. Restart-class changes ask "restart now or later"; reprovision-class
     ones put the yellow dot on Reprovision; the rest apply at once without a sign. */
@@ -10,6 +30,7 @@ const GROUP: Record<keyof VmSettings, Applies> = {
   idle: 'now',
   services: 'reprovision',
   identity: 'reprovision',
+  agents: 'reprovision',
   swap: 'reprovision',
 };
 

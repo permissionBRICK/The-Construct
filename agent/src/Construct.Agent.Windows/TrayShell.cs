@@ -8,7 +8,8 @@ namespace Construct.Agent.Windows;
 /// <summary>
 /// The tray (11.2): a single click opens the pop-out by the tray, a double click the window, the menu
 /// opens the window, the key vault, start with Windows and quit. While both the pop-out and the window
-/// are closed, a new vault request (an approval or a secret an agent asked for) pops the vault card alone.
+/// are closed, a new vault request (an approval or a secret an agent asked for) pops the vault card alone,
+/// and so does a lost sign-in (S36), once per loss while the agent runs.
 /// </summary>
 internal sealed class TrayShell : ApplicationContext, IAgentShell
 {
@@ -20,6 +21,7 @@ internal sealed class TrayShell : ApplicationContext, IAgentShell
     private readonly PopupGesture _gesture = new();
     private readonly Dictionary<string, AgentWindow> _windows = [];
     private readonly HashSet<string> _seenRequests = [];
+    private readonly HashSet<string> _seenNotices = [];
     private readonly DeviceAgent _agent;
     private readonly DeviceServices _device;
     private readonly Uri _origin;
@@ -157,7 +159,7 @@ internal sealed class TrayShell : ApplicationContext, IAgentShell
         return new(bounds.X, bounds.Y, bounds.Width, bounds.Height);
     }
 
-    /// <summary>Asks the engines for vault requests; a new one, with both surfaces closed, pops the vault card alone.</summary>
+    /// <summary>Asks the engines for vault requests and lost sign-ins; a new one, with both surfaces closed, pops its card alone.</summary>
     private async Task PollVaultAsync()
     {
         if (_polling || !_agent.Device().Registered) return;
@@ -169,7 +171,10 @@ internal sealed class TrayShell : ApplicationContext, IAgentShell
             ids.AddRange((await Task.Run(() => _agent.EntryRequestsAsync(CancellationToken.None))).Requests.Select(r => "e:" + r.Engine + "/" + r.Id));
             var fresh = ids.Where(_seenRequests.Add).ToArray();
             _seenRequests.IntersectWith(ids);
-            if (fresh.Length > 0 && !Visible("pop") && !Visible("win"))
+            // A lost sign-in pops once: its id carries the time of the loss, so only a new loss pops again.
+            var notices = (await Task.Run(() => _agent.AgentNoticesAsync(CancellationToken.None))).Notices
+                .Select(n => "n:" + n.Engine + "/" + n.Vm + "/" + n.Agent + "@" + n.At).Where(_seenNotices.Add).ToArray();
+            if ((fresh.Length > 0 || notices.Length > 0) && !Visible("pop") && !Visible("win"))
             {
                 Show("alone", null);
                 _attention = true;
@@ -205,7 +210,7 @@ internal sealed class TrayShell : ApplicationContext, IAgentShell
         _menu.Items.Add("Quit", null, (_, _) => ExitThread());
     }
 
-    /// <summary>A green disc (the Companion's tray colour), with a yellow dot while a vault request waits (11.2: only the vault asks for attention).</summary>
+    /// <summary>A green disc (the Companion's tray colour), with a yellow dot while a popped card waits (11.2: only the vault and a lost sign-in ask for attention).</summary>
     private void DrawIcon()
     {
         var size = TrayModel.IconSize(_iconDpi);

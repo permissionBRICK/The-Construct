@@ -111,6 +111,14 @@ Claude Code:
 EOF
 fi
 
+if has_selected_or_installed_tool antigravity agy; then
+    cat <<EOF
+
+Antigravity CLI:
+  Connect over SSH, then run: agy
+EOF
+fi
+
 if has_selected_or_installed_tool opencode opencode opencode-serve; then
     cat <<EOF
 
@@ -119,6 +127,7 @@ OpenCode:
   Bind:     ${OPENCODE_HOST}:${OPENCODE_PORT}
   URL:      http://${url_host}:${OPENCODE_PORT}
   Docs:     http://${url_host}:${OPENCODE_PORT}/doc
+  Password: new at each start; journalctl -u opencode-serve | grep 'server password'
 EOF
 fi
 

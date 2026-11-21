@@ -12,8 +12,10 @@ namespace Constructd.Api.Endpoints;
 /// (<c>vm.created</c>, <c>vm.changed</c>, <c>vm.power</c>, <c>vm.deleted</c>, <c>job.started</c>,
 /// <c>job.progress</c>, <c>job.ended</c>, <c>backup.added</c>, <c>backup.removed</c>,
 /// <c>update.offered</c>, <c>update.finished</c>, <c>repair.started</c>, <c>repair.output</c>, <c>repair.ended</c>,
-/// or <c>reset</c>) and the id of the thing (the VM's name, the job's, backup's, update's or repair session's id,
-/// a release commit for an offer), with the VM it belongs to. A repair is announced to the VM's owner and admins only.
+/// <c>agent-sign-in.started</c>, <c>agent-sign-in.output</c>, <c>agent-sign-in.ended</c>, <c>agent-notice.changed</c>, or
+/// <c>reset</c>) and the id of the thing (the VM's name, the job's, backup's, update's, repair or sign-in session's id, a
+/// lost sign-in's agent by its tool id, a release commit for an offer), with the VM it belongs to. A repair is announced
+/// to the VM's owner and admins only, a sign-in and a lost sign-in to the VM's owner only.
 /// </summary>
 public sealed record ChangeEventResponse(long Seq, string Type, string? Id = null, string? Vm = null);
 

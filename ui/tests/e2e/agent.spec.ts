@@ -1,5 +1,6 @@
 import { expect, request, test, type Page } from '@playwright/test';
 import { spawn, type ChildProcess } from 'node:child_process';
+import { createServer, type Server } from 'node:net';
 import { mkdtempSync, readFileSync, rmSync, existsSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -8,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 /* The UI on the real API: the engine (constructd in fake mode, with a scripted guest so a provision job runs
    to its end) and two device agents, each serving the built bundle. One browser drives both: first-run setup
    on the first device after confirming the host's fingerprint, a VM created through the UI with its settings
-   and provisioned by the engine alone, a setting changed and the dot on Reprovision, a reprovision to its end,
+   and provisioned by the engine alone, an agent signed in on the step after it and the ready screen, a setting changed and the dot on Reprovision, a reprovision to its end,
    a failed reprovision retried, the repair agent's switch turned off on the host, a failed step repaired by the
    agent started from the UI (output, one reply, fixed, the job run again), a secret added and revealed, the VM asking for it through the engine's guest
    routes and the card allowing it, a profile edited and saved, a reinstall to its end, a restore of the backup
@@ -41,7 +42,8 @@ async function startAgent(name: string): Promise<{ base: string; token: string }
   const dir = mkdtempSync(join(tmpdir(), `ui-e2e-${name}-`));
   dirs.push(dir);
   // The file protection, as in the agent's own tests: no keyring on a build machine.
-  const p = spawn('dotnet', [AGENT, 'run', '--data-dir', dir, '--ui', join(ui, 'dist')], { stdio: 'ignore', env: { ...process.env, DBUS_SESSION_BUS_ADDRESS: '' } });
+  // BROWSER: a link the agent opens (xdg-open without a desktop) opens nothing on the build machine.
+  const p = spawn('dotnet', [AGENT, 'run', '--data-dir', dir, '--ui', join(ui, 'dist')], { stdio: 'ignore', env: { ...process.env, DBUS_SESSION_BUS_ADDRESS: '', BROWSER: 'true' } });
   children.push(p);
   const file = join(dir, 'endpoint.json');
   for (let i = 0; i < 300 && !existsSync(file); i++) await new Promise(r => setTimeout(r, 100));
@@ -98,18 +100,65 @@ test('first run, a VM, a reprovision and a second device on the real API', async
   const sent: { method: string; url: string; body: string | null }[] = [];
   pa.on('request', r => { if (r.method() !== 'GET') sent.push({ method: r.method(), url: r.url(), body: r.postData() }); });
   await pa.getByLabel('Name').fill('alpha');
+  // Claude Code, Codex and OpenCode are on; Antigravity is offered off.
+  await expect(pa.getByRole('switch', { name: 'Antigravity' })).toHaveAttribute('aria-checked', 'false');
+  await pa.getByRole('switch', { name: 'Antigravity' }).click();
   await pa.getByRole('button', { name: 'Create' }).click();
 
-  // The home screen shows the VM; one request created it with its settings and the engine provisions it.
-  await expect(pa.locator('.vp h1')).toHaveText('alpha');
+  // The create screen follows the job; one request created the VM with its settings and the engine provisions it.
+  const admin = await request.newContext({ baseURL: engine.url, ignoreHTTPSErrors: true, extraHTTPHeaders: { Authorization: `Bearer ${engine.token}` } });
   await expect(pa.locator('.vtab', { hasText: 'alpha' })).toBeVisible();
   await expect(pa.getByRole('status')).toHaveText('Created alpha', { timeout: 90000 });
   await expect(pa.locator('.blk.job')).toHaveCount(0);
+
+  // Then a sign-in step with the chosen agents, none required: the agent's own sign-in runs on the VM (the engine's
+  // scripted guest in fake mode), its link and prompt show, a code goes to it, and the agent is signed in. The ports
+  // its links return to are taken on this machine, so the device cannot forward them: the CLI's text and the paste
+  // stay, and Codex starts again with its device code.
+  const held = await Promise.all([45678, 1455].map(port => new Promise<Server | null>(resolve => {
+    const server = createServer();
+    server.once('error', () => resolve(null));
+    server.listen(port, '127.0.0.1', () => resolve(server));
+  })));
+  await expect(pa.getByRole('heading', { name: 'Sign in' })).toBeVisible();
+  const step = pa.locator('.blk.form');
+  for (const name of ['Claude Code', 'Codex', 'OpenCode', 'Antigravity']) await expect(step.locator('.r', { hasText: name })).toBeVisible();
+  await step.locator('.r', { hasText: 'Claude Code' }).getByRole('button', { name: 'Sign in' }).click();
+  const panel = pa.getByRole('group', { name: 'Sign in to Claude Code' });
+  await expect(panel.getByRole('link', { name: 'https://sign-in.example/claude-code?state=fake' })).toBeVisible();
+  await expect(panel).toContainText('Paste code here if prompted >');
+  await panel.getByLabel('Reply to Claude Code').fill('code-from-the-browser');
+  await panel.getByLabel('Reply to Claude Code').press('Enter');
+  await expect(panel).toHaveCount(0);
+  await expect(step.locator('.r', { hasText: 'Claude Code' })).toContainText('Signed in');
+  const agents = (await (await admin.get('/api/v1/vms/alpha/agents')).json()) as { agents: { tool: string; signedIn: boolean | null }[] };
+  expect(agents.agents.find(x => x.tool === 'claude')?.signedIn).toBe(true);
+  // OpenCode with an OpenRouter key: one field, the key goes to OpenCode's prompt and shows nowhere.
+  await step.locator('.r', { hasText: 'OpenCode' }).getByRole('button', { name: 'Sign in' }).click();
+  const oc = pa.getByRole('group', { name: 'Sign in to OpenCode' });
+  await oc.getByLabel('OpenRouter API key').fill('sk-or-v1-e2e-not-a-key');
+  await oc.getByRole('button', { name: 'Sign in' }).click();
+  await expect(step.locator('.r', { hasText: 'OpenCode' })).toContainText('Signed in');
+  await expect(pa.locator('body')).not.toContainText('sk-or-v1-e2e-not-a-key');
+  // Codex is left for later: its sign-in is cancelled.
+  await step.locator('.r', { hasText: 'Codex' }).getByRole('button', { name: 'Sign in' }).click();
+  await expect(pa.getByRole('group', { name: 'Sign in to Codex' })).toContainText('https://sign-in.example/codex');
+  await pa.getByRole('group', { name: 'Sign in to Codex' }).getByRole('button', { name: 'Cancel' }).click();
+  await expect(pa.getByRole('group', { name: 'Sign in to Codex' })).toHaveCount(0);
+  await expect(step.locator('.r', { hasText: 'Codex' }).getByRole('button', { name: 'Sign in' })).toBeEnabled();
+  for (const server of held) server?.close();
+  await pa.getByRole('button', { name: 'Continue' }).click();
+
+  // The ready screen: T3 Code, recommended, and VS Code.
+  await expect(pa.getByRole('heading', { name: 'alpha is ready' })).toBeVisible();
+  await expect(pa.getByRole('button', { name: /T3 Code/ })).toContainText('recommended');
+  await expect(pa.getByRole('button', { name: 'VS Code' })).toBeVisible();
+  await pa.goto(`${a.base}/#/home`);
+  await expect(pa.locator('.vp h1')).toHaveText('alpha');
   const created = sent.filter(r => /\/api\/engines\/[^/]+\/vms$/.test(new URL(r.url).pathname));
   expect(created.length).toBe(1);
-  expect(JSON.parse(created[0].body!)).toMatchObject({ name: 'alpha', desired: { projects: [], settings: {} } });
+  expect(JSON.parse(created[0].body!)).toMatchObject({ name: 'alpha', desired: { projects: [], settings: {}, codingAgents: ['claude-code', 'codex', 'opencode', 'antigravity'] } });
   expect(sent.filter(r => /\/vms\/alpha\/jobs$/.test(new URL(r.url).pathname))).toEqual([]);
-  const admin = await request.newContext({ baseURL: engine.url, ignoreHTTPSErrors: true, extraHTTPHeaders: { Authorization: `Bearer ${engine.token}` } });
   const status = async () => (await (await admin.get('/api/v1/vms/alpha/provision-status')).json()) as { settingsChanged: boolean; applied: { jobId: string } | null };
   expect((await status()).applied).not.toBeNull();
   await expect(pa.locator('.vp2 .pip')).toHaveCount(0);
@@ -120,6 +169,12 @@ test('first run, a VM, a reprovision and a second device on the real API', async
   await expect(pa.getByRole('status')).toHaveText('Saved, applies at the next reprovision');
   expect((await (await admin.get('/api/v1/vms/alpha/desired')).json()).desired.settings.vsCodeTunnel).toBe('true');
   expect((await status()).settingsChanged).toBe(true);
+  // So is a coding agent switched off on the Agents tab.
+  await pa.goto(`${a.base}/#/settings/agents`);
+  await pa.getByRole('switch', { name: 'Codex' }).click();
+  await expect(pa.getByRole('status')).toHaveText('Saved, applies at the next reprovision');
+  // The same notice may still show from the save before: wait for the stored state.
+  await expect.poll(async () => (await (await admin.get('/api/v1/vms/alpha/desired')).json()).desired.codingAgents).toEqual(['claude-code', 'opencode', 'antigravity']);
   // So is the swap file size on the Resources tab, next to what is stored already.
   await pa.goto(`${a.base}/#/settings`);
   await pa.getByRole('textbox', { name: 'Swap file' }).fill('4');
@@ -218,6 +273,22 @@ test('first run, a VM, a reprovision and a second device on the real API', async
     const text = await r.text();
     return text ? JSON.parse(text).status : `${r.status()} pending`;
   }).toBe('ok');
+
+  // Claude Code, signed in on the sign-in step, is reported signed out by the VM: a card like the vault's offers Sign
+  // in on the overview; put away, it stays away.
+  await pa.goto(`${a.base}/#/`);
+  const lost = await guest.post('/api/v1/vms/alpha/usage', {
+    data: { generatedAt: new Date().toISOString(), days: [], agents: [{ tool: 'claude', version: '1.0.0', signedIn: false }] },
+  });
+  expect(lost.status()).toBe(204);
+  const lostCard = pa.getByRole('alertdialog', { name: 'alpha: Claude Code is signed out' });
+  await expect(lostCard).toBeVisible();
+  await expect(lostCard.getByRole('button', { name: 'Sign in' })).toBeVisible();
+  await lostCard.getByRole('button', { name: 'Dismiss' }).click();
+  await expect(lostCard).toHaveCount(0);
+  await pa.reload();
+  await expect(pa.getByRole('heading', { name: 'alpha' })).toBeVisible();
+  await expect(lostCard).toHaveCount(0);
 
   // A profile added, its file edited and saved through the store's engine.
   await pa.goto(`${a.base}/#/projects`);

@@ -89,7 +89,7 @@ public sealed class LocalVmAdoptionTests : IDisposable
     [InlineData(true)]
     public async Task The_cli_adopts_a_running_vm_with_its_real_hardware_and_switches_the_guest(bool sqlite)
     {
-        var guest = new FakeGuest();
+        var guest = new FakeGuest { AiTools = "'opencode,codex'" };
         await using var services = Services(guest, sqlite);
         await services.GetRequiredService<IUserStore>().CreateAsync(new User("alice", Role.Admin, 10, DateTimeOffset.UtcNow), CancellationToken.None);
         var driver = services.GetRequiredService<FakeHypervisorDriver>();
@@ -114,6 +114,8 @@ public sealed class LocalVmAdoptionTests : IDisposable
         Assert.Equal("https://pc.mshome.net:7462", desired.Settings.ServiceUrl);
         Assert.Equal(("pc.mshome.net", (int?)port), (desired.Settings.ExternalHost, desired.Settings.ExternalSshPort));
         Assert.Equal(CertificatePem, Encoding.UTF8.GetString(Convert.FromBase64String(desired.Settings.ServiceCaB64!)));
+        // The coding agents the VM was provisioned with (its saved AI_TOOLS), so a reprovision keeps them.
+        Assert.Equal(["opencode", "codex"], desired.CodingAgents);
 
         // The guest: identity first, then bin/adopt-host.py with the settings on stdin, as root with the engine's copy of the key.
         Assert.Equal(2, guest.Calls.Count);
@@ -302,6 +304,8 @@ public sealed class LocalVmAdoptionTests : IDisposable
     private sealed class FakeGuest : ISshRunner
     {
         public string Firmware { get; init; } = LocalVmAdoptionTests.Firmware;
+        /// <summary>The AI_TOOLS line of the guest's config, as the identity read prints it; null: the guest has none.</summary>
+        public string? AiTools { get; init; }
         public int EnrollExit { get; init; }
         public List<Provisioning.SshCall> Calls { get; } = [];
 
@@ -312,6 +316,7 @@ public sealed class LocalVmAdoptionTests : IDisposable
             {
                 lines?.Report(MachineId);
                 lines?.Report(Firmware);
+                if (AiTools is not null) lines?.Report(AiTools);
                 return Task.FromResult(0);
             }
             lines?.Report(EnrollExit == 0 ? "Guest enrolled; existing applications remain running." : "Guest enrollment failed: host refused");

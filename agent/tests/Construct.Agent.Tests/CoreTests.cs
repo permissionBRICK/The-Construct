@@ -9,6 +9,12 @@ namespace Construct.Agent.Tests;
 /// <summary>Pieces without an engine: the event buffer, the engine stream's resume and reset, the protection.</summary>
 public sealed class CoreTests
 {
+    [Theory]
+    [InlineData("opencode v2.3.2", "2.3.2")] // OpenCode 2
+    [InlineData("1.19.6", "1.19.6")] // OpenCode 1
+    public void The_probe_reads_the_opencode_version_of_both_generations(string output, string version) =>
+        Assert.Equal(version, Construct.Companion.Core.Probe.ProbeParser.ExtractVersion(output));
+
     [Fact]
     public async Task An_engine_stream_resumes_after_a_drop_and_ends_each_job_once_across_a_reset()
     {

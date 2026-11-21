@@ -1,7 +1,10 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
-import type { Everything, Job, VaultRequest, Vm } from '../backend/types';
+import type { AgentId, Everything, Job, SignIn, VaultRequest, Vm } from '../backend/types';
 import { spanChoices, spanText } from '../backend/api/map';
 import { failedTitle, jobWord, mainAction } from '../model/vm';
+import { AGENTS } from '../model/settings';
+import { linkParts, lostSignIns } from '../model/signin';
+import { openExternal } from './shell';
 import { Icon } from './icons';
 import { Bar, Btn, Confirm, Field, Pip, Switch, Tag, UpTag } from './kit';
 import { copy, na, useApp } from './ctx';
@@ -69,6 +72,26 @@ export function EverythingBlock({ e }: { e: Everything }) {
 export function VaultCards() {
   const { s } = useApp();
   return <>{s.vaultRequests.map(r => <VaultCard key={r.id} r={r} />)}</>;
+}
+
+/** A lost sign-in (S36), like the vault's card: the agent was signed in and the VM reports it signed out. Sign in
+    starts its sign-in, and the card turns into the sign-in's panel; the cross puts the card away. */
+export function SignInCard({ vm, agent, onDone }: { vm: Vm; agent: AgentId; onDone?: () => void }) {
+  const { s, be } = useApp();
+  const name = AGENTS.find(a => a.id === agent)?.name ?? agent;
+  if (s.signIn?.vmId === vm.id && s.signIn.agent === agent) return <SignInBlock si={s.signIn} />;
+  return (
+    <div class="blk warn ask" role="alertdialog" aria-label={`${vm.name}: ${name} is signed out`}>
+      <div class="bh"><Icon n="key" /><b>{vm.name}: {name} is signed out</b>
+        <Btn sm icon="x" title="Dismiss" onClick={() => { be.dismissSignInNotice(vm.id, agent); onDone?.(); }} /></div>
+      <Btn kind="pri" icon="key" onClick={() => be.signIn(vm.id, agent)}>Sign in</Btn>
+    </div>
+  );
+}
+
+export function SignInCards() {
+  const { s } = useApp();
+  return <>{lostSignIns(s.vms).map(l => <SignInCard key={l.vm.id + '/' + l.id.id} vm={l.vm} agent={l.id.id} />)}</>;
 }
 
 function LogView({ job }: { job: Job }) {
@@ -153,6 +176,73 @@ export function JobBlock({ job, vm }: { job: Job; vm: Vm }) {
       {job.repair?.state === 'done' && <div class="msg okc">{job.repair.agent}: {job.repair.outcome}</div>}
       <div class="bf"><span>{job.step}</span><Btn sm onClick={() => setLog(!log)}>Log</Btn><Btn sm onClick={() => be.stopJob(job.id)}>Stop</Btn></div>
       {log && <LogView job={job} />}
+    </div>
+  );
+}
+
+/** A coding agent's own sign-in on the VM: its terminal's text, the links in it opened in the browser, one field
+    for what it asks (Enter sends, also empty; the arrow keys move a list it shows), Cancel. While the sign-in goes on
+    in the browser (this device forwards its redirect), one line and Cancel; the terminal stays behind Terminal. */
+export function SignInBlock({ si }: { si: SignIn }) {
+  if (si.state === 'key') return <OpenRouterKey si={si} />;
+  return <SignInTerminal si={si} />;
+}
+
+/** OpenCode's sign-in starts with an OpenRouter API key (11.8); OpenCode's own list of providers stays one click away.
+    The key leaves the field when it is sent. */
+function OpenRouterKey({ si }: { si: SignIn }) {
+  const { be } = useApp();
+  const [key, setKey] = useState('');
+  const go = () => { const k = key.trim(); setKey(''); if (k) be.signInWithKey(si.vmId, k); };
+  return (
+    <div class="blk signin" role="group" aria-label="Sign in to OpenCode">
+      <div class="bh"><Icon n="key" /><b>OpenCode</b><Btn sm onClick={() => be.closeSignIn()}>Cancel</Btn></div>
+      <Field type="password" value={key} onInput={setKey} label="OpenRouter API key" placeholder="OpenRouter API key" mono wide onEnter={go} />
+      <div class="two">
+        <Btn onClick={() => be.signIn(si.vmId, 'opencode', 'list')}>Other providers</Btn>
+        <Btn kind="pri" disabled={!key.trim()} onClick={go}>Sign in</Btn>
+      </div>
+    </div>
+  );
+}
+
+function SignInTerminal({ si }: { si: SignIn }) {
+  const { be } = useApp();
+  const [text, setText] = useState('');
+  const term = useRef<HTMLPreElement>(null);
+  useEffect(() => { const t = term.current; if (t) t.scrollTop = t.scrollHeight; }, [si.text]);
+  const name = AGENTS.find(a => a.id === si.agent)?.name ?? si.agent;
+  const running = si.state === 'running' || si.state === 'starting';
+  const send = () => { be.signInInput({ text }); setText(''); };
+  const keys = (e: KeyboardEvent) => {
+    if (e.key === 'Enter') { e.preventDefault(); send(); }
+    else if (!text && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) { e.preventDefault(); be.signInInput({ key: e.key === 'ArrowUp' ? 'up' : 'down' }); }
+  };
+  const open = (url: string) => (e: MouseEvent) => { e.preventDefault(); openExternal(window, url); };
+  const terminal = (
+    <>
+      <pre class="term" ref={term} aria-live="polite">
+        {linkParts(si.text).map(p => ('url' in p ? <a href={p.url} target="_blank" rel="noopener noreferrer" onClick={open(p.url)}>{p.url}</a> : p.text))}
+        {si.state === 'starting' && <span class="typing" aria-label="starting" />}
+      </pre>
+      {si.state === 'running' && (
+        <div class="reply">
+          <input class="in m" value={text} placeholder="Reply" aria-label={`Reply to ${name}`} autoComplete="off" spellcheck={false}
+            onInput={e => setText(e.currentTarget.value)} onKeyDown={keys} />
+          <Btn kind="pri" icon="send" title="Send" onClick={send} />
+        </div>
+      )}
+    </>
+  );
+  return (
+    <div class={`blk signin ${running ? '' : 'bad'}`} role="group" aria-label={`Sign in to ${name}`}>
+      <div class="bh"><Icon n="key" /><b>{name}</b><Btn sm onClick={() => be.closeSignIn()}>{running ? 'Cancel' : 'Close'}</Btn></div>
+      {si.browser && si.state === 'running' ? (
+        <>
+          <div class="msg"><span class="typing">Continue in your browser</span></div>
+          <details class="more-term"><summary><Icon n="term" />Terminal</summary>{terminal}</details>
+        </>
+      ) : terminal}
     </div>
   );
 }

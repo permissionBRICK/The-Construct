@@ -219,6 +219,118 @@ public sealed class DeviceLinkTests : IAsyncDisposable
         Assert.Equal(501, (await Assert.ThrowsAsync<AgentFailure>(() => actions.MapShareAsync("e1", "work", CancellationToken.None))).Status);
     }
 
+    private const string SignInUrl = "https://claude.example/oauth?redirect_uri=http%3A%2F%2Flocalhost%3A45678%2Fcallback&state=s";
+
+    private static string SignIn(string id = "s1", string state = "running", string? browser = $$"""{"url":"{{SignInUrl}}","port":45678}""") =>
+        $$"""{"id":"{{id}}","agent":"claude-code","state":"{{state}}","text":"","revision":1,"browser":{{browser ?? "null"}}}""";
+
+    [Fact]
+    public async Task A_sign_ins_redirect_port_is_forwarded_to_its_vm_and_its_link_opened_until_the_sign_in_ends()
+    {
+        _device.Engines.On("e1", "GET vms/work/agents/claude-code/sign-in", SignIn());
+        await _device.Links.RefreshAsync(CancellationToken.None);
+        var signIns = _device.Services.SignIns;
+        signIns.Poll = TimeSpan.FromMilliseconds(20);
+        var tunnels = _device.Transports["e1/work"].Tunnels;
+        var before = tunnels.Count;
+
+        var view = await signIns.StartAsync("e1", "work", new("claude-code", "s1"), CancellationToken.None);
+
+        Assert.Equal(45678, view.Port);
+        var tunnel = tunnels.Skip(before).Single();
+        Assert.Equal(("127.0.0.1", 45678, 45678, (string?)null), (tunnel.Spec.BindHost, tunnel.Spec.LocalPort, tunnel.Spec.VmPort, tunnel.Spec.ConnectAddress));
+        Assert.Equal([SignInUrl], _device.Platform.Opened);
+        Assert.Equal(45678, signIns.Port("e1", "work"));
+
+        // The sign-in ends on the engine: the forward closes by itself.
+        _device.Engines.On("e1", "GET vms/work/agents/claude-code/sign-in", SignIn(state: "ended", browser: null));
+        await FakeDevice.WaitAsync(() => tunnel.Process.Stopped, "the forward to close");
+        Assert.Null(signIns.Port("e1", "work"));
+    }
+
+    [Fact]
+    public async Task A_sign_in_forward_closes_when_another_sign_in_takes_its_place_on_cancel_and_after_its_limit()
+    {
+        _device.Engines.On("e1", "GET vms/work/agents/claude-code/sign-in", SignIn());
+        await _device.Links.RefreshAsync(CancellationToken.None);
+        var signIns = _device.Services.SignIns;
+        signIns.Poll = TimeSpan.FromMilliseconds(20);
+        var tunnels = _device.Transports["e1/work"].Tunnels;
+
+        await signIns.StartAsync("e1", "work", new("claude-code", "s1"), CancellationToken.None);
+        var first = tunnels.Last();
+        _device.Engines.On("e1", "GET vms/work/agents/claude-code/sign-in", SignIn("s2"));
+        await FakeDevice.WaitAsync(() => first.Process.Stopped, "a replaced sign-in's forward to close");
+
+        await signIns.StartAsync("e1", "work", new("claude-code", "s2"), CancellationToken.None);
+        var second = tunnels.Last();
+        // Only its own sign-in closes a forward: an older panel's cleanup leaves it open.
+        await signIns.StopAsync("e1", "work", "s1", CancellationToken.None);
+        Assert.False(second.Process.Stopped);
+        await signIns.StopAsync("e1", "work", "s2", CancellationToken.None);
+        Assert.True(second.Process.Stopped);
+
+        signIns.Limit = TimeSpan.FromMilliseconds(200);
+        await signIns.StartAsync("e1", "work", new("claude-code", "s2"), CancellationToken.None);
+        var third = tunnels.Last();
+        await FakeDevice.WaitAsync(() => third.Process.Stopped, "the limit to close it");
+    }
+
+    [Fact]
+    public async Task A_start_whose_engine_answer_comes_late_does_not_replace_a_newer_sign_ins_forward()
+    {
+        await _device.Links.RefreshAsync(CancellationToken.None);
+        var signIns = _device.Services.SignIns;
+        signIns.Poll = TimeSpan.FromMinutes(5);
+        const string newer = "https://claude.example/oauth?redirect_uri=http%3A%2F%2Flocalhost%3A45679%2Fcallback&state=t";
+        var late = new TaskCompletionSource<JsonNode?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var asked = 0;
+        // The first question gets its answer late, saying s1 runs; by then s2 has taken its place on the engine.
+        _device.Engines.OnAsync("e1", "GET vms/work/agents/claude-code/sign-in", _ => Interlocked.Increment(ref asked) == 1
+            ? late.Task
+            : Task.FromResult(JsonNode.Parse(SignIn("s2", browser: "{\"url\":\"" + newer + "\",\"port\":45679}"))));
+
+        var first = signIns.StartAsync("e1", "work", new("claude-code", "s1"), CancellationToken.None);
+        await FakeDevice.WaitAsync(() => Volatile.Read(ref asked) == 1, "the first start to ask the engine");
+        var second = signIns.StartAsync("e1", "work", new("claude-code", "s2"), CancellationToken.None);
+        late.SetResult(JsonNode.Parse(SignIn("s1")));
+        await first;
+        await second;
+
+        Assert.Equal(45679, signIns.Port("e1", "work"));
+        Assert.Equal(newer, _device.Platform.Opened.Last());
+    }
+
+    [Fact]
+    public async Task A_sign_in_forward_is_refused_for_a_sign_in_that_does_not_run_returns_elsewhere_or_whose_port_is_taken_here()
+    {
+        await _device.Links.RefreshAsync(CancellationToken.None);
+        var signIns = _device.Services.SignIns;
+        async Task<string> Refused(string vm, string session)
+        {
+            var refused = await Assert.ThrowsAsync<AgentFailure>(() => signIns.StartAsync("e1", vm, new("claude-code", session), CancellationToken.None));
+            return refused.Status + " " + refused.Code;
+        }
+
+        _device.Engines.On("e1", "GET vms/work/agents/claude-code/sign-in", SignIn("s1"));
+        Assert.Equal("409 no-browser-sign-in", await Refused("work", "old"));
+        _device.Engines.On("e1", "GET vms/work/agents/claude-code/sign-in", SignIn(state: "ended"));
+        Assert.Equal("409 no-browser-sign-in", await Refused("work", "s1"));
+        _device.Engines.On("e1", "GET vms/work/agents/claude-code/sign-in", SignIn(browser: """{"url":"https://accounts.example/o?redirect_uri=https%3A%2F%2Fhosted.example%2Fcb"}"""));
+        Assert.Equal("409 no-browser-sign-in", await Refused("work", "s1"));
+        _device.Engines.On("e1", "GET vms/work/agents/claude-code/sign-in", SignIn(browser: """{"url":"http://claude.example/oauth","port":45678}"""));
+        Assert.Equal("409 no-browser-sign-in", await Refused("work", "s1"));
+        _device.Engines.On("e1", "GET vms/work/agents/claude-code/sign-in", SignIn(browser: """{"url":"https://claude.example/oauth","port":80}"""));
+        Assert.Equal("409 no-browser-sign-in", await Refused("work", "s1"));
+
+        _device.Engines.On("e1", "GET vms/work/agents/claude-code/sign-in", SignIn());
+        _device.Transports["e1/work"].BusyPorts.Add((45678, "127.0.0.1"));
+        Assert.Equal("409 port-taken", await Refused("work", "s1"));
+        Assert.Equal("404 no-vm", await Refused("theirs", "s1"));
+        Assert.Empty(_device.Platform.Opened);
+        Assert.DoesNotContain(_device.Engines.CallsTo("e1"), c => c.Contains("theirs", StringComparison.Ordinal));
+    }
+
     [Fact]
     public void Config_env_values_are_read_as_config_set_writes_them()
     {

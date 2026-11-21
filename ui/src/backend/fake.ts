@@ -1,7 +1,7 @@
-import type { Backend, CreateVmRequest, FirstRun, FirstRunRequest, Host, HostProbe, HostUser, Job, JobKind, Prefs, Profile, ProfileSave, SettingsPatch, State, Upgrade, Vm } from './types';
-import { NEXT_RELEASE, PAIR_WORDS, RECOVERY_CODE, REINSTALL_STEPS, REPROVISION_STEPS, sampleState } from './sample';
+import type { AgentId, Backend, CreateVmRequest, FirstRun, FirstRunRequest, Host, HostProbe, HostUser, Job, JobKind, Prefs, Profile, ProfileSave, SettingsPatch, SignInInput, State, Upgrade, Vm } from './types';
+import { NEXT_RELEASE, PAIR_WORDS, RECOVERY_CODE, REINSTALL_STEPS, REPROVISION_STEPS, SIGN_IN_BROWSER_TEXT, SIGN_IN_TEXT, sampleState } from './sample';
 import { activeJob, newer, vmUpdateTarget } from '../model/vm';
-import { applies, applyPatch } from '../model/settings';
+import { AGENTS, agentSwitches, applies, applyPatch } from '../model/settings';
 import { updateParts } from '../model/update';
 import { spanText } from './api/map';
 
@@ -13,11 +13,11 @@ import { spanText } from './api/map';
 
 export type Scene =
   | 'calm' | 'update' | 'changed' | 'lease' | 'enter' | 'job' | 'failed' | 'failed-reinstall' | 'repair' | 'updating' | 'restart'
-  | 'pairing' | 'pair-confirm' | 'revoked' | 'handout' | 'creating'
+  | 'pairing' | 'pair-confirm' | 'revoked' | 'handout' | 'creating' | 'created' | 'sign-in' | 'sign-in-failed' | 'sign-in-browser' | 'sign-in-key' | 'signed-out' | 'signed-out-two'
   | 'upgrade-intro' | 'upgrade-code' | 'upgrade-close' | 'upgrade-convert' | 'upgrade-host' | 'upgrade-done' | 'upgrade-restart'
   | 'first-run' | 'first-run-restart';
 
-export const SCENES: Scene[] = ['calm', 'update', 'changed', 'lease', 'enter', 'job', 'failed', 'failed-reinstall', 'repair', 'updating', 'restart', 'pairing', 'pair-confirm', 'revoked', 'handout', 'creating', 'upgrade-intro', 'upgrade-code', 'upgrade-close', 'upgrade-convert', 'upgrade-host', 'upgrade-done', 'upgrade-restart', 'first-run', 'first-run-restart'];
+export const SCENES: Scene[] = ['calm', 'update', 'changed', 'lease', 'enter', 'job', 'failed', 'failed-reinstall', 'repair', 'updating', 'restart', 'pairing', 'pair-confirm', 'revoked', 'handout', 'creating', 'created', 'sign-in', 'sign-in-failed', 'sign-in-browser', 'sign-in-key', 'signed-out', 'signed-out-two', 'upgrade-intro', 'upgrade-code', 'upgrade-close', 'upgrade-convert', 'upgrade-host', 'upgrade-done', 'upgrade-restart', 'first-run', 'first-run-restart'];
 
 /** Things the preview frame can make happen, beside the user's own actions. */
 export type Demo = 'lease' | 'enter' | 'release' | 'fail-next' | 'change';
@@ -134,6 +134,37 @@ export class FakeBackend implements Backend {
         d.jobs.push(j);
         break;
       }
+      // The create job is done; the new VM's agents are not signed in yet (#/create/quill).
+      case 'created': {
+        const v = newVm('quill', 'pc', 'quill.example.net');
+        v.agents = v.agents.map(a => (a.id === 't3' ? a : { ...a, signedIn: false }));
+        d.vms.push(v);
+        d.jobs.push({ ...this.newJob('quill', 'create', CREATE_STEPS.length - 1, 100), state: 'done' });
+        break;
+      }
+      case 'sign-in': d.signIn = { vmId: 'atlas', agent: 'codex', state: 'running', text: SIGN_IN_TEXT.codex }; break;
+      case 'sign-in-failed': d.signIn = { vmId: 'atlas', agent: 'claude-code', state: 'failed', text: SIGN_IN_TEXT['claude-code'] + 'bad-code\nOAuth error: Invalid code' }; break;
+      // Claude Code on atlas was signed in and the VM reported it signed out (S36).
+      case 'signed-out': {
+        const a = d.vms[0].agents.find(x => x.id === 'claude');
+        if (a) { a.signedIn = false; a.lostAt = '2026-11-20T08:15:00Z'; }
+        break;
+      }
+      // Two agents lost their sign-in at once, as the tray finds them with Construct closed.
+      case 'signed-out-two': {
+        for (const id of ['claude', 'codex']) {
+          const a = d.vms[0].agents.find(x => x.id === id);
+          if (a) { a.signedIn = false; a.lostAt = '2026-11-20T08:15:00Z'; }
+        }
+        break;
+      }
+      case 'sign-in-key': {
+        d.signIn = { vmId: 'atlas', agent: 'opencode', state: 'key', text: '' };
+        const oc = d.vms[0].agents.find(a => a.id === 'opencode');
+        if (oc) oc.signedIn = false;
+        break;
+      }
+      case 'sign-in-browser': d.signIn = { vmId: 'atlas', agent: 'codex', state: 'running', text: SIGN_IN_BROWSER_TEXT.codex, browser: true }; break;
       case 'upgrade-intro': d.upgrade = upgrade('engine'); break;
       case 'upgrade-code': d.upgrade = upgrade('recovery', { code: RECOVERY_CODE }); break;
       case 'upgrade-close': d.upgrade = upgrade('close', { writers: ['VS Code'] }); break;
@@ -406,6 +437,58 @@ export class FakeBackend implements Backend {
     this.set(d => { for (const ag of this.vm(d, vmId).agents) ag.version = ag.latest; }, 'Agents updated');
   }
 
+  /* --- signing in to the coding agents: the CLI's text, a code typed, signed in --- */
+
+  signIn(vmId: string, agent: AgentId, how?: 'list') {
+    // OpenCode: an OpenRouter key first; its own list is the other way.
+    if (agent === 'opencode' && how !== 'list') { this.set(d => { d.signIn = { vmId, agent, state: 'key', text: '' }; }); return; }
+    this.set(d => { d.signIn = { vmId, agent, state: 'starting', text: '' }; });
+    const mine = () => this.s.signIn?.vmId === vmId && this.s.signIn.agent === agent;
+    // Claude Code and Codex return from the browser through this device's forward; a code typed still works.
+    const browser = agent === 'claude-code' || agent === 'codex';
+    this.after(1, () => {
+      if (mine()) this.set(d => { d.signIn = { vmId, agent, state: 'running', text: browser ? SIGN_IN_BROWSER_TEXT[agent] : SIGN_IN_TEXT[agent], ...(browser ? { browser: true } : {}) }; });
+    });
+    if (browser) this.after(6, () => { if (mine() && this.s.signIn?.state === 'running') this.signedIn(vmId, agent); });
+  }
+
+  signInWithKey(vmId: string, key: string) {
+    if (!key) return;
+    const prompt = '┌  Connect an integration\n│\n◆  Enter your OpenRouter API key\n│  ';
+    this.set(d => { d.signIn = { vmId, agent: 'opencode', state: 'running', text: prompt + '▪'.repeat(key.length) }; });
+    this.after(2, () => { if (this.s.signIn?.vmId === vmId && this.s.signIn.agent === 'opencode' && this.s.signIn.state === 'running') this.signedIn(vmId, 'opencode'); });
+  }
+
+  dismissSignInNotice(vmId: string, agent: AgentId) {
+    const tool = AGENTS.find(a => a.id === agent)?.tool;
+    this.set(d => { const a = this.vm(d, vmId).agents.find(x => x.id === tool); if (a) a.lostAt = null; });
+  }
+
+  signInInput(input: SignInInput) {
+    const si = this.s.signIn;
+    if (!si || si.state !== 'running' || !('text' in input) || !input.text.trim()) return;
+    const typed = input.text.trim();
+    this.set(d => { d.signIn = { ...si, text: si.text + typed }; });
+    this.after(1, () => {
+      if (this.s.signIn?.vmId !== si.vmId || this.s.signIn.agent !== si.agent) return;
+      if (typed !== 'bad') { this.signedIn(si.vmId, si.agent); return; }
+      this.set(d => { d.signIn = { ...si, state: 'failed', text: si.text + typed + '\nOAuth error: Invalid code' }; });
+    });
+  }
+
+  closeSignIn() { this.set(d => { d.signIn = null; }); }
+
+  private signedIn(vmId: string, agent: AgentId) {
+    const a = AGENTS.find(x => x.id === agent)!;
+    this.set(d => {
+      d.signIn = null;
+      const v = this.vm(d, vmId);
+      const r = v.agents.find(x => x.id === a.tool);
+      if (r) { r.signedIn = true; r.lostAt = null; }
+      else v.agents.push({ id: a.tool, name: a.name, version: '1.0.0', latest: '1.0.0', installed: true, signedIn: true });
+    });
+  }
+
   setProjectOn(vmId: string, project: string, on: boolean) {
     this.set(d => {
       const v = this.vm(d, vmId);
@@ -483,7 +566,9 @@ export class FakeBackend implements Backend {
       }
     }
     this.set(d => {
-      d.vms.push(newVm(name, hostId, `${name}.example.net`));
+      const v = newVm(name, hostId, `${name}.example.net`);
+      if (req.agents) v.settings.agents = agentSwitches(req.agents);
+      d.vms.push(v);
       const h = this.host(d, hostId);
       h.vmCount += 1;
       h.vms.push({ name, owner: 'alex', role: 'primary', power: 'off', cpuPct: 0, memGb: 0, memMaxGb: 8, diskGb: 0, cpus: 4, network: 'default', address: '–', lease: 'no expiry', shared: false, tokensToday: '0' });

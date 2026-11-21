@@ -68,7 +68,7 @@ public static partial class ProvisionScript
         void Add(string name, string? value) => vars.Add(new(name, value ?? string.Empty));
         void AddSecretSlot(string name) { if (!input.SecretNames.Contains(name)) Add(name, string.Empty); }
 
-        Add("AI_TOOLS", s.AiTools ?? "opencode,claude-code,codex");
+        Add("AI_TOOLS", CodingAgents.AiTools(input.Desired));
         Add("PROJECTS", string.Join(',', input.Desired.Projects));
         Add("SSH_USER", s.SeedUser ?? input.DefaultSeedUser);
         Add("AGENT_NAME", string.IsNullOrEmpty(s.AgentName) ? input.VmName + "-agent" : s.AgentName);
@@ -287,7 +287,8 @@ public static partial class ProvisionScript
     /// declaration order, unset fields left out), so the same choices always hash the same.
     /// </summary>
     public static string DesiredHash(VmDesiredState desired) =>
-        Convert.ToHexStringLower(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(desired, CanonicalJson)));
+        Convert.ToHexStringLower(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(
+            desired with { CodingAgents = CodingAgents.Canonical(desired.CodingAgents) }, CanonicalJson)));
 }
 
 /// <summary>

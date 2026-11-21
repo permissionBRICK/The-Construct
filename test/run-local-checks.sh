@@ -57,6 +57,8 @@ if [[ "$group" == service || "$group" == all ]]; then
   bash -n console-viewer/install.sh bin/construct-vm.sh bin/construct-secret.sh bin/construct-backup.sh bin/construct-config.sh bin/construct-update.sh bin/construct-oom-guard.sh bin/setup-swap.sh bin/project-forwards.sh bin/provision.sh bin/fetch-construct-source.sh bin/construct-worktree-clone.sh bin/construct-agent-fix.sh service/host/xfs-cloud-image.sh service/host/install-construct-host.sh
   bash test/worktree-clone.test.sh
   bash test/codex-install.test.sh
+  bash test/coding-agents.test.sh
+  node --no-warnings test/opencode-background.test.mjs
   bash test/claude-rm-prompt.test.sh
   pwsh -NoProfile -File test/browser-console-install.test.ps1
   bash test/browser-console-provision.test.sh
@@ -91,6 +93,7 @@ if [[ "$group" == service || "$group" == all ]]; then
   bash test/vscode-download.test.sh
   bash test/systemprompt-install.test.sh
   bash test/repair-agent.test.sh
+  bash test/agent-sign-in.test.sh
   bash test/autoinstall-iso.test.sh
   python3 test/host-conversion.test.py
   dotnet test service/Constructd.sln -c Release

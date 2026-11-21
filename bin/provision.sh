@@ -1131,7 +1131,8 @@ fi
 IFS=',' read -ra _selected_ai_tools <<<"${AI_TOOLS}"
 for _ai_tool in "${_selected_ai_tools[@]}"; do
   _ai_tool="${_ai_tool//[[:space:]]/}"
-  [[ -n "${_ai_tool}" ]] || continue
+  # "none": every coding agent switched off for this VM.
+  [[ -n "${_ai_tool}" && "${_ai_tool}" != none ]] || continue
   run_step optional "Installing AI tool: ${_ai_tool}" \
     env TARGET_USER="${CLAUDE_USER}" AI_TOOLS_OVERRIDE="${_ai_tool}" AI_CONSOLE_INTEGRATION=false \
     OPENCODE_BACKGROUND_WATCHER="${OPENCODE_BACKGROUND_WATCHER}" \
@@ -1398,6 +1399,8 @@ setup_usage_report_timer() {
   install -m 0755 "${REPO_DIR}/bin/construct-usage-report.sh" "${bin_dir}/construct-usage-report.sh" || return 1
   install -m 0644 "${REPO_DIR}/extension/vm/usage-collect.sh" "${bin_dir}/lib/usage-collect.sh" || return 1
   install -m 0644 "${REPO_DIR}/bin/lib/usage-normalize.jq" "${bin_dir}/lib/usage-normalize.jq" || return 1
+  # The report says whether each agent is signed in, by the sign-in script's checks.
+  install -m 0644 "${REPO_DIR}/bin/construct-agent-sign-in.py" "${bin_dir}/lib/construct-agent-sign-in.py" || return 1
   install -m 0644 "${REPO_DIR}/systemd/construct-usage-report.service" "${unit_dir}/construct-usage-report.service" || return 1
   install -m 0644 "${REPO_DIR}/systemd/construct-usage-report.timer" "${unit_dir}/construct-usage-report.timer" || return 1
   sed -i "s/^OnUnitActiveSec=.*/OnUnitActiveSec=${CONSTRUCT_USAGE_REPORT_INTERVAL_MIN}min/" "${unit_dir}/construct-usage-report.timer" || return 1

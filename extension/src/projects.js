@@ -5,7 +5,7 @@
 // VS Code extension itself does not use it.
 
 // The agents an MCP server can be scoped to (schema `agents` enum).
-const MCP_AGENTS = ["claude", "claude-code", "codex", "opencode"];
+const MCP_AGENTS = ["claude", "claude-code", "codex", "opencode", "antigravity"];
 
 // ── Profile validation / sanitization (edit) ─────────────────────────────────
 // A profile edited in the panel arrives as arbitrary JSON over postMessage. Before

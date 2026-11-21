@@ -1,0 +1,325 @@
+using System.Net;
+using System.Net.Http.Json;
+using System.Text.Json;
+using Constructd.Api.Contracts;
+using Constructd.Api.Infrastructure;
+using Constructd.Api.SignIn;
+using Constructd.Core.Domain;
+using Constructd.Core.Services;
+using Constructd.Fakes;
+using Constructd.Tests.Support;
+
+namespace Constructd.Tests.Provisioning;
+
+/// <summary>Signing in to a VM's coding agents (design 11.8, S34) with the scripted guest of fake mode.</summary>
+public sealed class AgentSignInTests
+{
+    private const string Url = $"/api/v1/vms/{ProvisionHarness.Vm}/agents";
+
+    private static FakeGuestSessionRunner Guests(ProvisionHarness h) => h.App.Service<FakeGuestSessionRunner>();
+
+    private static async Task<T> Until<T>(Func<Task<T?>> probe, string what, int seconds = 20) where T : class
+    {
+        var until = DateTime.UtcNow.AddSeconds(seconds);
+        while (DateTime.UtcNow < until)
+        {
+            if (await probe() is { } value) return value;
+            await Task.Delay(25);
+        }
+
+        throw new TimeoutException("Timed out waiting for " + what);
+    }
+
+    private static async Task<AgentSignInResponse?> Read(HttpClient client, string agent = "claude-code")
+    {
+        var response = await client.GetAsync($"{Url}/{agent}/sign-in");
+        return response.StatusCode == HttpStatusCode.OK ? await response.ReadAsync<AgentSignInResponse>() : null;
+    }
+
+    private static Task<AgentSignInResponse> Until(HttpClient client, Func<AgentSignInResponse, bool> state, string what, string agent = "claude-code") =>
+        Until(async () => await Read(client, agent) is { } s && state(s) ? s : null, what);
+
+    private static async Task<AgentSignInResponse> StartAsync(ProvisionHarness h, string agent = "claude-code")
+    {
+        var response = await h.Client.PostAsync($"{Url}/{agent}/sign-in", null);
+        Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
+        return await response.ReadAsync<AgentSignInResponse>();
+    }
+
+    [Fact]
+    public async Task The_owner_signs_in_through_the_agents_own_terminal_on_the_vm()
+    {
+        await using var h = await ProvisionHarness.StartAsync();
+        using var changes = h.App.Service<ChangeFeed>().Subscribe(null);
+        var started = await StartAsync(h);
+        Assert.Equal(("claude-code", "running"), (started.Agent, started.State));
+
+        var shown = await Until(h.Client, s => s.Text.Contains("Paste code here", StringComparison.Ordinal), "the prompt");
+        Assert.Contains("https://sign-in.example/claude-code", shown.Text, StringComparison.Ordinal);
+        var guest = Assert.Single(Guests(h).Sessions);
+        // As root through sudo -n; the agent is the only thing on the command line besides the session id.
+        Assert.Equal($"sudo -n bash -lc 'python3 /opt/construct/repo/bin/construct-agent-sign-in.py --session {started.Id} claude-code' 2>&1", guest.Command);
+
+        const string code = "abc-123 \"quoted\" $(touch /tmp/pwned)";
+        Assert.Equal(HttpStatusCode.NoContent, (await h.Client.PostAsJsonAsync($"{Url}/claude-code/sign-in/input", new { text = code, session = started.Id })).StatusCode);
+        var line = Assert.Single(guest.Received);
+        Assert.Equal(code, JsonDocument.Parse(line).RootElement.GetProperty("text").GetString());
+        Assert.DoesNotContain(h.Ssh.Commands.Append(guest.Command), c => c.Contains("abc-123", StringComparison.Ordinal));
+
+        var ended = await Until(h.Client, s => s.State == "ended", "the end");
+        Assert.Equal(("done", true), (ended.Outcome, ended.SignedIn));
+        // Over: what the terminal showed (its link, the code) is gone; the outcome and the check stay.
+        Assert.Equal("", ended.Text);
+
+        // The VM had reported no agents yet: the sign-in's check is there at once, with the version it read.
+        var agents = await (await h.Client.GetAsync(Url)).ReadAsync<VmAgentsResponse>();
+        var claude = Assert.Single(agents.Agents);
+        Assert.Equal(("claude", "1.0.0", (bool?)true), (claude.Tool, claude.Version, claude.SignedIn));
+
+        var seen = new List<Change>();
+        while (changes.Live.TryRead(out var change)) seen.Add(change);
+        var signIn = seen.Where(c => c.Type.StartsWith("agent-sign-in.", StringComparison.Ordinal)).ToList();
+        Assert.All(signIn, c => Assert.Equal((started.Id, ProvisionHarness.Vm, "alice", true), (c.Id, c.Vm, c.Owner, c.OwnerOnly)));
+        Assert.Equal("agent-sign-in.started", signIn[0].Type);
+        Assert.Contains(signIn, c => c.Type == "agent-sign-in.output");
+        Assert.Single(signIn, c => c.Type == "agent-sign-in.ended");
+    }
+
+    [Fact]
+    public async Task A_sign_in_updates_the_agent_the_vm_reported()
+    {
+        await using var h = await ProvisionHarness.StartAsync();
+        using var vm = h.App.CreateVmTokenClient(h.VmToken!);
+        Assert.Equal(HttpStatusCode.NoContent, (await vm.PostJsonAsync($"/api/v1/vms/{ProvisionHarness.Vm}/usage", new
+        {
+            generatedAt = DateTimeOffset.UtcNow, days = Array.Empty<object>(),
+            agents = new object[] { new { tool = "codex", version = "0.170.0", signedIn = false } },
+        })).StatusCode);
+        var started = await StartAsync(h, "codex");
+        await Until(h.Client, s => s.Running(), "the prompt", "codex");
+        await h.Client.PostAsJsonAsync($"{Url}/codex/sign-in/input", new { text = "", session = started.Id });
+        await Until(h.Client, s => s.State == "ended", "the end", "codex");
+
+        var codex = Assert.Single((await (await h.Client.GetAsync(Url)).ReadAsync<VmAgentsResponse>()).Agents);
+        Assert.Equal(("0.170.0", (bool?)true), (codex.Version, codex.SignedIn));
+    }
+
+    [Fact]
+    public async Task Cancel_ends_the_sign_in_and_stops_it_on_the_vm()
+    {
+        await using var h = await ProvisionHarness.StartAsync();
+        var started = await StartAsync(h);
+        await Until(h.Client, s => s.Text.Length > 0, "the prompt");
+        Assert.Equal(HttpStatusCode.BadRequest, (await h.Client.DeleteAsync($"{Url}/claude-code/sign-in")).StatusCode);
+        Assert.Equal(HttpStatusCode.NoContent, (await h.Client.DeleteAsync($"{Url}/claude-code/sign-in?session={started.Id}")).StatusCode);
+
+        var ended = await Read(h.Client);
+        Assert.Equal(("ended", "stopped", ""), (ended!.State, ended.Outcome, ended.Text));
+        Assert.True(Assert.Single(Guests(h).Sessions).Disposed);
+        Assert.Contains(h.Ssh.Commands, c => c.Contains($"construct-agent-sign-in.py --stop --session {started.Id}", StringComparison.Ordinal));
+        // Over: input is refused, a second cancel does nothing, and the agent's state is not touched.
+        Assert.Equal(HttpStatusCode.Conflict, (await h.Client.PostAsJsonAsync($"{Url}/claude-code/sign-in/input", new { text = "x", session = started.Id })).StatusCode);
+        Assert.Equal(HttpStatusCode.NoContent, (await h.Client.DeleteAsync($"{Url}/claude-code/sign-in?session={started.Id}")).StatusCode);
+        Assert.Empty((await (await h.Client.GetAsync(Url)).ReadAsync<VmAgentsResponse>()).Agents);
+    }
+
+    [Fact]
+    public async Task A_new_sign_in_on_the_vm_ends_the_one_before()
+    {
+        await using var h = await ProvisionHarness.StartAsync();
+        var first = await StartAsync(h);
+        await Until(h.Client, s => s.Text.Length > 0, "the prompt");
+        var second = await StartAsync(h, "antigravity");
+
+        Assert.NotEqual(first.Id, second.Id);
+        Assert.True(Guests(h).Sessions.First().Disposed);
+        Assert.Contains(h.Ssh.Commands, c => c.Contains($"--stop --session {first.Id}", StringComparison.Ordinal));
+        // The VM's latest sign-in is Antigravity's now; Claude Code's is gone with it.
+        Assert.Equal(HttpStatusCode.NotFound, (await h.Client.GetAsync($"{Url}/claude-code/sign-in")).StatusCode);
+        var shown = await Until(h.Client, s => s.Text.Length > 0, "the prompt", "antigravity");
+        Assert.Contains("--session " + second.Id + " antigravity", Guests(h).Sessions.Last().Command, StringComparison.Ordinal);
+        Assert.Contains("https://sign-in.example/antigravity", shown.Text, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task A_client_that_forwards_gets_the_link_the_cli_opened_with_its_port_while_it_runs()
+    {
+        await using var h = await ProvisionHarness.StartAsync();
+        var response = await h.Client.PostAsJsonAsync($"{Url}/codex/sign-in", new { browser = true });
+        Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
+        var started = await response.ReadAsync<AgentSignInResponse>();
+        Assert.Contains($"--session {started.Id} --browser codex", Guests(h).Sessions.Single().Command, StringComparison.Ordinal);
+
+        var shown = await Until(h.Client, s => s.Browser is not null, "the link", "codex");
+        Assert.Equal(1455, shown.Browser!.Port);
+        Assert.StartsWith("https://sign-in.example/codex/authorize?redirect_uri=http%3A%2F%2Flocalhost%3A1455", shown.Browser.Url, StringComparison.Ordinal);
+
+        // Over: the link goes with the rest of what the sign-in showed.
+        Assert.Equal(HttpStatusCode.NoContent, (await h.Client.DeleteAsync($"{Url}/codex/sign-in?session={started.Id}")).StatusCode);
+        Assert.Null((await Read(h.Client, "codex"))!.Browser);
+    }
+
+    [Fact]
+    public async Task OpenCode_signs_in_with_an_openrouter_key_that_is_typed_as_a_secret_and_never_kept()
+    {
+        await using var h = await ProvisionHarness.StartAsync();
+        Assert.Equal(HttpStatusCode.BadRequest, (await h.Client.PostAsJsonAsync($"{Url}/codex/sign-in", new { provider = "openrouter" })).StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest, (await h.Client.PostAsJsonAsync($"{Url}/opencode/sign-in", new { provider = "anthropic" })).StatusCode);
+        Assert.Empty(Guests(h).Sessions);
+
+        var response = await h.Client.PostAsJsonAsync($"{Url}/opencode/sign-in", new { provider = "openrouter" });
+        Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
+        var started = await response.ReadAsync<AgentSignInResponse>();
+        var guest = Guests(h).Sessions.Single();
+        Assert.Contains($"--session {started.Id} --provider openrouter opencode", guest.Command, StringComparison.Ordinal);
+        await Until(h.Client, s => s.Text.Contains("OpenRouter API key", StringComparison.Ordinal), "the key prompt", "opencode");
+
+        var input = $"{Url}/opencode/sign-in/input";
+        const string key = "sk-or-v1-0000fake0000test";
+        foreach (var bad in new object[] { new { secret = "", session = started.Id }, new { secret = key, text = "x", session = started.Id }, new { secret = "a\u0003b", session = started.Id } })
+            Assert.Equal(HttpStatusCode.BadRequest, (await h.Client.PostAsJsonAsync(input, bad)).StatusCode);
+        Assert.Equal(HttpStatusCode.NoContent, (await h.Client.PostAsJsonAsync(input, new { secret = key, session = started.Id })).StatusCode);
+        Assert.Equal(key, JsonDocument.Parse(guest.Received.Single()).RootElement.GetProperty("secret").GetString());
+
+        var ended = await Until(h.Client, s => s.State == "ended", "the end", "opencode");
+        Assert.Equal(("done", true), (ended.Outcome, ended.SignedIn));
+        var opencode = Assert.Single((await (await h.Client.GetAsync(Url)).ReadAsync<VmAgentsResponse>()).Agents);
+        Assert.Equal(("opencode", (bool?)true), (opencode.Tool, opencode.SignedIn));
+        var admin = await h.App.CreateUserClientAsync("root", Role.Admin);
+        var audit = await (await admin.GetAsync("/api/v1/audit")).Content.ReadAsStringAsync();
+        Assert.DoesNotContain(key, audit, StringComparison.Ordinal);
+        Assert.Contains("provider=openrouter", audit, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Without_a_forwarding_client_codex_keeps_the_device_code()
+    {
+        await using var h = await ProvisionHarness.StartAsync();
+        await StartAsync(h, "codex");
+        await Until(h.Client, s => s.Running(), "the prompt", "codex");
+        Assert.DoesNotContain("--browser", Guests(h).Sessions.Single().Command, StringComparison.Ordinal);
+        Assert.Null((await Read(h.Client, "codex"))!.Browser);
+    }
+
+    [Theory]
+    [InlineData("""{"type":"browser","url":"https://a.example/x?redirect_uri=http%3A%2F%2Flocalhost%3A45678%2Fcb","port":45678}""", "https://a.example/x?redirect_uri=http%3A%2F%2Flocalhost%3A45678%2Fcb", 45678)]
+    [InlineData("""{"type":"browser","url":"https://a.example/x","port":80}""", "https://a.example/x", null)]
+    [InlineData("""{"type":"browser","url":"https://a.example/x","port":70000}""", "https://a.example/x", null)]
+    [InlineData("""{"type":"browser","url":"http://a.example/x","port":45678}""", null, 45678)]
+    [InlineData("""{"type":"browser","url":"https://user:pw@a.example/x"}""", null, null)]
+    [InlineData("""{"type":"browser","url":"https://a.example/a b"}""", null, null)]
+    public void A_browser_line_keeps_only_an_https_link_and_a_port_from_1024(string raw, string? url, int? port)
+    {
+        var line = Constructd.Core.Logic.AgentSignInScript.Parse(raw);
+        Assert.Equal(("browser", url, port), (line.Type, line.Url, line.Port));
+    }
+
+    [Fact]
+    public async Task Input_and_cancel_reach_only_the_sign_in_they_name()
+    {
+        await using var h = await ProvisionHarness.StartAsync();
+        var first = await StartAsync(h);
+        await Until(h.Client, s => s.Text.Length > 0, "the first prompt");
+        var second = await StartAsync(h);
+        await Until(h.Client, s => s.Id == second.Id && s.Text.Length > 0, "the second prompt");
+
+        // A panel that still shows the first one: its input is refused, its cancel leaves the second running.
+        Assert.Equal(HttpStatusCode.Conflict, (await h.Client.PostAsJsonAsync($"{Url}/claude-code/sign-in/input", new { text = "old-code", session = first.Id })).StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest, (await h.Client.PostAsJsonAsync($"{Url}/claude-code/sign-in/input", new { text = "no-session" })).StatusCode);
+        Assert.Equal(HttpStatusCode.NoContent, (await h.Client.DeleteAsync($"{Url}/claude-code/sign-in?session={first.Id}")).StatusCode);
+        Assert.Empty(Guests(h).Sessions.Last().Received);
+        Assert.Equal((second.Id, "running"), ((await Read(h.Client))!.Id, (await Read(h.Client))!.State));
+
+        Assert.Equal(HttpStatusCode.NoContent, (await h.Client.PostAsJsonAsync($"{Url}/claude-code/sign-in/input", new { key = "up", session = second.Id })).StatusCode);
+        Assert.Equal("""{"key":"up"}""", Guests(h).Sessions.Last().Received.Single());
+    }
+
+    [Fact]
+    public async Task Only_the_owner_signs_in_not_an_admin_another_user_or_the_vm()
+    {
+        await using var h = await ProvisionHarness.StartAsync();
+        var started = await StartAsync(h);
+        var bob = await h.App.CreateUserClientAsync("bob");
+        var admin = await h.App.CreateUserClientAsync("root", Role.Admin);
+        var vmToken = h.App.CreateVmTokenClient(h.VmToken!);
+        foreach (var other in new[] { bob, admin, vmToken })
+        {
+            Assert.Equal(HttpStatusCode.Forbidden, (await other.GetAsync($"{Url}/claude-code/sign-in")).StatusCode);
+            Assert.Equal(HttpStatusCode.Forbidden, (await other.PostAsync($"{Url}/codex/sign-in", null)).StatusCode);
+            Assert.Equal(HttpStatusCode.Forbidden, (await other.PostAsJsonAsync($"{Url}/claude-code/sign-in/input", new { text = "x", session = started.Id })).StatusCode);
+            Assert.Equal(HttpStatusCode.Forbidden, (await other.DeleteAsync($"{Url}/claude-code/sign-in?session={started.Id}")).StatusCode);
+        }
+
+        Assert.Single(Guests(h).Sessions);
+        Assert.Empty(Guests(h).Sessions.Single().Received);
+        Assert.Equal("running", (await Read(h.Client))!.State);
+    }
+
+    [Fact]
+    public async Task Input_is_text_or_one_key_short_and_without_control_characters()
+    {
+        await using var h = await ProvisionHarness.StartAsync();
+        var started = await StartAsync(h);
+        await Until(h.Client, s => s.Text.Length > 0, "the prompt");
+        var input = $"{Url}/claude-code/sign-in/input";
+        var id = started.Id;
+        foreach (var bad in new object[]
+        {
+            new { session = id }, new { text = "a", key = "up", session = id }, new { key = "left", session = id }, new { text = "a\u001b[A", session = id },
+            new { text = "line\nnext", session = id }, new { text = new string('x', 4097), session = id },
+        })
+            Assert.Equal(HttpStatusCode.BadRequest, (await h.Client.PostAsJsonAsync(input, bad)).StatusCode);
+        Assert.Empty(Guests(h).Sessions.Single().Received);
+
+        Assert.Equal(HttpStatusCode.NoContent, (await h.Client.PostAsJsonAsync(input, new { key = "down", session = id })).StatusCode);
+        Assert.Equal("""{"key":"down"}""", Guests(h).Sessions.Single().Received.Single());
+        Assert.Equal(HttpStatusCode.BadRequest, (await h.Client.PostAsync($"{Url}/gemini/sign-in", null)).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await h.Client.PostAsync("/api/v1/vms/ghost/agents/codex/sign-in", null)).StatusCode);
+    }
+
+    [Fact]
+    public async Task What_the_terminal_shows_and_what_is_typed_stay_out_of_the_audit_log()
+    {
+        await using var h = await ProvisionHarness.StartAsync();
+        var started = await StartAsync(h);
+        await Until(h.Client, s => s.Text.Length > 0, "the prompt");
+        await h.Client.PostAsJsonAsync($"{Url}/claude-code/sign-in/input", new { text = "one-time-code-42", session = started.Id });
+        await Until(h.Client, s => s.State == "ended", "the end");
+        // A refused input is recorded, without its text.
+        await h.Client.PostAsJsonAsync($"{Url}/claude-code/sign-in/input", new { text = "late-code-43", session = started.Id });
+
+        var admin = await h.App.CreateUserClientAsync("root", Role.Admin);
+        var entries = await (await admin.GetAsync("/api/v1/audit")).ReadAsync<List<AuditResponse>>();
+        Assert.Contains(entries, e => e.Action == "vm.agent.sign-in" && e.Outcome == AuditOutcome.Success);
+        Assert.Contains(entries, e => e.Action == "vm.agent.sign-in.input" && e.Outcome == AuditOutcome.Failure);
+        Assert.DoesNotContain(entries, e => e.Action == "vm.agent.sign-in.input" && e.Outcome == AuditOutcome.Success);
+        var all = JsonSerializer.Serialize(entries);
+        Assert.DoesNotContain("one-time-code", all, StringComparison.Ordinal);
+        Assert.DoesNotContain("late-code", all, StringComparison.Ordinal);
+        Assert.DoesNotContain("sign-in.example", all, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task A_connection_that_ends_without_an_end_line_is_an_error()
+    {
+        await using var h = await ProvisionHarness.StartAsync();
+        var release = new TaskCompletionSource();
+        Guests(h).SignInScript = async s =>
+        {
+            s.EmitRaw("sudo: a password is required");
+            await release.Task;
+        };
+        await StartAsync(h, "opencode");
+        // What the connection said shows while it lasts.
+        var shown = await Until(h.Client, s => s.Text.Length > 0, "the note", "opencode");
+        Assert.Contains("sudo: a password is required", shown.Text, StringComparison.Ordinal);
+        release.SetResult();
+        var ended = await Until(h.Client, s => s.State == "ended", "the end", "opencode");
+        Assert.Equal(("error", "", (bool?)null), (ended.Outcome, ended.Text, ended.SignedIn));
+    }
+}
+
+internal static class AgentSignInResponseExtensions
+{
+    public static bool Running(this AgentSignInResponse s) => s.State == "running" && s.Text.Length > 0;
+}

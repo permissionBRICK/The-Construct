@@ -18,7 +18,9 @@
 #                                                 session_index.jsonl/history.jsonl
 #                                                 indexes
 #                                         Opencode ~/.local/share/opencode/storage/
-#                                                 and opencode.db*
+#                                                 and opencode.db* (the database
+#                                                 also needs INCLUDE_AUTH: OpenCode
+#                                                 2 keeps its sign-ins in it)
 #                                       HISTORY_RETENTION_DAYS trims the Claude and
 #                                       Codex transcripts in the backup (never the
 #                                       live home) to the last N days by mtime;
@@ -39,6 +41,13 @@
 #   - User secrets store (INCLUDE_AUTH): ~/.secrets -- everything in it, verbatim
 #   - Agent settings/config           : ~/.claude/settings.json, ~/.codex/config.toml,
 #                                       ~/.config/opencode/opencode.json
+#   - Antigravity CLI                 : ~/.gemini/AGENTS.md, ~/.gemini/config (MCP
+#                                       servers, rules, plugins) and its CLI
+#                                       settings always; its chats (conversations/,
+#                                       brain/, the summaries database) under
+#                                       INCLUDE_HISTORY; its file token storage
+#                                       (a VM has no keyring) and plugin sign-ins
+#                                       under INCLUDE_AUTH
 #   - T3 Code (when enabled/installed): ~/.t3/userdata -- settings + keybindings
 #                                       always; secrets/ + the statev2.sqlite
 #                                       (state.sqlite before T3 Code 0.1.0)
@@ -442,17 +451,51 @@ if has_agent "opencode" || [[ -d "${EXPORT_HOME}/.config/opencode" ]]; then
     # Per-MCP-server OAuth state (client registration + tokens) for remote servers.
     add ".local/share/opencode/mcp-auth.json"
   fi
-  # Chat history: sessions/messages live in storage/ (JSON files) and, on newer
-  # versions, the opencode.db sqlite database (take its -wal/-shm too so an
-  # un-checkpointed write isn't lost). project/ held per-project session data on
-  # older versions. NOT log/, snapshot/, or the downloaded binaries.
+  # Chat history: sessions/messages live in the opencode.db sqlite database (take
+  # its -wal/-shm too so an un-checkpointed write isn't lost); storage/ (JSON files)
+  # and project/ held them on older OpenCode 1 versions. NOT log/, snapshot/, or the
+  # downloaded binaries. OpenCode 2 also keeps its sign-ins in opencode.db (it
+  # imports auth.json once), so, like T3 Code's store, the database is gated on
+  # INCLUDE_AUTH too: a sanitized backup must not carry them, at the cost of the
+  # OpenCode sessions. OpenCode 2 converts a database from OpenCode 1 when it starts.
   if [[ "${INCLUDE_HISTORY}" == "true" ]]; then
     add ".local/share/opencode/storage"
     add ".local/share/opencode/project"
+  fi
+  if [[ "${INCLUDE_HISTORY}" == "true" && "${INCLUDE_AUTH}" == "true" ]]; then
     if [[ "${EXPORT_REASON}" == "backup" ]]; then
       add_sqlite_snapshot ".local/share/opencode/opencode.db"
     else
       add_glob ".local/share/opencode/opencode.db*"
+    fi
+  fi
+fi
+
+# ── Antigravity CLI ──────────────────────────────────────────────────────────
+# Everything lives under ~/.gemini: the rules file, config/ (MCP servers, rules,
+# plugins, per-project permissions) and antigravity-cli/ (settings, chats). On a
+# VM, which has no D-Bus keyring, the CLI keeps its sign-in in files there too;
+# plugin sign-ins go to ~/.config/antigravity. NOT log/, crashes/, the updater
+# state or the bundled skills it unpacks again.
+if has_agent "antigravity" || [[ -d "${EXPORT_HOME}/.gemini/antigravity-cli" ]]; then
+  add ".gemini/AGENTS.md"
+  add ".gemini/config"
+  add ".gemini/antigravity-cli/settings.json"
+  add ".gemini/antigravity-cli/keybindings.json"
+  if [[ "${INCLUDE_AUTH}" == "true" ]]; then
+    add_glob ".gemini/antigravity-cli/*auth*"
+    add_glob ".gemini/antigravity-cli/*token*"
+    add ".config/antigravity"
+  fi
+  if [[ "${INCLUDE_HISTORY}" == "true" ]]; then
+    add ".gemini/antigravity-cli/conversations"
+    add ".gemini/antigravity-cli/brain"
+    add ".gemini/antigravity-cli/implicit"
+    add ".gemini/antigravity-cli/cache/last_conversations.json"
+    if [[ "${EXPORT_REASON}" == "backup" ]]; then
+      add_sqlite_snapshot ".gemini/antigravity-cli/conversation_summaries.db"
+    else
+      add_glob ".gemini/antigravity-cli/conversation_summaries.db*"
     fi
   fi
 fi
@@ -474,6 +517,10 @@ if [[ "${T3CODE:-false}" == "true" || -d "${EXPORT_HOME}/.t3/userdata" ]]; then
     add ".t3/userdata/settings.json"
     add ".t3/userdata/secrets"
     add ".t3/userdata/environment-id"
+    # T3 Code's own Antigravity home: its sign-in and its chats in one directory per
+    # provider instance, so auth-gated like the store. Not its logs or bundled skills.
+    add ".t3/userdata/providers/antigravity"
+    rm -rf "${HOMEROOT}"/.t3/userdata/providers/antigravity/*/antigravity-acp/{log,crashes,builtin} 2>/dev/null || true
     # The sqlite event-store holds chat history (threads/turns) AND auth (bearer
     # sessions, pairing state) in ONE database -- they cannot be split, so it is
     # gated on INCLUDE_AUTH: a sanitized INCLUDE_AUTH=false backup must not leak

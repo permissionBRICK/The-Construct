@@ -20,13 +20,15 @@ public interface IAgentShell
 /// </summary>
 public sealed class DeviceServices : IAsyncDisposable
 {
-    public DeviceServices(IDevicePlatform platform, DeviceSettings settings, SshClientConfig ssh, VmLinks links, AgentUpdater updater, UpdateEverything everything)
+    public DeviceServices(IDevicePlatform platform, DeviceSettings settings, SshClientConfig ssh, VmLinks links, AgentUpdater updater, UpdateEverything everything,
+        IDeviceEngines engines)
     {
         Platform = platform;
         Settings = settings;
         Ssh = ssh;
         Links = links;
         Actions = new VmActions(links, platform);
+        SignIns = new SignInForwards(links, engines, platform);
         Updater = updater;
         Everything = everything;
     }
@@ -40,6 +42,9 @@ public sealed class DeviceServices : IAsyncDisposable
     public VmLinks Links { get; }
 
     public VmActions Actions { get; }
+
+    /// <summary>A coding agent's sign-in redirect forwarded to its VM (11.8).</summary>
+    public SignInForwards SignIns { get; }
 
     public AgentUpdater Updater { get; }
 
@@ -74,7 +79,7 @@ public sealed class DeviceServices : IAsyncDisposable
             platform as IAgentLauncher ?? throw new InvalidOperationException("The platform cannot start an agent."), stop, () => agent.Events.Publish("update"))
         { Running = running };
         everything = new UpdateEverything(engines, updater, () => agent.Events.Publish("update"), options.Time);
-        return new DeviceServices(platform, settings, ssh, links, updater, everything)
+        return new DeviceServices(platform, settings, ssh, links, updater, everything, engines)
         {
             StartExecutable = running is not null ? install.ExecutableOf(running) : Environment.ProcessPath,
         };
@@ -89,6 +94,7 @@ public sealed class DeviceServices : IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         await Updater.DisposeAsync().ConfigureAwait(false);
+        await SignIns.DisposeAsync().ConfigureAwait(false);
         await Links.DisposeAsync().ConfigureAwait(false);
     }
 }

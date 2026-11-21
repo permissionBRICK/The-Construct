@@ -71,7 +71,7 @@ public sealed class FakePlatform : IDevicePlatform, IAgentLauncher, IDisposable
 /// </summary>
 public sealed class FakeEngines : IDeviceEngines
 {
-    private readonly ConcurrentDictionary<string, Func<JsonNode?, JsonNode?>> _routes = new();
+    private readonly ConcurrentDictionary<string, Func<JsonNode?, Task<JsonNode?>>> _routes = new();
 
     public List<EngineView> Engines { get; } = [];
 
@@ -84,7 +84,10 @@ public sealed class FakeEngines : IDeviceEngines
     }
 
     /// <summary>Answers <c>"{METHOD} {path}"</c> on <paramref name="engine"/>; the handler gets the body.</summary>
-    public FakeEngines On(string engine, string call, Func<JsonNode?, JsonNode?> answer)
+    public FakeEngines On(string engine, string call, Func<JsonNode?, JsonNode?> answer) => OnAsync(engine, call, body => Task.FromResult(answer(body)));
+
+    /// <summary>As <see cref="On(string, string, Func{JsonNode?, JsonNode?})"/>, with an answer that may come late.</summary>
+    public FakeEngines OnAsync(string engine, string call, Func<JsonNode?, Task<JsonNode?>> answer)
     {
         _routes[engine + " " + call] = answer;
         return this;
@@ -99,7 +102,7 @@ public sealed class FakeEngines : IDeviceEngines
         var call = method.Method + " " + path;
         Calls.Enqueue((engine, call, body?.DeepClone()));
         if (!_routes.TryGetValue(engine + " " + call, out var answer)) throw new AgentFailure(404, "not-found", "No such route on the fake engine: " + call);
-        return Task.FromResult(answer(body));
+        return answer(body);
     }
 
     public string[] CallsTo(string engine) => Calls.Where(c => c.Engine == engine).Select(c => c.Call).ToArray();
@@ -169,7 +172,7 @@ public sealed class FakeDevice : IAsyncDisposable
             () => everything?.Running != true, Platform, () => Stopped++, () => { }) { Running = running };
         Everything = new UpdateEverything(Engines, Updater, () => { }, TimeProvider.System) { PollInterval = TimeSpan.FromMilliseconds(20), HostUpdateLimit = TimeSpan.FromSeconds(5) };
         everything = Everything;
-        Services = new DeviceServices(Platform, Settings, ssh, Links, Updater, Everything);
+        Services = new DeviceServices(Platform, Settings, ssh, Links, Updater, Everything, Engines);
     }
 
     public FakeEngines Engines { get; }

@@ -794,7 +794,21 @@ feature. It installs a Construct-managed OpenCode plugin that provides three too
 `background` starts a detached process, `background_output` reads its captured output,
 and `background_kill` stops it. A `background` call with `wait: true` can wake the
 originating OpenCode session when the process finishes, which also supplies the stable
-signals used by Construct's optional T3 monitoring patch.
+signals used by Construct's optional T3 monitoring patch. The tool descriptions tell the
+agent to wait by starting such a task and ending its turn; re-checking a running armed
+task within a minute returns a reminder to do that instead of output.
+
+Stop disarms these wake-ups. An interrupted execution (T3's Stop, the TUI, the interrupt
+API) records the stop time in `~/.local/state/opencode/background/<session>/stopped`; T3
+writes that file itself on every Stop, including a Stop of a turn that had already
+settled, because OpenCode sees no interrupt then. A `wait: true` task started before that
+time keeps running but never wakes the session, including tasks of its subagents. A
+wake-up is never queued behind running work: it waits until the turn ends, so stopping
+that turn drops it. A wake-up OpenCode already held when the Stop landed is left out of
+every model request, and its turn is interrupted before the model is asked; a wake-up turn
+that had already started is interrupted, unless the user has sent a new prompt since.
+The next prompt to the session carries a hidden note listing those tasks and their state,
+so a resumed agent knows to read their results or wait for them again.
 
 This feature contains only that dependency-free watcher plugin. It does **not** install
 the source archive's Cortecs request hook, provider settings, model-fallback changes, or
@@ -986,7 +1000,8 @@ The patched install provides:
   `wait: true` is projected as a T3 `local_bash` task, so the thread pill stays
   `monitoring` after the foreground turn settles. The plugin's later
   `<background-task ...>` wake-up prompt, or a completed `background_kill`, closes that
-  task and clears the monitoring state.
+  task and clears the monitoring state. Stopping a monitoring thread drops the task and
+  writes the plugin's stop marker, so the stopped session is not woken later.
 
 This is a **reprovision-only** toggle: saving a change persists it and shows a prompt with
 a **Reprovision now** action. The reprovision selects the patched-source or stock install and

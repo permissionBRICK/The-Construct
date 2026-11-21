@@ -21,12 +21,20 @@ const SHOTS: [Surf, string, string, string?][] = [
   ['pop', 'repair', 'repair'],
   ['alone', 'vault-request', 'lease'],
   ['alone', 'new-secret', 'enter'],
+  ['alone', 'signed-out', 'signed-out'],
+  ['pop', 'signed-out', 'signed-out'],
+  ['win', 'signed-out', 'signed-out'],
   ['win', 'overview', 'calm'],
   ['win', 'repair', 'repair'],
   ['win', 'updating', 'updating'],
   ['win', 'projects', 'calm', 'projects'],
   ['win', 'project-file', 'calm', 'file/webshop'],
   ['win', 'settings-restart', 'restart', 'settings'],
+  ['win', 'settings-agents', 'calm', 'settings/agents'],
+  ['win', 'sign-in', 'sign-in', 'settings/agents'],
+  ['win', 'sign-in-failed', 'sign-in-failed', 'settings/agents'],
+  ['win', 'sign-in-browser', 'sign-in-browser', 'settings/agents'],
+  ['win', 'sign-in-key', 'sign-in-key', 'settings/agents'],
   ['win', 'vault', 'calm', 'vault'],
   ['win', 'devices', 'calm', 'devices'],
   ['win', 'backups', 'calm', 'backups'],
@@ -37,6 +45,8 @@ const SHOTS: [Surf, string, string, string?][] = [
   ['win', 'host-media', 'calm', 'host/orchard/media'],
   ['win', 'construct-update', 'update', 'app'],
   ['win', 'create-vm', 'calm', 'create'],
+  ['win', 'create-sign-in', 'created', 'create/quill'],
+  ['win', 'create-ready', 'created', 'create/quill/ready'],
   ['win', 'upgrade-code', 'upgrade-code'],
   ['win', 'upgrade-host', 'upgrade-host'],
   ['win', 'upgrade-done', 'upgrade-done'],
@@ -48,6 +58,7 @@ const SHOTS: [Surf, string, string, string?][] = [
   ['phone', 'projects', 'calm', 'projects'],
   ['phone', 'vault', 'calm', 'vault'],
   ['phone', 'construct', 'update', 'app'],
+  ['phone', 'create-sign-in', 'created', 'create/quill'],
 ];
 
 async function open(page: Page, surf: Surf, scene: string, theme: string, route = '') {
@@ -184,4 +195,24 @@ test('a failed reinstall shows its step and log, and asks again before Retry rei
   await expect(page).toHaveScreenshot('win-reinstall-retry-light.png');
   await page.getByRole('button', { name: 'Reinstall again' }).click();
   await expect(page.locator('.blk.job .bh b')).toHaveText('Reinstalling');
+});
+
+test('cards popped alone give way to the next one and close the surface only when none is left', async ({ page }) => {
+  // The desktop shell's host object, recording what the page asks of it.
+  await page.addInitScript(() => {
+    const sent: unknown[] = [];
+    (window as unknown as { __sent: unknown[] }).__sent = sent;
+    (window as unknown as { chrome: unknown }).chrome = { webview: { postMessage: (m: unknown) => { sent.push(m); } } };
+  });
+  await open(page, 'alone', 'signed-out-two', 'dark');
+  const closes = () => page.evaluate(() => (window as unknown as { __sent: { type: string }[] }).__sent.filter(m => m.type === 'close').length);
+  const card = page.getByRole('alertdialog');
+  await expect(card).toHaveCount(1);
+  const first = await card.getAttribute('aria-label');
+  await card.getByRole('button', { name: 'Dismiss' }).click();
+  await expect(card).toHaveCount(1);
+  await expect(card).not.toHaveAttribute('aria-label', first ?? '');
+  expect(await closes()).toBe(0);
+  await card.getByRole('button', { name: 'Dismiss' }).click();
+  await expect.poll(closes).toBe(1);
 });

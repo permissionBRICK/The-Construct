@@ -183,6 +183,16 @@ describe('FakeBackend', () => {
     expect(be.snapshot().vms[0].changeWaits).toBe('Settings');
   });
 
+  it('creates a VM with the coding agents chosen and switches one for the next reprovision', () => {
+    const be = new FakeBackend({ timers: false });
+    be.createVm({ where: 'local', name: 'quill', agents: ['claude-code', 'antigravity'] });
+    expect(be.snapshot().vms.find(v => v.name === 'quill')!.settings.agents).toEqual({ 'claude-code': true, codex: false, opencode: false, antigravity: true });
+    be.saveSettings('atlas', { agents: { antigravity: true } });
+    const atlas = be.snapshot().vms.find(v => v.name === 'atlas')!;
+    expect(atlas.settings.agents.antigravity).toBe(true);
+    expect(atlas.changeWaits).toBe('Settings');
+  });
+
   it('pairs a device after the words are confirmed', () => {
     const be = new FakeBackend({ tick: 100 });
     be.startPairing();
@@ -251,6 +261,71 @@ describe('FakeBackend', () => {
     expect(be.snapshot().upgrade?.step).toBe('convert');
     be.upgradeNext();
     expect(be.snapshot().upgrade).toBeNull();
+  });
+
+  it('signs in to an agent with a code typed, and fails a wrong one', () => {
+    const be = new FakeBackend({ tick: 10 });
+    expect(be.snapshot().vms[0].agents.find(a => a.id === 'codex')!.signedIn).toBe(false);
+    be.signIn('atlas', 'claude-code');
+    expect(be.snapshot().signIn).toMatchObject({ vmId: 'atlas', agent: 'claude-code', state: 'starting' });
+    run(15);
+    // It goes on in the browser; the CLI's own paste stays.
+    expect(be.snapshot().signIn).toMatchObject({ state: 'running', browser: true });
+    expect(be.snapshot().signIn!.text).toContain('Paste code here');
+    be.signInInput({ text: 'bad' });
+    run(15);
+    expect(be.snapshot().signIn).toMatchObject({ state: 'failed' });
+    expect(be.snapshot().signIn!.text).toContain('Invalid code');
+    be.closeSignIn();
+    expect(be.snapshot().signIn).toBeNull();
+
+    be.signIn('atlas', 'antigravity');
+    run(15);
+    be.signInInput({ key: 'down' });
+    be.signInInput({ text: '4/0Acode' });
+    run(15);
+    // Signed in: the panel goes, and the agent shows as signed in (reported now, if it was not before).
+    expect(be.snapshot().signIn).toBeNull();
+    expect(be.snapshot().vms[0].agents.find(a => a.id === 'antigravity')).toMatchObject({ signedIn: true, installed: true });
+  });
+
+  it('puts a lost sign-in away, and a sign-in clears it', () => {
+    const be = new FakeBackend({ scene: 'signed-out', tick: 10 });
+    const claude = () => be.snapshot().vms[0].agents.find(a => a.id === 'claude')!;
+    expect(claude().lostAt).toBeTruthy();
+    be.dismissSignInNotice('atlas', 'claude-code');
+    expect(claude().lostAt).toBeNull();
+
+    const again = new FakeBackend({ scene: 'signed-out', tick: 10 });
+    again.signIn('atlas', 'claude-code');
+    run(100);
+    expect(again.snapshot().vms[0].agents.find(a => a.id === 'claude')).toMatchObject({ signedIn: true, lostAt: null });
+  });
+
+  it('signs OpenCode in with an OpenRouter key, or opens its own list', () => {
+    const be = new FakeBackend({ tick: 10 });
+    be.signIn('atlas', 'opencode');
+    expect(be.snapshot().signIn).toMatchObject({ agent: 'opencode', state: 'key' });
+    be.signIn('atlas', 'opencode', 'list');
+    run(15);
+    expect(be.snapshot().signIn).toMatchObject({ agent: 'opencode', state: 'running' });
+    expect(be.snapshot().signIn!.text).toContain('Select integration');
+    be.signInWithKey('atlas', 'sk-or-v1-test');
+    expect(be.snapshot().signIn!.text).not.toContain('sk-or-v1-test');
+    run(30);
+    expect(be.snapshot().signIn).toBeNull();
+    expect(be.snapshot().vms[0].agents.find(a => a.id === 'opencode')!.signedIn).toBe(true);
+  });
+
+  it('signs Codex in when its browser sign-in came back, and a new sign-in replaces one that runs', () => {
+    const be = new FakeBackend({ tick: 10 });
+    be.signIn('atlas', 'opencode');
+    run(15);
+    be.signIn('atlas', 'codex');
+    expect(be.snapshot().signIn).toMatchObject({ agent: 'codex' });
+    run(100);
+    expect(be.snapshot().signIn).toBeNull();
+    expect(be.snapshot().vms[0].agents.find(a => a.id === 'codex')!.signedIn).toBe(true);
   });
 
   it('starts the repair agent by hand where the host does not, and stops it', () => {

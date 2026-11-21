@@ -1,5 +1,6 @@
 import type { components as E } from '../generated/engine';
 import type { components as A } from '../generated/agent';
+import { AGENTS, agentSwitches, DEFAULT_AGENTS } from '../../model/settings';
 import type { Agent, Backup, Device, Everything, Forward, Host, HostJob, HostUpdate, HostUser, HostVm, Job, JobKind, Lease, Power, Profile, Repair, RepairMessage, Secret, SettingsPatch, Upgrade, VaultEvent, VaultRequest, Vm, VmSettings, WinGuest, WinKey } from '../types';
 
 /* From what the agent and the engines report to the pieces of `State`. Pure functions, no I/O: each takes
@@ -32,6 +33,7 @@ export type DesiredResponse = E['schemas']['VmDesiredStateResponse'];
 export type DesiredState = E['schemas']['VmDesiredState'];
 export type ProvisionSettings = E['schemas']['ProvisionSettings'];
 export type AgentsResponse = E['schemas']['VmAgentsResponse'];
+export type AgentSignIn = E['schemas']['AgentSignInResponse'];
 export type HostStatus = E['schemas']['HostStatusResponse'];
 export type HostConfig = E['schemas']['HostConfigResponse'];
 export type HostWindows = E['schemas']['HostWindowsResponse'];
@@ -114,13 +116,26 @@ export function settingsFields(patch: SettingsPatch): Partial<ProvisionSettings>
   return out as Partial<ProvisionSettings>;
 }
 
-/** The desired state with `fields` and `projects` changed and everything else kept as the engine sent it. */
-export function withDesired(current: DesiredState | null | undefined, fields: Partial<ProvisionSettings>, projects?: string[]): DesiredState {
-  return { ...(current ?? {}), projects: projects ?? [...(current?.projects ?? [])], settings: { ...(current?.settings ?? {}), ...fields } } as DesiredState;
+/** The desired state with `fields`, `projects` and `agents` changed and everything else kept as the engine sent it. */
+export function withDesired(current: DesiredState | null | undefined, fields: Partial<ProvisionSettings>, projects?: string[], agents?: string[]): DesiredState {
+  return {
+    ...(current ?? {}), projects: projects ?? [...(current?.projects ?? [])], settings: { ...(current?.settings ?? {}), ...fields },
+    ...(agents ? { codingAgents: agents } : {}),
+  } as DesiredState;
+}
+
+/** The coding agents a desired state names, read as the engine reads them: its list, else the VM's own `AI_TOOLS`
+    setting (`none` is no agent), else the default ones. */
+export function codingAgents(d: DesiredState | null | undefined): string[] {
+  if (d?.codingAgents) return d.codingAgents;
+  const saved = (d?.settings?.aiTools ?? '').trim().replace(/^'+|'+$/g, '').trim();
+  if (!saved) return DEFAULT_AGENTS;
+  const known: string[] = AGENTS.map(a => a.id);
+  return [...new Set(saved.split(',').map(t => t.trim()).filter(t => known.includes(t)))];
 }
 
 export function toAgents(a: AgentsResponse | null | undefined): Agent[] {
-  return (a?.agents ?? []).map(x => ({ name: x.name || x.tool, version: x.version, latest: x.latest ?? x.version, installed: true, newer: x.updateAvailable }));
+  return (a?.agents ?? []).map(x => ({ id: x.tool, name: x.name || x.tool, version: x.version, latest: x.latest ?? x.version, installed: true, newer: x.updateAvailable, signedIn: x.signedIn ?? null, lostAt: x.lostAt ?? null }));
 }
 
 /** One of the user's primaries, with what its engine said about it. `id` is chosen by the caller. */
@@ -150,6 +165,7 @@ export function toVm(id: string, engine: string, r: VmResponse, all: VmResponse[
         gitName: p.desired?.desired?.settings.gitUserName ?? '', gitEmail: p.desired?.desired?.settings.gitEmail ?? '',
         keepCredentials: p.desired?.desired?.settings.gitCredentialStore ?? false, historyDays: '30',
       },
+      agents: agentSwitches(codingAgents(p.desired?.desired)),
       swap: { sizeGb: p.desired?.desired?.settings.swapSizeGb ?? 'auto' },
     },
     appliedHw: { memGb: r.ramGb, cpus: r.cpu },

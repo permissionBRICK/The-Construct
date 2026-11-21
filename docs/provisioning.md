@@ -154,6 +154,17 @@ does as JSON lines. The agent fixes what it can and asks in plain text only for 
 trade-off or a suspected Construct bug; the user answers in the client under the failed job. When it
 says the cause is fixed, the engine runs the job again once. See `service/README.md`, *The repair agent*.
 
+Signing in to the coding agents works the same way, without a console: the client's Sign in has the engine run
+`bin/construct-agent-sign-in.py <agent>` on the VM, which starts the agent's own sign-in under a pseudo-terminal
+(`claude auth login`, `codex login --device-auth`, `opencode auth login`, `agy acp --login`) and reports the
+terminal's text; what the user types goes to it. Each runs with `BROWSER` set to `bin/construct-sign-in-browser.sh`,
+which hands the link the CLI would open to the script; where that link returns to a loopback port on the VM, a
+device agent forwards the port from the PC and opens the link, and the sign-in ends without a pasted code (Codex
+then runs `codex login`). The Antigravity sign-in lands in
+`~/.gemini/antigravity-cli/antigravity-oauth-token` and is copied into T3 Code's private Antigravity home, so the
+terminal and T3 Code share one sign-in. `--status` prints whether each installed agent is signed in; the usage
+report sends it with the versions. See `service/README.md`, *Signing in to the coding agents*.
+
 ## Non-interactive provisioner (`bin/provision.sh`)
 
 `bin/provision.sh` is the VM-side, no-prompt counterpart to `ui-setup.sh`. It's what the
@@ -181,7 +192,7 @@ Recognized variables:
 | `AGENT_NAME` | — | Name of this agent VM |
 | `PROJECTS` | — | Comma-separated project profiles to activate |
 | `SSH_USER` | — | Seed SSH user |
-| `AI_TOOLS` | `opencode,claude-code,codex` | Agent CLIs to install |
+| `AI_TOOLS` | `opencode,claude-code,codex` | Agent CLIs to install and configure: `claude-code`, `codex`, `opencode`, `antigravity`; `none` for none. One left out is not uninstalled, only no longer updated or configured, and T3 Code's provider for it is turned off. The engine sets it from the VM's coding agents. |
 | `ALLOW_HOST_PACKAGES` | `true` | Install the `hostPackages` project profiles declare. `false` only warns; it is not a sandbox, since `provisionCommands` run as root anyway. |
 | `WORKSPACE_ROOT` | `/root/repos` | Where project repos are cloned |
 | `CLAUDE_USER` | `root` | User Claude Code's CLI and VS Code extension settings are written for |
@@ -451,9 +462,12 @@ sudo /opt/construct/repo/bin/setup-root-ssh-key.sh
 The workflow lets you pick tools, records `AI_TOOLS=`, and runs `bin/install-ai-tools.sh`.
 Currently supported selections:
 
-- `opencode`: installs the CLI and autostarts `opencode serve --hostname 0.0.0.0 --port 4096`
-  as root via `opencode-serve.service`. See [opencode installs behind a company
-  network](#opencode-installs-behind-a-company-network) if this step fails.
+- `opencode`: installs OpenCode 2 (`@opencode/cli`) and autostarts `opencode serve --hostname
+  0.0.0.0 --port 4096` as root via `opencode-serve.service`. OpenCode 2 protects the server with a
+  password it makes at each start and writes to the journal
+  (`journalctl -u opencode-serve | grep 'server password'`). See [opencode installs behind a
+  company network](#opencode-installs-behind-a-company-network) if this step fails, and
+  [Moving from OpenCode 1](#moving-from-opencode-1) for VMs that ran OpenCode 1.
 - `claude-code`: installs the Claude Code CLI and prints the SSH connection target.
 - `codex`: installs the Codex CLI, supports Codex App SSH remote connections, and can start the
   experimental Codex app-server on `0.0.0.0:4500` via `codex-app-server.service`. The official
@@ -504,29 +518,33 @@ documents each one inline, and [`construct expose`](expose.md#configuration) cov
 
 ### opencode installs behind a company network
 
-opencode is the one tool that isn't installed from a package registry, and its official
-installer has two habits that break on corporate networks:
+OpenCode 2's official installer (`opencode.ai/v2/install`) downloads the `@opencode/cli`
+build for the platform from the npm registry. Construct reads the latest version from the
+registry first and pins it through the installer's `VERSION` environment variable, and a
+reprovision runs the installer only when a newer release is out. A failed attempt is retried
+three times with backoff.
 
-- **It resolves its version through `api.github.com`,** which allows 60 unauthenticated
-  requests per hour **per source IP**. Behind a company NAT that budget is shared by every
-  machine on the network and is routinely spent, so the installer exits with
-  `Failed to fetch version information` — on every attempt, since retrying hits the same wall
-  until the hourly reset. Construct now resolves the latest tag from the plain
-  `github.com/.../releases/latest` redirect (no API, no quota) and pins it through the
-  installer's `VERSION` environment variable, so that call never happens.
-- **It downloads its release archive without `curl --fail`,** so a proxy error page gets piped
-  into `tar` and the install dies with `gzip: stdin: not in gzip format`. Each attempt is
-  retried three times with backoff.
-
-If the official installer still fails, provisioning falls back to the **`opencode-ai` npm
-package** — the same release, fetched from the npm registry, which is usually reachable (or
-mirrored) where raw GitHub downloads are blocked. Only if that fails too does the step fail,
-and it then prints the HTTP status of `github.com`, `api.github.com` and `registry.npmjs.org`
-so you can tell "offline" from "proxy block" from "rate limit" at a glance.
+If the official installer still fails, provisioning falls back to the **`@opencode/cli` npm
+package** — the same release, which is usually reachable (or mirrored) where other downloads
+are blocked. Only if that fails too does the step fail, and it then prints the HTTP status of
+`opencode.ai` and `registry.npmjs.org` so you can tell "offline" from "proxy block" at a
+glance. When an update fails, the installed version is kept.
 
 Either layout is fine afterwards: `/usr/local/bin/opencode` is pointed at whichever binary was
 installed (`~/.opencode/bin/opencode` or the npm package's), which is what `opencode-serve.service`
 executes.
+
+### Moving from OpenCode 1
+
+A VM that ran OpenCode 1 moves to OpenCode 2 at its next update or reprovision. OpenCode 2
+converts OpenCode 1's database in place, one way, when it first starts. Before the first
+OpenCode 2 install, provisioning stops `opencode-serve` and copies each data folder once to
+`~/.local/share/opencode-v1-copy`; that copy is the only way back. To go back, stop
+`opencode-serve`, put the copy back as `~/.local/share/opencode` and install OpenCode 1
+(`curl -fsSL https://opencode.ai/install | bash`). When the copy cannot be made (a full disk),
+the VM stays on OpenCode 1 and the step fails. An OpenCode 1 session that T3 Code runs during
+the copy can still write to the database. The copy is not removed by Construct; delete it once
+you no longer need the way back.
 
 ### Bypass-mode defaults
 

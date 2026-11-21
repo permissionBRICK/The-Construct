@@ -2,11 +2,12 @@ import { describe, expect, it } from 'vitest';
 import { sampleState } from '../../src/backend/sample';
 import { activeJob, cmpVersion, mainAction, vmDot, vmUpdateTarget, vmWord } from '../../src/model/vm';
 import { updateDue, updateParts, updatePlan } from '../../src/model/update';
-import { applies, applyPatch, hwChange, swapSize } from '../../src/model/settings';
+import { agentList, agentSwitches, applies, applyPatch, DEFAULT_AGENTS, hwChange, swapSize } from '../../src/model/settings';
 import { formatRoute, parseRoute, section } from '../../src/model/route';
 import { contrast, cssVars, SCHEME_ORDER, SCHEMES } from '../../src/model/tokens';
 import type { Job } from '../../src/backend/types';
 import { profileError } from '../../src/model/profile';
+import { linkParts, lostSignIns, signedIn } from '../../src/model/signin';
 
 const job = (p: Partial<Job>): Job => ({ id: 'j', vmId: 'atlas', kind: 'reprovision', state: 'running', step: 's', stepIndex: 0, stepCount: 3, pct: 0, log: [], error: null, repair: null, ...p });
 
@@ -98,6 +99,15 @@ describe('settings', () => {
     expect(applies({ services: { smb: true } })).toBe('reprovision');
     expect(applies({ swap: { sizeGb: '4' } })).toBe('reprovision');
     expect(applies({ disk: { diskGb: 240 }, services: { smb: true } })).toBe('reinstall');
+    expect(applies({ agents: { antigravity: true } })).toBe('reprovision');
+  });
+
+  it('turns the engine\'s list of coding agents into one switch each and back, in one order', () => {
+    expect(DEFAULT_AGENTS).toEqual(['claude-code', 'codex', 'opencode']);
+    const on = agentSwitches(['antigravity', 'codex', 'vim']);
+    expect(on).toEqual({ 'claude-code': false, codex: true, opencode: false, antigravity: true });
+    expect(agentList(on)).toEqual(['codex', 'antigravity']);
+    expect(agentList({ ...on, codex: false })).toEqual(['antigravity']);
   });
 
   it('describes a hardware change for the restart choice', () => {
@@ -163,5 +173,31 @@ describe('profile shape', () => {
     const p = structuredClone(sampleState().projects[0]);
     (p.forwards as unknown[]).push({ port: '80', label: 'x' });
     expect(profileError(p)).toMatch(/forwards/);
+  });
+});
+
+describe('sign-in text', () => {
+  it('splits the links out of a CLI\'s text and leaves sentence punctuation outside', () => {
+    expect(linkParts("If the browser didn't open, visit: https://a.example/oauth?code=true&x=1\nPaste code here > ")).toEqual([
+      { text: "If the browser didn't open, visit: " }, { url: 'https://a.example/oauth?code=true&x=1' }, { text: '\nPaste code here > ' },
+    ]);
+    expect(linkParts('Open https://b.example/device.')).toEqual([{ text: 'Open ' }, { url: 'https://b.example/device' }, { text: '.' }]);
+    expect(linkParts('(see https://c.example/a_(b))')).toEqual([{ text: '(see ' }, { url: 'https://c.example/a_(b)' }, { text: ')' }]);
+    expect(linkParts('no link, javascript:alert(1) or ftp://x')).toEqual([{ text: 'no link, javascript:alert(1) or ftp://x' }]);
+    expect(linkParts('')).toEqual([]);
+  });
+
+  it('lists the lost sign-ins of every VM, oldest first, by the ids the sign-in takes', () => {
+    const vms = sampleState().vms;
+    expect(lostSignIns(vms)).toEqual([]);
+    vms[1].agents.find(a => a.id === 'codex')!.lostAt = '2026-11-20T09:00:00Z';
+    vms[0].agents.find(a => a.id === 'claude')!.lostAt = '2026-11-20T08:00:00Z';
+    vms[0].agents.find(a => a.id === 't3')!.lostAt = '2026-11-20T07:00:00Z';
+    expect(lostSignIns(vms).map(l => [l.vm.id, l.id.id])).toEqual([[vms[0].id, 'claude-code'], [vms[1].id, 'codex']]);
+  });
+
+  it('reads an agent\'s sign-in from the VM\'s report by its tool id', () => {
+    const agents = [{ id: 'claude', signedIn: true }, { id: 'codex', signedIn: false }, { id: 'opencode', signedIn: null }];
+    expect(['claude', 'codex', 'opencode', 'antigravity'].map(t => signedIn(agents, t))).toEqual([true, false, undefined, undefined]);
   });
 });

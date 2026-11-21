@@ -180,6 +180,22 @@ test("the bridge: the pop-out's openWindow opens the panel; anything else is dro
   assert.equal(vscode.panels[0].webview.posted[0].then, "http://127.0.0.1:5123/?surf=win#/vault");
 });
 
+test("the bridge: links open with VS Code, a web link exactly as the page sent it", async t => {
+  const { vscode } = load(t);
+  const opened = [];
+  vscode.env.openExternal = async target => { opened.push(target); return true; };
+  const view = vscode.newView();
+  await tick();
+  const signIn = "https://auth.openai.com/oauth/authorize?redirect_uri=http%3A%2F%2F127.0.0.1%3A1455%2Fauth%2Fcallback&scope=openid+profile&state=x";
+  await view.webview.handler({ type: "page", message: { type: "openExternal", url: signIn } });
+  await view.webview.handler({ type: "page", message: { type: "openExternal", url: "http://localhost:3000/app" } });
+  await view.webview.handler({ type: "page", message: { type: "openExternal", url: "https://user:pw@example.com/" } });
+  await view.webview.handler({ type: "page", message: { type: "openExternal", url: "file:///etc/passwd" } });
+  assert.equal(opened.length, 2);
+  assert.equal(opened[0], signIn);
+  assert.equal(opened[1].s, "http://localhost:3000/app");
+});
+
 test("opening a VM in VS Code: the agent writes the alias, the extension opens the remote window", async t => {
   const { vscode, requests, agent } = load(t);
   agent.request = async (endpoint, method, route, opts) => {

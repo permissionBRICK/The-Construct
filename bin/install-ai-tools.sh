@@ -76,6 +76,9 @@ fi
 CONSTRUCT_EXTERNAL_HOST="${_external_host_override:-${CONSTRUCT_EXTERNAL_HOST:-}}"
 T3CODE_PATCHED="${_t3_patched_override}"
 
+# The coding agents this VM has (config.env), before an override narrows AI_TOOLS to the
+# one tool this run installs: T3 Code turns its providers on and off by it.
+CODING_AGENTS="${AI_TOOLS:-opencode,claude-code,codex}"
 AI_TOOLS="${AI_TOOLS_OVERRIDE:-${AI_TOOLS:-}}"
 WORKSPACE_ROOT="${WORKSPACE_ROOT:-/root/repos}"
 OPENCODE_HOST="${OPENCODE_HOST:-0.0.0.0}"
@@ -134,7 +137,7 @@ AGENT_SYSTEM_PROMPT_CUSTOM="${AGENT_SYSTEM_PROMPT_CUSTOM:-/root/construct-custom
 AGENT_SYSTEM_PROMPT_ROOT_HOME="${AGENT_SYSTEM_PROMPT_ROOT_HOME:-/root}"
 AGENT_SYSTEM_PROMPT_HOME_BASE="${AGENT_SYSTEM_PROMPT_HOME_BASE:-/home}"
 # The instruction file of each supported agent, relative to a home directory.
-AGENT_SYSTEM_PROMPT_FILES=(".claude/CLAUDE.md" ".codex/AGENTS.md" ".config/opencode/AGENTS.md")
+AGENT_SYSTEM_PROMPT_FILES=(".claude/CLAUDE.md" ".codex/AGENTS.md" ".config/opencode/AGENTS.md" ".gemini/AGENTS.md")
 
 # The full instruction text: the shipped template with the live DNS name, then
 # the custom file (when present and non-empty) separated by one blank line.
@@ -203,10 +206,8 @@ install_agent_system_prompts_all() {
   note "Rendered ${rendered} agent instruction file(s)."
 }
 
-# Run an official `curl | bash` installer with retries. The opencode installer
-# downloads its release archive without curl --fail, so a transient HTTP error
-# (rate limit, CDN hiccup) pipes an error page into tar and the install dies
-# mid-run with "gzip: stdin: not in gzip format". Each attempt re-downloads
+# Run an official `curl | bash` installer with retries. A transient HTTP error
+# (rate limit, CDN hiccup) fails an attempt mid-run; each attempt re-downloads
 # into a fresh temp dir, so retrying with backoff is safe and rides out blips.
 run_installer_with_retries() {
   local label="$1"; shift
@@ -223,92 +224,151 @@ run_installer_with_retries() {
   return 1
 }
 
-# Resolve the latest opencode release WITHOUT api.github.com. The official
-# installer looks the version up through the unauthenticated GitHub REST API,
-# which is rate-limited to 60 requests/hour per SOURCE IP -- behind a corporate
-# NAT that budget is shared by the whole office and is routinely exhausted, so
-# the installer exits 1 with "Failed to fetch version information" on every
-# attempt (retrying just hits the same wall; the quota resets hourly). The plain
-# releases/latest redirect is served by github.com itself and carries no such
-# quota, so resolve the tag here and hand it to the installer via its VERSION
-# env var -- which skips the API call entirely. Empty output = unresolved, the
-# caller then runs the installer unpinned and falls back to npm.
+# OpenCode 2 ships as the npm package @opencode/cli (OpenCode 1 was opencode-ai).
+# Its installer downloads that package's platform build from the npm registry, so
+# the registry's latest tag is the version to install. Empty output = unresolved;
+# the caller then runs the installer unpinned and falls back to npm.
 opencode_latest_version() {
-  curl -sI --max-time 20 -o /dev/null -w '%{redirect_url}' \
-    https://github.com/anomalyco/opencode/releases/latest 2>/dev/null |
-    sed -n 's#.*/releases/tag/v\([0-9][^/]*\)$#\1#p'
+  curl -fsSL --max-time 20 https://registry.npmjs.org/@opencode%2fcli/latest 2>/dev/null |
+    jq -r '.version // empty' 2>/dev/null | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' || true
+}
+
+# The installed version: OpenCode 1 prints "1.19.6", OpenCode 2 "opencode v2.3.2".
+opencode_installed_version() {
+  opencode --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n1 || true
 }
 
 opencode_official_installer() {
   local version="${1:-}"
   if [[ -n "${version}" ]]; then
-    curl -fsSL https://opencode.ai/install | VERSION="${version}" bash
+    curl -fsSL https://opencode.ai/v2/install | VERSION="${version}" bash
   else
-    curl -fsSL https://opencode.ai/install | bash
+    curl -fsSL https://opencode.ai/v2/install | bash
   fi
 }
 
-# Fallback path when GitHub is unreachable (proxy, blocklist, rate limit): the
-# opencode-ai npm package ships the same release, and the npm registry is
-# usually reachable/mirrored where raw GitHub downloads are not -- it is already
-# how codex and t3 get installed here. Node may not be provisioned yet (this
-# script runs before install-sdks.sh), so bootstrap it like install_codex does.
+# Fallback when the installer fails: the same release from npm, which is usually
+# reachable or mirrored where other downloads are not -- it is already how codex
+# and t3 get installed here. Node may not be provisioned yet (this script runs
+# before install-sdks.sh), so bootstrap it like install_codex does.
 opencode_npm_fallback() {
-  local version="${1:-}" spec="opencode-ai@latest"
-  if [[ -n "${version}" ]]; then spec="opencode-ai@${version}"; fi
+  local version="${1:-}" spec="@opencode/cli@latest"
+  if [[ -n "${version}" ]]; then spec="@opencode/cli@${version}"; fi
   if ! command -v npm >/dev/null 2>&1; then
     step "Installing Node.js 22.x (required for the opencode npm fallback)"
     curl -fsSL https://deb.nodesource.com/setup_22.x | bash - || return 1
     DEBIAN_FRONTEND=noninteractive apt-get install -y nodejs || return 1
   fi
+  # OpenCode 1 from npm owns the same `opencode` command, which npm hands over only
+  # with --force. OpenCode 1 is removed once OpenCode 2 is installed, so a failed
+  # install leaves it working as it was. Removing it also removes the shared command
+  # link; install_opencode then links /usr/local/bin/opencode to OpenCode 2's binary.
+  local v1=false force=()
+  if npm ls -g --depth=0 opencode-ai >/dev/null 2>&1; then v1=true; force=(--force); fi
   # The package's postinstall unpacks the platform binary; newer npm gates
   # install scripts behind --allow-scripts, older npm ignores the unknown flag.
-  npm install -g "${spec}" --allow-scripts=opencode-ai
+  npm install -g "${spec}" --allow-scripts=@opencode/cli ${force[@]+"${force[@]}"} || return 1
+  if [[ "${v1}" == true ]]; then
+    npm uninstall -g opencode-ai || warn "could not remove OpenCode 1 (opencode-ai) from npm; OpenCode 2 is installed"
+  fi
+}
+
+# OpenCode 2 converts OpenCode 1's database in place, one way, on its first start.
+# Before the first OpenCode 2 install, each data folder is copied once to
+# ~/.local/share/opencode-v1-copy; that copy is the only way back to OpenCode 1.
+# The copy's own directory is the marker: it is renamed into place only when
+# complete, so an interrupted copy is made again. opencode-serve is stopped first so
+# it does not write during the copy (it starts again at the end of install_opencode);
+# an OpenCode 1 session that T3 Code runs at that moment still can.
+opencode_keep_v1_data() {
+  local home data copy
+  if command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet opencode-serve 2>/dev/null; then
+    systemctl stop opencode-serve || true
+  fi
+  for home in "$@"; do
+    data="${home}/.local/share/opencode"
+    copy="${home}/.local/share/opencode-v1-copy"
+    [[ -d "${data}" && ! -e "${copy}" ]] || continue
+    rm -rf -- "${copy}.partial"
+    if cp -a --reflink=auto -- "${data}" "${copy}.partial" && mv -- "${copy}.partial" "${copy}"; then
+      ok "kept OpenCode 1's data at ${copy} (the way back to OpenCode 1)"
+    else
+      rm -rf -- "${copy}.partial"
+      err "could not copy ${data} before the move to OpenCode 2 (free space: $(df -h "${home}" 2>/dev/null | awk 'NR==2 {print $4}'))"
+      return 1
+    fi
+  done
 }
 
 # One line per endpoint the install needs, so a failed install says WHY instead
-# of leaving the operator to guess between "offline", "proxy" and "rate limit".
+# of leaving the operator to guess between "offline" and "proxy".
 opencode_reachability_note() {
   local url code
-  for url in https://github.com https://api.github.com/rate_limit https://registry.npmjs.org; do
+  for url in https://opencode.ai https://registry.npmjs.org; do
     code="$(curl -s --max-time 15 -o /dev/null -w '%{http_code}' "${url}" 2>/dev/null || echo "000")"
     note "  ${url} -> HTTP ${code}$([[ "${code}" == "000" ]] && printf ' (unreachable: no route, DNS or proxy block)')"
   done
 }
 
 install_opencode() {
-  step "Installing opencode CLI"
-  local had_opencode=false opencode_version
-  if command -v opencode >/dev/null 2>&1; then had_opencode=true; fi
+  step "Installing opencode CLI (OpenCode 2)"
+  local had_opencode=false installed="" latest="" fresh=""
+  if command -v opencode >/dev/null 2>&1; then
+    had_opencode=true
+    installed="$(opencode_installed_version)"
+  fi
 
-  opencode_version="$(opencode_latest_version || true)"
-  if [[ -n "${opencode_version}" ]]; then
-    note "latest opencode release: ${opencode_version} (pinned, so the installer skips the rate-limited GitHub API)"
+  latest="$(opencode_latest_version)"
+  if [[ -n "${latest}" ]]; then
+    note "latest opencode release: ${latest}"
   else
-    warn "could not resolve the latest opencode release from github.com; letting the installer decide"
+    warn "could not resolve the latest opencode release from the npm registry; letting the installer decide"
   fi
 
-  # Always run the official installer: on a fresh VM it installs opencode, and on
-  # a re-provision it updates an existing install to the latest version. When
-  # opencode is already present a failed update (e.g. no network) is non-fatal --
-  # we keep the working copy rather than aborting provisioning.
-  if [[ "${had_opencode}" == true ]]; then
-    note "opencode already installed; updating to the latest version"
-  fi
-  if ! run_installer_with_retries "opencode" opencode_official_installer "${opencode_version}"; then
-    warn "official opencode installer failed; falling back to npm (opencode-ai)"
-    if ! opencode_npm_fallback "${opencode_version}"; then
-      opencode_reachability_note
-      if [[ "${had_opencode}" == true ]]; then
-        warn "opencode update failed (installer and npm); keeping the existing version"
-      else
-        err "opencode install failed: neither the official installer nor npm could fetch it"
+  # Install on a fresh VM, update when a newer release is out, and keep the working
+  # copy when an update fails (e.g. no network) rather than aborting provisioning.
+  if [[ -n "${installed}" && -n "${latest}" &&
+        "$(printf '%s\n' "${latest}" "${installed}" | sort -V | tail -n1)" == "${installed}" ]]; then
+    ok "opencode ${installed} is up to date"
+  else
+    if [[ "${installed%%.*}" == 1 ]]; then
+      local homes=(/root)
+      if [[ "${TARGET_USER}" != "root" ]] && id "${TARGET_USER}" >/dev/null 2>&1; then homes+=("/home/${TARGET_USER}"); fi
+      note "moving from OpenCode ${installed} to OpenCode 2"
+      if ! opencode_keep_v1_data "${homes[@]}"; then
+        err "staying on OpenCode ${installed}"
+        systemctl start opencode-serve 2>/dev/null || true
         return 1
+      fi
+    fi
+    if run_installer_with_retries "opencode" opencode_official_installer "${latest}"; then
+      fresh="${HOME:-/root}/.opencode/bin/opencode"
+    else
+      warn "official opencode installer failed; falling back to npm (@opencode/cli)"
+      if opencode_npm_fallback "${latest}"; then
+        fresh="$(npm root -g 2>/dev/null)/@opencode/cli/bin/opencode.exe"
+      else
+        opencode_reachability_note
+        if [[ "${installed%%.*}" == 1 ]]; then
+          # The move failed and OpenCode 1 is still installed: it runs on as before, with
+          # its own plugin, which the OpenCode 2 configuration below would replace.
+          systemctl start opencode-serve 2>/dev/null || true
+          err "the move to OpenCode 2 failed (installer and npm); staying on OpenCode ${installed}"
+          return 1
+        elif [[ "${had_opencode}" == true ]]; then
+          warn "opencode update failed (installer and npm); keeping the existing version"
+        else
+          err "opencode install failed: neither the official installer nor npm could fetch it"
+          return 1
+        fi
       fi
     fi
   fi
 
-  # Resolve the binary /usr/local/bin/opencode should point at. command -v may
+  # The install that just ran says where its binary is: the installer's
+  # ~/.opencode/bin/opencode, or the one inside npm's global @opencode/cli.
+  # Otherwise (already current, or the update failed) resolve the binary
+  # /usr/local/bin/opencode should point at. command -v may
   # report our own symlink from a previous provision, or an npm global shim
   # (with Ubuntu's apt/nodesource npm the global prefix is /usr/local, so the
   # shim itself IS /usr/local/bin/opencode -- a symlink into node_modules).
@@ -316,7 +376,12 @@ install_opencode() {
   # symlinking /usr/local/bin/opencode to itself, which made opencode-serve fail
   # with 203/EXEC.
   opencode_bin=""
-  opencode_path="$(command -v opencode || true)"
+  opencode_path=""
+  if [[ -n "${fresh}" && -x "${fresh}" ]]; then
+    opencode_bin="${fresh}"
+  else
+    opencode_path="$(command -v opencode || true)"
+  fi
   if [[ -n "${opencode_path}" ]]; then
     opencode_resolved="$(readlink -f "${opencode_path}" 2>/dev/null || true)"
     if [[ -n "${opencode_resolved}" && -x "${opencode_resolved}" ]]; then
@@ -338,8 +403,8 @@ install_opencode() {
       /root/.local/bin/opencode \
       "${HOME:-/root}/.opencode/bin/opencode" \
       "${HOME:-/root}/.local/bin/opencode" \
-      /usr/local/lib/node_modules/opencode-ai/bin/opencode.exe \
-      /usr/lib/node_modules/opencode-ai/bin/opencode.exe; do
+      /usr/local/lib/node_modules/@opencode/cli/bin/opencode.exe \
+      /usr/lib/node_modules/@opencode/cli/bin/opencode.exe; do
       if [[ -x "${candidate}" ]]; then
         opencode_bin="${candidate}"
         break
@@ -903,6 +968,141 @@ install_codex() {
   install_agent_system_prompt "${codex_home}/.codex/AGENTS.md" "${codex_owner}"
 }
 
+# Google's Antigravity CLI installer (https://antigravity.google/cli/install.sh) reads the
+# release manifest for this platform, downloads that build, checks its SHA-512, copies it to
+# ~/.local/bin/agy and runs `agy install` for the shell setup. It exits 0 doing nothing when
+# that file exists, so it only installs; `agy update` updates an installed CLI. Downloaded to
+# a file first: a failed download piped into bash would "succeed" with an empty script.
+antigravity_official_installer() {
+  local owner="$1" home_dir="$2" installer rc=0
+  installer="$(mktemp)"
+  chmod 0644 "${installer}"
+  if curl -fsSL https://antigravity.google/cli/install.sh -o "${installer}"; then
+    if [[ "${owner}" == root ]]; then
+      HOME="${home_dir}" bash "${installer}" </dev/null || rc=$?
+    else
+      sudo -H -u "${owner}" bash "${installer}" </dev/null || rc=$?
+    fi
+  else
+    rc=$?
+  fi
+  rm -f "${installer}"
+  return "${rc}"
+}
+
+# Antigravity runs without per-tool approval prompts on these VMs, like the other agents:
+# toolPermission "always-proceed" in its CLI settings (ask and deny rules still apply).
+# Other keys in the file are kept.
+configure_antigravity_settings() {
+  local home_dir="$1" owner="$2"
+  local config_dir="${home_dir}/.gemini/antigravity-cli"
+  local config_file="${config_dir}/settings.json" tmp
+  step "Seeding Antigravity permission settings in ${config_file}"
+  install -d -m 0700 "${config_dir}"
+  [[ -s "${config_file}" ]] || echo '{}' >"${config_file}"
+  tmp="$(mktemp)"
+  if jq '.toolPermission = "always-proceed"' "${config_file}" >"${tmp}"; then
+    cat "${tmp}" >"${config_file}"
+  else
+    warn "WARNING: ${config_file} is not valid JSON; leaving it unchanged"
+  fi
+  rm -f "${tmp}"
+  chown "${owner}:${owner}" "${home_dir}/.gemini" "${config_dir}" "${config_file}" 2>/dev/null || true
+}
+
+install_antigravity() {
+  local home_dir owner agy link="${AGY_LINK:-/usr/local/bin/agy}"
+  step "Installing the Antigravity CLI"
+  if [[ "${TARGET_USER}" != "root" ]] && id "${TARGET_USER}" >/dev/null 2>&1; then
+    home_dir="${AGENT_SYSTEM_PROMPT_HOME_BASE}/${TARGET_USER}"
+    owner="${TARGET_USER}"
+  else
+    home_dir="${AGENT_SYSTEM_PROMPT_ROOT_HOME}"
+    owner="root"
+  fi
+  agy="${home_dir}/.local/bin/agy"
+  if [[ -x "${agy}" ]]; then
+    note "Antigravity CLI already installed; updating"
+    # Best-effort, like the other agents' self-updates: a failed update keeps the
+    # working installed version.
+    if [[ "${owner}" == root ]]; then
+      HOME="${home_dir}" "${agy}" update </dev/null || warn "agy update failed; keeping the installed version"
+    else
+      sudo -H -u "${owner}" "${agy}" update </dev/null || warn "agy update failed; keeping the installed version"
+    fi
+  elif ! run_installer_with_retries "Antigravity CLI" antigravity_official_installer "${owner}" "${home_dir}"; then
+    err "The Antigravity CLI installer failed"
+    return 1
+  fi
+  if [[ ! -x "${agy}" ]]; then
+    err "The Antigravity CLI installer finished, but ${agy} is missing"
+    return 1
+  fi
+  # One copy for every shell and for T3 Code, whose Antigravity provider points here.
+  ln -sf "${agy}" "${link}"
+  configure_antigravity_settings "${home_dir}" "${owner}"
+  install_agent_system_prompt "${home_dir}/.gemini/AGENTS.md" "${owner}"
+}
+
+# T3 Code's provider for each coding agent: on for the agents this VM has (CODING_AGENTS),
+# off for the others, so a provider T3 Code shows is one Construct installs and updates.
+# Antigravity points at the CLI installed above. The rest of settings.json is kept; T3
+# watches the file and applies a change without a restart.
+configure_t3_providers() {
+  python3 - "${T3CODE_HOME:-/root/.t3}/userdata/settings.json" "${CODING_AGENTS}" <<'PY'
+import json
+import os
+from pathlib import Path
+import sys
+import tempfile
+
+settings, chosen = Path(sys.argv[1]), {tool.strip() for tool in sys.argv[2].split(",")}
+drivers = {"claude-code": "claudeAgent", "codex": "codex", "opencode": "opencode", "antigravity": "antigravity"}
+settings.parent.mkdir(parents=True, exist_ok=True)
+try:
+    data = json.loads(settings.read_text()) if settings.exists() else {}
+    if not isinstance(data, dict) or not isinstance(data.get("providerInstances", {}), dict):
+        raise ValueError("expected a JSON object")
+except (ValueError, UnicodeError) as error:
+    print(f"WARNING: leaving invalid T3 settings untouched: {settings}: {error}", file=sys.stderr)
+    sys.exit(0)
+before = json.dumps(data, sort_keys=True)
+legacy = data.get("providers") if isinstance(data.get("providers"), dict) else {}
+instances = data.setdefault("providerInstances", {})
+for tool, driver in drivers.items():
+    instance = instances.get(driver)
+    if not isinstance(instance, dict):
+        # T3 moves an older `providers.<driver>` entry into this instance only while the instance is
+        # missing, and then drops it; so a new instance takes that entry's configuration with it.
+        old = legacy.get(driver)
+        instance = {"driver": driver}
+        if isinstance(old, dict) and any(key != "enabled" for key in old):
+            instance["config"] = {key: value for key, value in old.items() if key != "enabled"}
+    config = instance.get("config") if isinstance(instance.get("config"), dict) else {}
+    # T3 folds a config-level flag into the instance's, and an off there wins.
+    config.pop("enabled", None)
+    if driver == "antigravity" and tool in chosen and not config.get("binaryPath"):
+        config["binaryPath"] = "/usr/local/bin/agy"
+    instance["enabled"] = tool in chosen
+    if config or "config" in instance:
+        instance["config"] = config
+    instances[driver] = instance
+if json.dumps(data, sort_keys=True) == before:
+    sys.exit(0)
+fd, temporary = tempfile.mkstemp(dir=settings.parent, prefix=".settings-")
+try:
+    with os.fdopen(fd, "w") as output:
+        json.dump(data, output, indent=2)
+        output.write("\n")
+    os.chmod(temporary, 0o644)
+    os.replace(temporary, settings)
+finally:
+    if os.path.exists(temporary):
+        os.unlink(temporary)
+print(f"T3 Code providers: {', '.join(d for t, d in drivers.items() if t in chosen) or 'none'} on")
+PY
+}
+
 # Install the T3 Code web GUI (the `t3` npm package -- pingdotgg's browser
 # control plane for coding agents) and autostart it as the t3code-serve service.
 # Opt-in: selected via the T3CODE flag in config.env / the control panel's
@@ -1206,6 +1406,7 @@ install_t3code() {
   systemctl enable --quiet construct-t3-resume.service
 
   migrate_t3_native_limit_resume
+  configure_t3_providers || warn "Could not set T3 Code's providers; continuing"
 
   # On an unchanged upstream T3 + Construct revision, the source builder has
   # already restored the exact server symlink and Desktop status. If that same
@@ -1299,6 +1500,10 @@ fi
 
 if has_tool codex; then
   run_tool "Codex installation" install_codex
+fi
+
+if has_tool antigravity; then
+  run_tool "Antigravity installation" install_antigravity
 fi
 
 if has_tool t3code; then

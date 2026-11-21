@@ -69,13 +69,16 @@ printf '{"type":"item.completed","item":{"type":"agent_message","text":"%s"}}\n'
 echo '{"type":"turn.completed"}'
 EOF
 
-# OpenCode: `run` then `run --session ID`; the message comes on stdin.
+# OpenCode: `run` then `run --session ID`; the message comes on stdin. The events are
+# OpenCode 2's `run --format json` shapes (tool title = tool name, file tools take `path`).
 cat >"${stubs}/opencode" <<'EOF'
 #!/usr/bin/env bash
 { printf 'CONFIG=%s\n' "${OPENCODE_CONFIG_CONTENT:-}"; printf '%s\n' "$@"; echo "---"; } >>"${CALLS}"
 cat >>"${SEEN}"; echo >>"${SEEN}"
 case " $* " in *" --session "*) text='Fixed.\nREPAIR-STATUS: fixed' ;; *) text='Which one?\nREPAIR-STATUS: question' ;; esac
-echo '{"type":"tool_use","sessionID":"ses_1","part":{"tool":"bash","state":{"input":{"command":"ls"}}}}'
+echo '{"type":"tool_use","sessionID":"ses_1","part":{"tool":"shell","state":{"status":"completed","title":"shell","input":{"command":"ls"}}}}'
+echo '{"type":"tool_use","sessionID":"ses_1","part":{"tool":"read","state":{"status":"completed","title":"read","input":{"path":"README.md"}}}}'
+case " $* " in *" --session "*) ;; *) echo '{"type":"error","sessionID":"ses_1","error":{"type":"unknown","message":"rate limited"}}' ;; esac
 printf '{"type":"text","sessionID":"ses_1","part":{"text":"%s"}}\n' "${text}"
 EOF
 
@@ -158,6 +161,8 @@ ok "question, then fixed" [ "$(jq -sr '[.[] | select(.type=="turn") | .outcome] 
 ok "question and plan tools denied, permissions auto" bash -c 'grep -q "\"question\":\"deny\"" "$1" && grep -q "\"plan_enter\":\"deny\"" "$1" && grep -qx -- --auto "$1"' _ "${CALLS}"
 ok "the reply continues the session" bash -c 'sed -n "/^---$/,\$p" "$1" | tr "\n" " " | grep -q -- "--session ses_1"' _ "${CALLS}"
 ok "the reply reached opencode on stdin, not argv" bash -c 'grep -qF "Take option A" "$1" && ! grep -qF "Take option A" "$2"' _ "${SEEN}" "${CALLS}"
+ok "a tool line per command and per file" [ "$(count '.type=="tool" and (.text=="shell: ls" or .text=="read: README.md")')" = 4 ]
+ok "an error event shows its message" [ "$(count '.type=="error" and .text=="rate limited"')" = 1 ]
 
 echo "T3 Code is not used"
 T3_ACTIVE=1 run "$(only t3 claude)" 3

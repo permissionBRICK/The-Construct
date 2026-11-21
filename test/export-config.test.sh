@@ -315,6 +315,16 @@ rm -f "${tmp}/stage-calls"
 ok 'reinstall + STAGE_DIR: T3 Code is still stopped and started' \
   test "$(grep -cE '^(stop|start) t3code-serve$' "${tmp}/stage-calls" 2>/dev/null)" = 2
 
+# OpenCode 2 keeps its sign-ins in opencode.db, so a sanitized backup (no auth) leaves
+# the database out like T3 Code's store; OpenCode 1's session files still go along.
+mkdir -p "${live}/.local/share/opencode/storage/session"
+printf '{}\n' >"${live}/.local/share/opencode/storage/session/s1.json"
+"${t3_env[@]}" INCLUDE_AUTH=false EXPORT_REASON=backup STAGE_DIR="${tmp}/stage-noauth" \
+  bash "${ROOT}/bin/export-config.sh" >"${tmp}/stage-noauth.log" 2>&1
+ok 'no auth: the OpenCode database (sessions and sign-ins) is left out' \
+  sh -c "test ! -e '${tmp}/stage-noauth/home/.local/share/opencode/opencode.db' && ! grep -q 'opencode.db' '${tmp}/stage-noauth/MANIFEST.txt'"
+ok 'no auth: OpenCode 1 session files are kept' test -f "${tmp}/stage-noauth/home/.local/share/opencode/storage/session/s1.json"
+
 # Reinstall export from a T3 Code terminal: stopping t3code-serve would end the export with
 # it and leave T3 down, so the server keeps running and its store is an online snapshot.
 printf '0::/system.slice/t3code-serve.service\n' >"${tmp}/t3-cgroup"
@@ -452,6 +462,48 @@ ok '... the previous keys are back' \
   sh -c "grep -qx 'fresh ecdsa private' '${target}/ssh_host_ecdsa_key' && grep -qx 'fresh ed25519 private' '${target}/ssh_host_ed25519_key' && test ! -e '${target}/ssh_host_rsa_key'"
 ok '... sshd is not restarted' sh -c "! grep -q 'try-restart' '${tmp}/ssh-calls' 2>/dev/null"
 ok '... and it is reported' grep -q 'sshd refused them' "${tmp}/ssh-refused.log"
+
+# ── Antigravity CLI: rules, config and settings always; chats and sign-in by their switches ──
+ag="${tmp}/ag-source"
+mkdir -p "${ag}/.gemini/config" "${ag}/.gemini/antigravity-cli/conversations" "${ag}/.gemini/antigravity-cli/brain/c1" \
+  "${ag}/.gemini/antigravity-cli/log" "${ag}/.gemini/antigravity-cli/builtin/skills" "${ag}/.config/antigravity"
+printf 'rules\n' >"${ag}/.gemini/AGENTS.md"
+printf '{"mcpServers":{}}\n' >"${ag}/.gemini/config/mcp_config.json"
+printf '{"toolPermission":"always-proceed"}\n' >"${ag}/.gemini/antigravity-cli/settings.json"
+printf 'chat\n' >"${ag}/.gemini/antigravity-cli/conversations/c1.pb"
+printf 'plan\n' >"${ag}/.gemini/antigravity-cli/brain/c1/plan.md"
+printf 'dummy-not-a-credential\n' >"${ag}/.gemini/antigravity-cli/auth.json"
+printf '{}\n' >"${ag}/.config/antigravity/plugin-secrets.json"
+printf 'log\n' >"${ag}/.gemini/antigravity-cli/log/cli.log"
+printf 'skill\n' >"${ag}/.gemini/antigravity-cli/builtin/skills/x.md"
+# T3 Code's own Antigravity home (one per provider instance).
+mkdir -p "${ag}/.t3/userdata/providers/antigravity/h1/antigravity-acp/conversations" "${ag}/.t3/userdata/providers/antigravity/h1/antigravity-acp/log"
+printf 'chat\n' >"${ag}/.t3/userdata/providers/antigravity/h1/antigravity-acp/conversations/t.pb"
+printf 'log\n' >"${ag}/.t3/userdata/providers/antigravity/h1/antigravity-acp/log/x.log"
+python3 -c 'import sqlite3, sys; c = sqlite3.connect(sys.argv[1]); c.execute("CREATE TABLE s(t)"); c.execute("INSERT INTO s VALUES (1)"); c.commit()' \
+  "${ag}/.gemini/antigravity-cli/conversation_summaries.db"
+for mode in all none; do
+  flag=true; [[ "${mode}" == none ]] && flag=false
+  "${fixture_env[@]}" EXPORT_HOME="${ag}" AI_TOOLS=antigravity INCLUDE_AUTH="${flag}" INCLUDE_HISTORY="${flag}" \
+    OUT="${tmp}/ag-${mode}.tar.gz" bash "${ROOT}/bin/export-config.sh" >"${tmp}/ag-${mode}.log" 2>&1
+  tar -tzf "${tmp}/ag-${mode}.tar.gz" >"${tmp}/ag-${mode}.members"
+done
+ok 'antigravity: rules, config and settings are always taken' \
+  sh -c "grep -qxF './home/.gemini/AGENTS.md' '${tmp}/ag-none.members' && grep -qxF './home/.gemini/config/mcp_config.json' '${tmp}/ag-none.members' && grep -qxF './home/.gemini/antigravity-cli/settings.json' '${tmp}/ag-none.members'"
+ok 'antigravity: chats and the summaries database go with history' \
+  sh -c "grep -qxF './home/.gemini/antigravity-cli/conversations/c1.pb' '${tmp}/ag-all.members' && grep -qxF './home/.gemini/antigravity-cli/brain/c1/plan.md' '${tmp}/ag-all.members' && grep -qxF './home/.gemini/antigravity-cli/conversation_summaries.db' '${tmp}/ag-all.members'"
+ok 'antigravity: the sign-in files go with auth' \
+  sh -c "grep -qxF './home/.gemini/antigravity-cli/auth.json' '${tmp}/ag-all.members' && grep -qxF './home/.config/antigravity/plugin-secrets.json' '${tmp}/ag-all.members'"
+ok 'antigravity: without history and auth neither chats nor sign-in are taken' \
+  sh -c "! grep -qE 'conversations|brain|conversation_summaries|auth.json|plugin-secrets' '${tmp}/ag-none.members'"
+ok 'antigravity: logs and the bundled skills are never taken' \
+  sh -c "! grep -qE 'antigravity-cli/(log|builtin)' '${tmp}/ag-all.members'"
+ok "antigravity: T3 Code's own Antigravity home goes with auth, without its logs" \
+  sh -c "grep -qxF './home/.t3/userdata/providers/antigravity/h1/antigravity-acp/conversations/t.pb' '${tmp}/ag-all.members' && ! grep -q 'antigravity-acp/log' '${tmp}/ag-all.members' && ! grep -q 'providers/antigravity' '${tmp}/ag-none.members'"
+"${fixture_env[@]}" BACKUP_TGZ="${tmp}/ag-all.tar.gz" EXPORT_HOME="${tmp}/ag-restored" \
+  bash "${ROOT}/bin/restore-config.sh" >"${tmp}/ag-restore.log" 2>&1
+ok 'antigravity: a restore brings the chats back and says so' \
+  sh -c "cmp -s '${ag}/.gemini/antigravity-cli/conversations/c1.pb' '${tmp}/ag-restored/.gemini/antigravity-cli/conversations/c1.pb' && grep -q 'restored chat history: .gemini/antigravity-cli/conversations' '${tmp}/ag-restore.log'"
 
 printf '\n  export-config fixture tests — %d/%d passed\n\n' "${pass}" "$((pass + fail))"
 [[ "${fail}" -eq 0 ]]

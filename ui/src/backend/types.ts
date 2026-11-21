@@ -15,19 +15,44 @@ export interface Usage {
   diskUsedGb: number | null;
 }
 
-/** Settings of one VM. `hw` applies on restart, `disk` on reinstall, `services`, `identity` and `swap` on reprovision. */
+/** A coding agent a VM can have; the engine's `codingAgents` ids. */
+export type AgentId = 'claude-code' | 'codex' | 'opencode' | 'antigravity';
+
+/** Settings of one VM. `hw` applies on restart, `disk` on reinstall, `services`, `identity`, `agents` and `swap` on reprovision. */
 export interface VmSettings {
   hw: { memGb: number; cpus: number; checkpoints: boolean; startWithHost: boolean };
   disk: { diskGb: number; ubuntu: string };
   idle: { afterMin: number; then: 'save' | 'shutdown' | 'never' };
   services: { t3Web: boolean; vscodeWeb: boolean; vscodeTunnel: boolean; smb: boolean; mic: boolean; claudeLive: boolean; opencodeWatcher: boolean; t3ProxyUrl: string };
   identity: { gitName: string; gitEmail: string; keepCredentials: boolean; historyDays: '30' | '90' | 'all' };
+  /** The coding agents chosen for the VM. One turned off stays installed but is no longer updated or configured. */
+  agents: Record<AgentId, boolean>;
   /** The guest's swap file: `auto` or whole GB 0-128 (`swapSize`). */
   swap: { sizeGb: string };
 }
 
-/** `newer`: the engine says a newer version is out; without it the versions are compared. */
-export interface Agent { name: string; version: string; latest: string; installed: boolean; newer?: boolean }
+/** `id`: the engine's tool id (claude, codex, opencode, antigravity, t3). `newer`: the engine says a newer version is
+    out; without it the versions are compared. `signedIn`: as the VM reported it; undefined or null: not known.
+    `lostAt`: a lost sign-in (S36): the VM reported it signed out after it was signed in; its card waits until the
+    agent is signed in again or the card is put away. */
+export interface Agent { id: string; name: string; version: string; latest: string; installed: boolean; newer?: boolean; signedIn?: boolean | null; lostAt?: string | null }
+
+/** A coding agent's own sign-in on a VM, one at a time: what its terminal shows, as its CLI wrote it (S34).
+    key: OpenCode asks for an OpenRouter API key first, nothing runs yet; starting: asked for; running: the CLI shows
+    or waits; failed: it ended without signing in (its text says why); stopped: it took too long or was ended. One
+    that signed in is gone, and the agent shows as signed in. */
+export interface SignIn {
+  vmId: string;
+  agent: AgentId;
+  state: 'key' | 'starting' | 'running' | 'failed' | 'stopped';
+  text: string;
+  /** The sign-in continues in the browser: this device forwards its redirect to the VM (11.8, "No pasted code"). The
+      CLI's text and the reply field stay reachable for the fallback. */
+  browser?: boolean;
+}
+
+/** Input to a sign-in's terminal: text followed by Enter (empty: Enter alone), or an arrow key for a list. */
+export type SignInInput = { text: string } | { key: 'up' | 'down' };
 export interface ChildVm { name: string; os: string; left: string; power: Power }
 /** A forward of this device to a VM; `closable`: this device opened it and can close it. */
 export interface Forward { id: string; port: number; label: string; to: 'This device' | 'LAN'; url: string; closable?: boolean; status?: string }
@@ -369,6 +394,8 @@ export interface State {
   firstRun: FirstRun | null;
   /** The last "update everything" run since this device started; null before one. */
   everything?: Everything | null;
+  /** The coding agent sign-in this device started, while it runs or after it failed; null otherwise. */
+  signIn?: SignIn | null;
 }
 
 export type SettingsPatch = { [K in keyof VmSettings]?: Partial<VmSettings[K]> };
@@ -381,6 +408,8 @@ export interface CreateVmRequest {
   token?: string;
   /** remote: the certificate fingerprint the user confirmed for `hostAddress` (from `probeHost`). */
   pin?: string;
+  /** The coding agents to install; undefined: the default ones. */
+  agents?: AgentId[];
 }
 
 /** What a host presents before it is added: its address as the agent reads it and its certificate's fingerprint. */
@@ -424,6 +453,18 @@ export interface Backend {
   /** Hardware changes ask restart now or later; `when` says which. Other groups save at once. */
   saveSettings(vmId: string, patch: SettingsPatch, when?: 'now' | 'later'): void;
   updateAgents(vmId: string): void;
+  /** Starts a coding agent's own sign-in on the VM; one that runs ends. Where this device can, the sign-in returns
+      from the browser without a pasted code. OpenCode first asks for an OpenRouter API key (`signInWithKey`);
+      `list` starts OpenCode's own list of providers instead. */
+  signIn(vmId: string, agent: AgentId, how?: 'list'): void;
+  /** OpenCode's sign-in with an OpenRouter API key: the key goes to OpenCode's prompt as a secret and is kept nowhere. */
+  signInWithKey(vmId: string, key: string): void;
+  /** Puts a lost sign-in's card away; it comes back only when the agent was signed in and lost again. */
+  dismissSignInNotice(vmId: string, agent: AgentId): void;
+  /** Types into the running sign-in's terminal. */
+  signInInput(input: SignInInput): void;
+  /** Ends the running sign-in, or puts away one that failed. */
+  closeSignIn(): void;
   setProjectOn(vmId: string, project: string, on: boolean): void;
   /** Saves a profile document; `revision` is the one the editor read. Changed: the profile was reloaded. */
   saveProfile(name: string, doc: Record<string, unknown>, revision: number | undefined): Promise<ProfileSave>;

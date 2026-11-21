@@ -254,7 +254,10 @@ public sealed partial class DeviceAgent
         var entry = Find(engineId) ?? throw NoEngine();
         if (allow)
         {
-            var mode = await VaultModeAsync(engineId, ct).ConfigureAwait(false);
+            // A host still on the old release has no /vault/mode and no records: nothing to unlock there.
+            VaultModeView? mode;
+            try { mode = await VaultModeAsync(engineId, ct).ConfigureAwait(false); }
+            catch (AgentFailure e) when (e.Status == 404) { mode = null; }
             if (mode is { Records: true, Mode: "locked" })
             {
                 var pending = (await ApprovalsAsync(ct).ConfigureAwait(false)).Approvals.FirstOrDefault(a => a.Engine == engineId && a.Id == id)

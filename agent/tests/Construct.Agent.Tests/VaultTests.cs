@@ -231,7 +231,81 @@ public sealed class VaultTests
             Assert.Equal("available", JsonNode.Parse(await available.Content.ReadAsStringAsync())!["mode"]!.GetValue<string>());
     }
 
+    [Fact]
+    public async Task An_allow_on_a_host_of_the_old_release_without_a_vault_mode_route_is_posted_as_before()
+    {
+        // The old release keeps the Companion's vault and has neither /engine nor /vault/mode.
+        var oldHost = new OldHostRoutes();
+        using var engine = new EngineHost(services => services.AddSingleton<Microsoft.AspNetCore.Hosting.IStartupFilter>(oldHost));
+        var token = await engine.AddUserAsync("alice");
+        await using var laptop = await TestAgent.StartAsync();
+        var engineId = await laptop.AddEngineAsync(engine, token);
+        var vm = await CreateVmAsync(laptop, engine, engineId);
+        var service = engine.Services.GetRequiredService<VaultHostService>();
+        var key = System.Security.Cryptography.RandomNumberGenerator.GetBytes(Constructd.Core.Logic.VaultCrypto.KeyBytes);
+        await service.PutSettingsAsync("alice", "available", Convert.ToBase64String(key), Constructd.Core.Logic.VaultCrypto.KeyCheck(key), CancellationToken.None);
+        var stamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        await service.PutEntriesAsync("alice", [new VaultEntry("db", "Database", false,
+            Constructd.Core.Logic.VaultCrypto.SealEntry(key, "db", stamp, "", "db_pw_123456"), stamp, "pc:test", false)], CancellationToken.None);
+
+        var request = await SubmitAsync(engine, vm, new { v = 1, op = "request", names = new[] { "db" }, ttl = 600 });
+        Assert.NotNull(request.PendingId);
+        var approval = Assert.Single((await laptop.GetAsync("api/vault/approvals"))["approvals"]!.AsArray())!;
+        Assert.Equal(request.PendingId, approval["id"]!.GetValue<string>());
+
+        await laptop.PostAsync($"api/vault/approvals/{engineId}/{request.PendingId}", new { decision = "allow" }, HttpStatusCode.NoContent);
+        Assert.True(oldHost.ModeAsked > 0);
+        Assert.Equal("ok", (await service.PollAsync(vm, request.PendingId!, TimeSpan.Zero, CancellationToken.None))!["status"]!.GetValue<string>());
+    }
+
+    /// <summary>The routes a host of the old release lacks answer 404, as there.</summary>
+    private sealed class OldHostRoutes : Microsoft.AspNetCore.Hosting.IStartupFilter
+    {
+        private int _modeAsked;
+
+        public int ModeAsked => _modeAsked;
+
+        public Action<Microsoft.AspNetCore.Builder.IApplicationBuilder> Configure(Action<Microsoft.AspNetCore.Builder.IApplicationBuilder> next) => app =>
+        {
+            app.Use(call => context =>
+            {
+                var path = context.Request.Path;
+                if (path.StartsWithSegments("/api/v1/vault/mode")) Interlocked.Increment(ref _modeAsked);
+                if (path.StartsWithSegments("/api/v1/engine") || path.StartsWithSegments("/api/v1/vault/mode"))
+                {
+                    context.Response.StatusCode = 404;
+                    return Task.CompletedTask;
+                }
+
+                return call(context);
+            });
+            next(app);
+        };
+    }
+
     // ---- support ----
+
+    [Fact]
+    public async Task A_lost_sign_in_is_listed_with_its_engine_until_it_is_dismissed()
+    {
+        using var engine = new EngineHost();
+        var (laptop, engineId) = await SetUpAsync(engine, "available");
+        await using var _ = laptop;
+        var vm = await CreateVmAsync(laptop, engine, engineId);
+        Assert.Empty((await laptop.GetAsync("api/agent-notices"))["notices"]!.AsArray());
+
+        // The VM reported Codex signed in, then signed out (S36).
+        var agents = engine.Services.GetRequiredService<Constructd.Api.Jobs.VmAgents>();
+        await agents.SaveAsync(vm, [new("codex", "0.170.0", true)], DateTimeOffset.UtcNow, CancellationToken.None);
+        await agents.SaveAsync(vm, [new("codex", "0.170.0", false)], DateTimeOffset.UtcNow, CancellationToken.None);
+
+        var notice = Assert.Single((await laptop.GetAsync("api/agent-notices"))["notices"]!.AsArray())!;
+        Assert.Equal((engineId, "dev", "codex", "Codex"), (notice["engine"]!.GetValue<string>(), notice["vm"]!.GetValue<string>(),
+            notice["agent"]!.GetValue<string>(), notice["name"]!.GetValue<string>()));
+        using (var dismissed = await laptop.Api.DeleteAsync($"api/engines/{engineId}/api/v1/vms/dev/agents/codex/notice"))
+            Assert.Equal(HttpStatusCode.NoContent, dismissed.StatusCode);
+        Assert.Empty((await laptop.GetAsync("api/agent-notices"))["notices"]!.AsArray());
+    }
 
     private static async Task<(TestAgent Laptop, string EngineId)> SetUpAsync(EngineHost engine, string vaultMode)
     {

@@ -9,15 +9,30 @@ const settings = (memGb: number, cpus: number): VmSettings => ({
   idle: { afterMin: 30, then: 'never' },
   services: { t3Web: true, vscodeWeb: true, vscodeTunnel: false, smb: false, mic: false, claudeLive: true, opencodeWatcher: true, t3ProxyUrl: 'https://t3.example.net' },
   identity: { gitName: 'Alex Example', gitEmail: 'alex@example.net', keepCredentials: false, historyDays: '90' },
+  agents: { 'claude-code': true, codex: true, opencode: true, antigravity: false },
   swap: { sizeGb: 'auto' },
 });
 
 const agents = () => [
-  { name: 'Claude Code', version: '2.1.317', latest: '2.1.317', installed: true },
-  { name: 'Codex', version: '0.48.0', latest: '0.49.1', installed: true },
-  { name: 'OpenCode', version: '1.0.132', latest: '1.0.132', installed: true },
-  { name: 'T3 Code', version: '0.1.4', latest: '0.1.4', installed: true },
+  { id: 'claude', name: 'Claude Code', version: '2.1.317', latest: '2.1.317', installed: true, signedIn: true },
+  { id: 'codex', name: 'Codex', version: '0.48.0', latest: '0.49.1', installed: true, signedIn: false },
+  { id: 'opencode', name: 'OpenCode', version: '2.3.2', latest: '2.3.2', installed: true, signedIn: true },
+  { id: 't3', name: 'T3 Code', version: '0.1.4', latest: '0.1.4', installed: true },
 ];
+
+/** What each agent's sign-in shows on a VM, as its CLI words it (links and codes invented). */
+export const SIGN_IN_TEXT: Record<string, string> = {
+  'claude-code': "Opening browser to sign in…\nIf the browser didn't open, visit: https://sign-in.example.net/oauth/authorize?code=true&client_id=4c1e&state=Zk3q\nPaste code here if prompted > ",
+  codex: 'Welcome to Codex [v0.49.1]\nOpenAI\'s command-line coding agent\n\nFollow these steps to sign in with ChatGPT using device code authorization:\n\n1. Open this link in your browser and sign in to your account\n   https://auth.example.net/codex/device\n\n2. Enter this one-time code (expires in 15 minutes)\n   QX4M-7TKP2\n\nContinue only if you started this login in Codex. If a website or another person gave you this code, cancel.',
+  opencode: '┌  Connect an integration\n│\n◆  Select integration\n│  Search: _\n│\n│  Popular\n│  ● OpenCode Go\n│  ○ OpenCode Console\n│  ○ OpenAI\n│  ○ GitHub Copilot\n│  ○ Anthropic\n│  ○ Google\n│  ↑/↓ to select • Enter: confirm • Type: to search\n└',
+  antigravity: 'Open this link in a browser to log in with Google:\n  https://accounts.example.net/o/oauth2/auth?access_type=offline&client_id=1071&redirect_uri=https%3A%2F%2Fsign-in.example.net%2Foauth-callback&state=6pSX\nThen paste the authorization code, or the full URL of the page you land on, and press Enter:',
+};
+
+/** What the CLIs show while their sign-in returns from the browser (this device forwards the redirect). */
+export const SIGN_IN_BROWSER_TEXT: Record<string, string> = {
+  'claude-code': SIGN_IN_TEXT['claude-code'],
+  codex: 'Starting local login server on http://localhost:1455.\nIf your browser did not open, navigate to this URL to authenticate:\n\nhttps://auth.example.net/oauth/authorize?response_type=code&redirect_uri=http%3A%2F%2F127.0.0.1%3A1455%2Fauth%2Fcallback&state=Qe7w',
+};
 
 function vm(p: Partial<Vm> & Pick<Vm, 'id' | 'name' | 'hostId' | 'power' | 'address'>): Vm {
   return {

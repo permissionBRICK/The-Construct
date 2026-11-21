@@ -45,8 +45,15 @@ test("the bridge accepts only the page's known messages", () => {
   assert.deepEqual(page.pageMessage({ type: "close" }), { type: "close" });
   assert.deepEqual(page.pageMessage({ type: "openVsCode", engine: "a1b2c3d4e5f6", vm: "work", extra: 1 }), { type: "openVsCode", engine: "a1b2c3d4e5f6", vm: "work" });
   assert.deepEqual(page.pageMessage({ type: "openExternal", url: "http://localhost:3000/app?x=1" }), { type: "openExternal", url: "http://localhost:3000/app?x=1" });
-  for (const url of ["https://evil.example/", "http://localhost.evil.example:80/", "file:///etc/passwd", "http://localhost:3000/#x", "vscode://x", 7])
+  for (const url of ["http://localhost.evil.example:80/", "file:///etc/passwd", "http://localhost:3000/#x", "vscode://x", 7])
     assert.equal(page.pageMessage({ type: "openExternal", url }), null, String(url));
+  // A web link: https only, a host, no credentials, no spaces or control characters, not too long.
+  const signIn = "https://claude.com/cai/oauth/authorize?code=true&redirect_uri=http%3A%2F%2Flocalhost%3A42341%2Fcallback&scope=org%3Acreate_api_key+user%3Aprofile&state=abc";
+  assert.deepEqual(page.pageMessage({ type: "openExternal", url: signIn }), { type: "openExternal", url: signIn, web: true });
+  assert.deepEqual(page.pageMessage({ type: "openExternal", url: "https://evil.example/" }), { type: "openExternal", url: "https://evil.example/", web: true });
+  for (const url of ["http://example.com/", "https://user:pw@example.com/", "https://user@example.com/", "https://example.com/a b", "https://example.com/\u0007",
+    "https://", "https:///path", "javascript:alert(1)", "https://example.com/" + "x".repeat(2048), " https://example.com/", "HTTPS://example.com/"])
+    assert.equal(page.pageMessage({ type: "openExternal", url }), null, url);
   for (const bad of [null, "openWindow", [], { type: "openWindow", route: "https://evil/" }, { type: "openVsCode", engine: "../x", vm: "w" },
     { type: "openVsCode", engine: "e", vm: "w;rm -rf" }, { type: "run", command: "x" }]) {
     assert.equal(page.pageMessage(bad), null, JSON.stringify(bad));

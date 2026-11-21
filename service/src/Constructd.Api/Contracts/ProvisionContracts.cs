@@ -78,11 +78,65 @@ public sealed record VmDesiredStateResponse(VmDesiredState? Desired, string? Has
 /// </summary>
 public sealed record JobRetryRequest(ProvisionSecretsRequest? Secrets = null, string? BackupId = null);
 
-/// <summary>One coding agent of a VM. <paramref name="Latest"/> is the newest release where it is published (null when unknown).</summary>
-public sealed record VmAgentResponse(string Tool, string Name, string Version, string? Latest, bool UpdateAvailable);
+/// <summary>
+/// One coding agent of a VM. <paramref name="Latest"/> is the newest release where it is published (null when unknown).
+/// <paramref name="SignedIn"/>: whether the agent is signed in, as the VM last reported it or a sign-in on it found; null
+/// when not known (T3 Code, or a VM that has not said). <paramref name="LostAt"/>: a lost sign-in (S36), when the VM
+/// reported the agent signed out after it was signed in; null when there is none, it was signed in again, or the owner
+/// dismissed it.
+/// </summary>
+public sealed record VmAgentResponse(string Tool, string Name, string Version, string? Latest, bool UpdateAvailable, bool? SignedIn = null,
+    DateTimeOffset? LostAt = null);
+
+/// <summary>
+/// <c>GET /agent-notices</c>: a lost sign-in on one of the caller's own VMs (S36). <paramref name="Agent"/> is the id the
+/// sign-in routes take (<c>claude-code</c>, <c>codex</c>, <c>opencode</c>, <c>antigravity</c>).
+/// </summary>
+public sealed record AgentNoticeResponse(string Vm, string Agent, string Name, DateTimeOffset At);
+
+/// <summary><c>GET /agent-notices</c>: the lost sign-ins on the caller's own VMs, oldest first.</summary>
+public sealed record AgentNoticesResponse(IReadOnlyList<AgentNoticeResponse> Notices);
 
 /// <summary>
 /// <c>GET /vms/{name}/agents</c>: the coding agents the VM last reported (with its token-usage report) and whether a
 /// newer release is out. <paramref name="ReportedAt"/> is null and the list empty while the VM has reported none.
 /// </summary>
 public sealed record VmAgentsResponse(DateTimeOffset? ReportedAt, IReadOnlyList<VmAgentResponse> Agents);
+
+/// <summary>
+/// A coding agent's sign-in on a VM (<c>/vms/{name}/agents/{agent}/sign-in</c>, design 11.8). <paramref name="Text"/> is
+/// what the agent's terminal shows now, whole, as its CLI wrote it (links and codes included), followed by what the
+/// script or the connection said besides; empty once the sign-in ended. <paramref name="Revision"/> counts its changes. <paramref name="State"/>:
+/// <c>running</c> or <c>ended</c>; <paramref name="Outcome"/> after the end: <c>done</c>, <c>failed</c>, <c>stopped</c>
+/// or <c>error</c>. <paramref name="SignedIn"/>: whether the agent is signed in, as the VM checked it at the end.
+/// </summary>
+/// <paramref name="Browser"/>: the last link the CLI opened while it runs (null otherwise), with the loopback port on the
+/// VM it sends the browser back to; a client that forwards that port from its own machine and opens the link signs in
+/// without a pasted code (design 11.8).
+public sealed record AgentSignInResponse(string Id, string Agent, string State, string? Outcome, string Text, long Revision,
+    bool? SignedIn, DateTimeOffset Started, DateTimeOffset? Ended, AgentSignInBrowser? Browser = null)
+{
+    public static AgentSignInResponse From(Constructd.Api.SignIn.AgentSignInSession s) =>
+        new(s.Id, s.Agent, s.Running ? "running" : "ended", s.Outcome, s.Text, s.Revision, s.SignedIn, s.Started, s.Ended,
+            s.Opened is { } opened ? new(opened.Url, opened.Port) : null);
+}
+
+/// <summary>A link a sign-in's CLI opened: <paramref name="Port"/> is the loopback port on the VM it returns to (1024-65535), if any.</summary>
+public sealed record AgentSignInBrowser(string Url, int? Port);
+
+/// <summary>
+/// <c>POST /vms/{name}/agents/{agent}/sign-in</c>, optional. <paramref name="Browser"/>: this client forwards a sign-in's
+/// loopback redirect from its own machine to the VM (a device agent): Codex then uses its browser sign-in instead of the
+/// device code. <paramref name="Provider"/>: <c>openrouter</c> for OpenCode, whose sign-in then asks for an OpenRouter API
+/// key (sent as <c>secret</c>) instead of showing OpenCode's own list.
+/// </summary>
+public sealed record AgentSignInStartRequest(bool? Browser = null, string? Provider = null);
+
+/// <summary>
+/// Input to a sign-in's terminal: <paramref name="Text"/> is typed and followed by Enter (empty: Enter alone),
+/// <paramref name="Key"/> (<c>up</c>, <c>down</c>) is pressed, for a list the sign-in shows, or <paramref name="Secret"/>
+/// (an API key) is typed and followed by Enter once the CLI's prompt no longer echoes, and never shown. One of the three.
+/// <paramref name="Session"/> (required) is the id of the sign-in it is meant for: input for one that is no longer the
+/// VM's latest is refused.
+/// </summary>
+public sealed record AgentSignInInputRequest(string? Text = null, string? Key = null, string? Session = null, string? Secret = null);

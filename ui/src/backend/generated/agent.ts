@@ -320,6 +320,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/agent-notices": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description The lost sign-ins on the user's own VMs, from every engine (S36): a coding agent the VM reported signed out after it was signed in, until it is signed in again or dismissed on its engine. */
+        get: operations["ListAgentNotices"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/engines/{engine}/vms/{vm}/backups/{backup}/restore": {
         parameters: {
             query?: never;
@@ -843,6 +860,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/connections/{engine}/{vm}/sign-in": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description A coding agent's sign-in without a pasted code (11.8): for the running sign-in `session` of `agent` on one of the user's own VMs, whose link returns to a loopback port on the VM, forwards 127.0.0.1:<port> on this device to the VM and opens the link in the default browser. The forward closes when the sign-in ends or after twenty minutes. 409 `no-browser-sign-in`, `port-taken`, `vm-not-running`; 501 when this device cannot open links. */
+        post: operations["ForwardSignIn"];
+        /** @description Closes the VM's sign-in forward when it is the one of sign-in `session`; a newer sign-in's forward stays. */
+        delete: operations["EndSignInForward"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/connections/{engine}/{vm}/mic": {
         parameters: {
             query?: never;
@@ -1033,6 +1068,18 @@ export interface components {
             /** Format: date-time */
             startedAt: string;
             apiFeatures: string[];
+        };
+        AgentNoticeItem: {
+            engine: string;
+            engineName: string;
+            vm: string;
+            agent: string;
+            name: string;
+            at: string;
+        };
+        AgentNoticesView: {
+            notices: components["schemas"]["AgentNoticeItem"][];
+            unreachable: string[];
         };
         AgentProblem: {
             title: string;
@@ -1310,6 +1357,14 @@ export interface components {
         ShellOpenRequest: {
             surface: string;
             route?: null | string;
+        };
+        SignInForwardRequest: {
+            agent: string;
+            session: string;
+        };
+        SignInForwardView: {
+            /** Format: int32 */
+            port: number;
         };
         SshKeyView: {
             publicKey: string;
@@ -2127,6 +2182,35 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RevocationView"];
+                };
+            };
+            /** @description An error. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["AgentProblem"];
+                };
+            };
+        };
+    };
+    ListAgentNotices: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentNoticesView"];
                 };
             };
             /** @description An error. */
@@ -3263,6 +3347,74 @@ export interface operations {
                 engine: string;
                 vm: string;
                 id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description An error. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["AgentProblem"];
+                };
+            };
+        };
+    };
+    ForwardSignIn: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                engine: string;
+                vm: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SignInForwardRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SignInForwardView"];
+                };
+            };
+            /** @description An error. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["AgentProblem"];
+                };
+            };
+        };
+    };
+    EndSignInForward: {
+        parameters: {
+            query: {
+                session: string;
+            };
+            header?: never;
+            path: {
+                engine: string;
+                vm: string;
             };
             cookie?: never;
         };

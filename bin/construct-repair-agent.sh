@@ -333,9 +333,9 @@ run_opencode() {
     (if (.sessionID // "") != "" then {type:"_session", text:.sessionID} else empty end),
     (if .type == "text" then {type:"text", text:(.part.text // "")}
      elif .type == "tool_use" then
-       {type:"tool", text:((.part.tool // "tool") + ((.part.state.title // .part.state.input.command // .part.state.input.filePath // "")
+       {type:"tool", text:((.part.tool // "tool") + ((.part.state.input.command // .part.state.input.path // "")
          | if . == "" then "" else ": " + short end))}
-     elif .type == "error" then {type:"error", text:(.error.data.message // .error.name // "error")}
+     elif .type == "error" then {type:"error", text:(.error.message // .error.name // "error")}
      else empty end)'
   while :; do
     local args=(run --format json --auto)

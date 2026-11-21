@@ -4,24 +4,41 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using Constructd.Core.Abstractions;
 using Constructd.Core.Domain;
+using Constructd.Core.Services;
 
 namespace Constructd.Api.Jobs;
 
-/// <summary>One coding agent the guest found installed, with the version its <c>--version</c> printed.</summary>
-public sealed record VmAgentVersion(string Tool, string Version);
+/// <summary>
+/// One coding agent the guest found installed, with the version its <c>--version</c> printed and whether it is
+/// signed in (null: not reported).
+/// </summary>
+public sealed record VmAgentVersion(string Tool, string Version, bool? SignedIn = null);
+
+/// <summary>
+/// A lost sign-in (S36): the VM reported <paramref name="Tool"/> signed out after it had been signed in, at
+/// <paramref name="At"/>. It stays until the agent is signed in again or the owner dismisses it; a dismissed one comes
+/// back only after the agent was signed in and lost again.
+/// </summary>
+public sealed record VmAgentLost(string Tool, DateTimeOffset At);
 
 /// <summary>
 /// What a VM last reported about its coding agents, carried by its token-usage report. Bound to the VM's
 /// creation time, so a VM created again under the name starts without its predecessor's report.
+/// <paramref name="Lost"/>: the lost sign-ins waiting for the owner (null in a report stored before they existed).
 /// </summary>
-public sealed record VmAgentsReport(DateTimeOffset VmCreated, DateTimeOffset ReportedAt, IReadOnlyList<VmAgentVersion> Agents);
+public sealed record VmAgentsReport(DateTimeOffset VmCreated, DateTimeOffset ReportedAt, IReadOnlyList<VmAgentVersion> Agents,
+    IReadOnlyList<VmAgentLost>? Lost = null);
 
-/// <summary>The coding agents of a VM (Claude Code, Codex, OpenCode, T3 Code), stored per VM in the host config store.</summary>
-public sealed partial class VmAgents(IHostConfigStore config)
+/// <summary>
+/// The coding agents of a VM (Claude Code, Codex, OpenCode, Antigravity, T3 Code), stored per VM in the host config
+/// store, with its lost sign-ins (S36). A lost sign-in that appears, clears or is dismissed is announced to the VM's
+/// owner only (<c>agent-notice.changed</c>, its id the agent's tool id).
+/// </summary>
+public sealed partial class VmAgents(IHostConfigStore config, ChangeFeed changes)
 {
     public static readonly IReadOnlyDictionary<string, string> Names = new Dictionary<string, string>
     {
-        ["claude"] = "Claude Code", ["codex"] = "Codex", ["opencode"] = "OpenCode", ["t3"] = "T3 Code",
+        ["claude"] = "Claude Code", ["codex"] = "Codex", ["opencode"] = "OpenCode", ["antigravity"] = "Antigravity", ["t3"] = "T3 Code",
     };
 
     [GeneratedRegex(@"^[0-9]+\.[0-9]+\.[0-9]+([-.+][0-9A-Za-z.+-]{1,48})?$")]
@@ -29,11 +46,84 @@ public sealed partial class VmAgents(IHostConfigStore config)
 
     private static string Key(string vm) => "vm-agents:" + vm.ToLowerInvariant();
 
-    public Task SaveAsync(Vm vm, IReadOnlyList<VmAgentVersion> agents, DateTimeOffset at, CancellationToken ct) =>
-        config.SetAsync(Key(vm.Name), new VmAgentsReport(vm.Created, at, agents), "vm:" + vm.Name, ct);
+    /// <summary>
+    /// Stores what the VM reports. An agent whose check did not answer keeps what the VM said last. One that was
+    /// signed in and is signed out now, and is one of <paramref name="chosen"/> (tool ids; null: any), becomes a lost
+    /// sign-in; one signed in again, or gone from the VM, clears its own.
+    /// </summary>
+    public async Task SaveAsync(Vm vm, IReadOnlyList<VmAgentVersion> agents, DateTimeOffset at, CancellationToken ct, IReadOnlyCollection<string>? chosen = null)
+    {
+        await _marking.WaitAsync(ct);
+        try
+        {
+            var before = await GetAsync(vm, ct);
+            var lost = (before?.Lost ?? []).ToList();
+            var now = new List<VmAgentVersion>();
+            foreach (var agent in agents)
+            {
+                var was = before?.Agents.FirstOrDefault(a => a.Tool == agent.Tool)?.SignedIn;
+                var known = agent with { SignedIn = agent.SignedIn ?? was };
+                now.Add(known);
+                if (known.SignedIn == true) lost.RemoveAll(l => l.Tool == agent.Tool);
+                else if (known.SignedIn == false && was == true && (chosen is null || chosen.Contains(agent.Tool)) && lost.All(l => l.Tool != agent.Tool))
+                    lost.Add(new(agent.Tool, at));
+            }
+
+            lost.RemoveAll(l => now.All(a => a.Tool != l.Tool));
+            await WriteAsync(vm, new VmAgentsReport(vm.Created, at, now, lost), before, ct);
+        }
+        finally { _marking.Release(); }
+    }
 
     public async Task<VmAgentsReport?> GetAsync(Vm vm, CancellationToken ct) =>
         await config.GetAsync<VmAgentsReport>(Key(vm.Name), ct) is { } report && report.VmCreated == vm.Created ? report : null;
+
+    /// <summary>The owner puts a lost sign-in away. False when there was none.</summary>
+    public async Task<bool> DismissAsync(Vm vm, string tool, CancellationToken ct)
+    {
+        await _marking.WaitAsync(ct);
+        try
+        {
+            if (await GetAsync(vm, ct) is not { Lost: { } lost } report || lost.All(l => l.Tool != tool)) return false;
+            await WriteAsync(vm, report with { Lost = lost.Where(l => l.Tool != tool).ToArray() }, report, ct);
+            return true;
+        }
+        finally { _marking.Release(); }
+    }
+
+    /// <summary>Writes a report and announces each lost sign-in that appeared or went.</summary>
+    private async Task WriteAsync(Vm vm, VmAgentsReport report, VmAgentsReport? before, CancellationToken ct)
+    {
+        await config.SetAsync(Key(vm.Name), report, "vm:" + vm.Name, ct);
+        var was = before?.Lost ?? [];
+        var now = report.Lost ?? [];
+        foreach (var tool in was.Select(l => l.Tool).Except(now.Select(l => l.Tool)).Concat(now.Select(l => l.Tool).Except(was.Select(l => l.Tool))))
+            changes.Publish("agent-notice.changed", tool, vm.Name, vm.Owner, ownerOnly: true);
+    }
+
+    private readonly SemaphoreSlim _marking = new(1, 1);
+
+    /// <summary>
+    /// What a sign-in on the VM found when it ended (design 11.8): the agent's sign-in state, and its version where
+    /// the VM reported none yet, so the pages show it before the next report comes.
+    /// </summary>
+    public async Task MarkSignedInAsync(Vm vm, string tool, bool signedIn, string? version, DateTimeOffset at, CancellationToken ct)
+    {
+        await _marking.WaitAsync(ct);
+        try
+        {
+            var report = await GetAsync(vm, ct);
+            var agents = (report?.Agents ?? []).ToList();
+            var i = agents.FindIndex(a => a.Tool == tool);
+            if (i >= 0) agents[i] = agents[i] with { SignedIn = signedIn };
+            else if (version is not null && VersionPattern().IsMatch(version)) agents.Add(new(tool, version, signedIn));
+            else return;
+            // Signed in again: its lost sign-in goes. A sign-in that did not work adds none: the user saw it fail.
+            var lost = (report?.Lost ?? []).Where(l => !(signedIn && l.Tool == tool)).ToArray();
+            await WriteAsync(vm, new VmAgentsReport(vm.Created, report?.ReportedAt ?? at, agents, lost), report, ct);
+        }
+        finally { _marking.Release(); }
+    }
 
     /// <summary>True when <paramref name="latest"/> is a newer major.minor.patch than <paramref name="installed"/> (the old panel's rule).</summary>
     public static bool IsNewer(string? latest, string installed)
@@ -63,7 +153,9 @@ public sealed class AgentReleases(HttpClient http, IClock clock) : IAgentRelease
         {
             "claude" => ("https://registry.npmjs.org/@anthropic-ai/claude-code/latest", "version"),
             "codex" => ("https://api.github.com/repos/openai/codex/releases/latest", "tag_name"),
-            "opencode" => ("https://api.github.com/repos/sst/opencode/releases/latest", "tag_name"),
+            "opencode" => ("https://registry.npmjs.org/@opencode/cli/latest", "version"), // OpenCode 2; OpenCode 1 was opencode-ai
+            // The manifest Google's installer and the CLI's updater read (T3 Code reads it too).
+            "antigravity" => ("https://antigravity-cli-auto-updater-974169037036.us-central1.run.app/manifests/linux_amd64.json", "version"),
             "t3" => (channel == "nightly" ? "https://registry.npmjs.org/t3/nightly" : "https://registry.npmjs.org/t3/latest", "version"),
             _ => ((string?)null, ""),
         };

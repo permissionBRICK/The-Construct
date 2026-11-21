@@ -2972,6 +2972,296 @@
         }
       }
     },
+    "/api/v1/vms/{name}/agents/{agent}/sign-in": {
+      "post": {
+        "tags": [
+          "AgentSignInEndpoints"
+        ],
+        "description": "Starts the agent's own sign-in on the VM in a terminal (claude-code, codex, opencode, antigravity); a sign-in running on the VM ends. `browser`: this client forwards a loopback redirect; `provider: openrouter`: OpenCode asks for an OpenRouter API key. 409: `vm-endpoint-unknown`, `sign-in-not-started` (the connection to the VM failed).",
+        "operationId": "StartAgentSignIn",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "agent",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/AgentSignInStartRequest"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentSignInResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error, as a Problem document.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "AgentSignInEndpoints"
+        ],
+        "description": "The agent's latest sign-in on the VM; 404 `no-sign-in` when none ran since the engine started or another agent's came after it.",
+        "operationId": "GetAgentSignIn",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "agent",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentSignInResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error, as a Problem document.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "AgentSignInEndpoints"
+        ],
+        "description": "Ends the sign-in named by `session` and its processes on the VM. Ending one that is over, or that a newer one replaced, does nothing.",
+        "operationId": "EndAgentSignIn",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "agent",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "session",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "description": "An error, as a Problem document.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/vms/{name}/agents/{agent}/sign-in/input": {
+      "post": {
+        "tags": [
+          "AgentSignInEndpoints"
+        ],
+        "description": "Types into the sign-in named by `session`: `text` and Enter, a `key`, or a `secret` (an API key, typed once the CLI no longer echoes and never shown). 409 `sign-in-ended` when it is over or a newer one took its place.",
+        "operationId": "AgentSignInInput",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "agent",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/AgentSignInInputRequest"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "description": "An error, as a Problem document.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/agent-notices": {
+      "get": {
+        "tags": [
+          "AgentSignInEndpoints"
+        ],
+        "description": "The lost sign-ins on the caller's own VMs (S36): agents the VM reported signed out after they were signed in, until signed in again or dismissed.",
+        "operationId": "ListAgentNotices",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentNoticesResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error, as a Problem document.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/vms/{name}/agents/{agent}/notice": {
+      "delete": {
+        "tags": [
+          "AgentSignInEndpoints"
+        ],
+        "description": "Puts the agent's lost sign-in away; it comes back only when the agent was signed in and lost again. The VM's owner only. Dismissing none does nothing.",
+        "operationId": "DismissAgentNotice",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "agent",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "description": "An error, as a Problem document.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/vms/{name}/adopt": {
       "post": {
         "tags": [
@@ -8463,6 +8753,174 @@
           }
         }
       },
+      "AgentNoticeResponse": {
+        "required": [
+          "vm",
+          "agent",
+          "name",
+          "at"
+        ],
+        "type": "object",
+        "properties": {
+          "vm": {
+            "type": "string"
+          },
+          "agent": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "AgentNoticesResponse": {
+        "required": [
+          "notices"
+        ],
+        "type": "object",
+        "properties": {
+          "notices": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AgentNoticeResponse"
+            }
+          }
+        }
+      },
+      "AgentSignInBrowser": {
+        "required": [
+          "url",
+          "port"
+        ],
+        "type": "object",
+        "properties": {
+          "url": {
+            "type": "string"
+          },
+          "port": {
+            "type": [
+              "null",
+              "integer"
+            ],
+            "format": "int32"
+          }
+        }
+      },
+      "AgentSignInInputRequest": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "key": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "session": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "secret": {
+            "type": [
+              "null",
+              "string"
+            ]
+          }
+        }
+      },
+      "AgentSignInResponse": {
+        "required": [
+          "id",
+          "agent",
+          "state",
+          "outcome",
+          "text",
+          "revision",
+          "signedIn",
+          "started",
+          "ended"
+        ],
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "agent": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          },
+          "outcome": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "text": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "signedIn": {
+            "type": [
+              "null",
+              "boolean"
+            ]
+          },
+          "started": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "ended": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "date-time"
+          },
+          "browser": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AgentSignInBrowser"
+              }
+            ]
+          }
+        }
+      },
+      "AgentSignInStartRequest": {
+        "type": "object",
+        "properties": {
+          "browser": {
+            "type": [
+              "null",
+              "boolean"
+            ]
+          },
+          "provider": {
+            "type": [
+              "null",
+              "string"
+            ]
+          }
+        }
+      },
       "AllowanceUsage": {
         "required": [
           "primaries",
@@ -10290,6 +10748,12 @@
             "type": [
               "null",
               "string"
+            ]
+          },
+          "signedIn": {
+            "type": [
+              "null",
+              "boolean"
             ]
           }
         }
@@ -15511,6 +15975,19 @@
           },
           "updateAvailable": {
             "type": "boolean"
+          },
+          "signedIn": {
+            "type": [
+              "null",
+              "boolean"
+            ]
+          },
+          "lostAt": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "date-time"
           }
         }
       },
@@ -15734,6 +16211,15 @@
           },
           "settings": {
             "$ref": "#/components/schemas/ProvisionSettings"
+          },
+          "codingAgents": {
+            "type": [
+              "null",
+              "array"
+            ],
+            "items": {
+              "type": "string"
+            }
           }
         }
       },
@@ -17315,6 +17801,9 @@
     },
     {
       "name": "RepairEndpoints"
+    },
+    {
+      "name": "AgentSignInEndpoints"
     },
     {
       "name": "LocalAdoptionEndpoints"

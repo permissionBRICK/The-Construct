@@ -203,7 +203,7 @@ SETTLED (owner, 2026-11-09; S9 to S24 from the plan walkthrough the same day; S2
 | S19 | The review hold for profile changes written by a VM is not built for the first release (10.4). | A compromised VM can still change a profile that other VMs provision from, as today. |
 | S20 | Every module updates by itself under its own stored policy: device agent, engine and T3 Desktop. A VM's guest payload updates through its engine, which is there whenever the VM runs. No update needs a device or a VM to be present (12.1). | Modules run different versions for a while; `apiFeatures` and the skew window cover that (6.1, 12.2). |
 | S21 | An agent can ask the user to enter a secret: it files a request under a name and the user pastes the value into a dialog on a device (10.3). | The VM that asked gets the value only through a later approved lease, like any secret. |
-| S22 | opencode 2 ships on `main` now, as its own release ahead of the rework (4.2). | None for the rework: its comparison (13.3) is made afterwards. |
+| S22 | Replaced by S33 (owner, 2026-11-20): opencode 2 ships with the rework, not on `main` ahead of it. | See S33. |
 | S23 | Proxmox clusters get one engine per cluster; the investigation settles the details (18.2). | See 18.2. |
 | S24 | Simplicity over machinery. Where a rare failure can be handled by a retry or by hand, the design names the risk and adds no mechanism. Applied in revision 11 to the host update, the one-time upgrade, job recovery, backup requests, guest changes, the store, version skew and manifest signing (Appendix B). | An upgrade or job that fails halfway needs a retry or help by hand; a host update never rolls its database back by itself; manifests are not signed until the public service exists. |
 | S25 | The client is built to the design the owner chose on 2026-11-13 (11.2): a tray pop-out with one VM as a stack of large actions, a window with VM tabs and a sidebar, the same stack on the phone. Colour schemes are selectable: green (default), blue, copper and slate, black and white. | None. |
@@ -213,6 +213,11 @@ SETTLED (owner, 2026-11-09; S9 to S24 from the plan walkthrough the same day; S2
 | S29 | A host can reprovision and reinstall a VM without any device being online. For a reinstall it opens that one backup itself and restores secrets, keys and pairing, so the VM stays paired. The locked vault stays as it is (10.2). | Changes the earlier answer to 17.2 for this one case; the host runs the VM and can read its disk anyway. |
 | S30 | Creating a VM is one short flow: local or remote, and for remote the pasted host address. Host administration keeps every feature of today in the new style, shows a new user what their client needs, and updates in one click (11.6, 11.7). | None. |
 | S31 | Install statistics (5.5) are left out of the first release. | The project does not learn its install count until then. |
+| S32 | Coding agents are chosen per VM, with one switch each when the VM is created and on its page. Claude Code, Codex and OpenCode are on by default; the Antigravity CLI is offered and off by default. Other agents T3 Code supports are added only when asked for (owner, 2026-11-20; 11.8). | Turning an agent off stops its updates and turns it off in T3 Code but does not uninstall it; its files and sign-in stay on the VM. |
+| S33 | opencode 2 ships with the rework (owner, 2026-11-20; 4.2). A VM moves to it at its next update or reprovision. | The move converts OpenCode's database in place, one way; the data folder is copied once before the first opencode 2 start, and that copy is the only way back. |
+| S34 | Signing in to the coding agents happens in the UI: a step after creating a VM, and Sign in on each agent of the VM page. The engine runs the agent's own sign-in on the VM and the UI shows its output, links and a reply field (owner, 2026-11-20; 11.8). | The UI does not parse each agent's sign-in; when an agent changes its sign-in, the user still sees its own text. Accounts never pass through the vault or the store. Antigravity's sign-in is copied into T3 Code's private Antigravity home: a sign-out on one side leaves the other signed in until the token is revoked. |
+| S35 | Creating a VM ends on a ready screen with T3 Code (recommended) and VS Code (owner, 2026-11-20; 11.6). | None. |
+| S36 | When a coding agent that was signed in on a VM is signed out, a card like the vault's offers Sign in, once per loss: dismissed, it stays away until the agent was signed in and lost again; with Construct closed it pops alone once (owner, 2026-11-20; 11.8). | A deliberate sign-out also shows the card once. The loss is seen at the VM's next report, up to 15 minutes later. |
 
 ## 4. Compatibility invariants
 
@@ -267,7 +272,7 @@ it. Existing VMs get it at their next update or reprovision (7.5, 12.1), with a 
 for any state, config or session format the old tool left behind.
 
 First entry: **opencode 2** (current 2.2.6; the 1.x line ends at 1.19.5, which `opencode-ai` on npm
-and the GitHub "latest" release still point at). SETTLED (owner, 2026-11-09, S22): it ships on `main` now, as its own release ahead of the rework. Checked
+and the GitHub "latest" release still point at). SETTLED (owner, 2026-11-20, S33, replacing S22): it ships with the rework. Checked
 against the repository and the upstream V1 migration guide:
 
 | Area | Today | What opencode 2 changes | Action |
@@ -278,6 +283,11 @@ against the repository and the upstream V1 migration guide:
 | Server | `opencode serve --hostname --port` (`systemd/opencode-serve.service`) | Flags unchanged; server API and clients new (`@opencode/client`); `OPENCODE_SERVER_USERNAME` dropped (unused here) | T3 Code already has an opencode 2 adapter: the installed `t3 v0.1.7` carries `@opencode/cli` and recommends 2.0.18 or newer, and rates 1.x as limited support. What still speaks only 1.x is Construct's own opencode monitor patch in the T3 builds repository, which has to be ported to the v2 adapter on both channels |
 | Data | Backups take `~/.local/share/opencode/storage`, `project`, `opencode.db` (`bin/export-config.sh:409-428`); usage via `construct-usage-report.sh`, `extension/vm/usage.sh` | Session storage format not covered by the migration guide | Rig test: restore a v1 backup onto v2; usage report on v2 sessions |
 | Agent prompt | `~/.config/opencode/AGENTS.md` (`install-ai-tools.sh:373`) | Still read; v2 does not read `CLAUDE.md` | None |
+
+Second entry: the **Antigravity CLI** (S32), optional per VM. T3 Code (0.1.10 and later) runs it as its
+own provider (`agy acp`, CLI 1.5 or later). The VM installs it with Google's installer, so the terminal
+and T3 Code use one copy; it gets the MCP servers and the agent instructions (`~/.gemini/AGENTS.md`), its
+sign-in and chats go into backups, and T3 Code's provider points at that copy and its home folder.
 
 ## 5. Target architecture
 
@@ -889,7 +899,7 @@ after four redesign rounds. The mockup is kept outside this repository; in words
 | Tray pop-out | One VM at a time, chosen from a name menu: its state, Open (T3 Code, VS Code, SSH) and a stack of large actions with Reprovision and Reinstall at the centre. Key vault and Control panel in the footer. A vault request appears as a yellow card on top; with Construct closed, that card alone pops from the tray. |
 | Window | VMs as tabs on top, a dark sidebar (Projects, Connections, Backups, Settings per VM; Key vault, Hosts, Construct below), technical pages with tables: project list and the profile JSON, settings in tabs, the vault with secrets, access, devices and history. |
 | Phone and browser | The pop-out's stack, then the pages, with a bottom tab bar. |
-| Rules | Only the vault asks for attention. No counters, no attention queue, no chat in the middle, no grouping by host, no forwards on the overview, no subtitle under a title. Yellow means an update or a change that waits. |
+| Rules | Only the vault and a lost agent sign-in (S36) ask for attention. No counters, no attention queue, no chat in the middle, no grouping by host, no forwards on the overview, no subtitle under a title. Yellow means an update or a change that waits. |
 | Colours | Schemes selectable beside light and dark: green on black (default), blue, copper and slate, black and white. |
 
 ### 11.3 No native dialogs
@@ -970,7 +980,10 @@ update when the user is its admin (13.2).
 
 Creating a VM (S30). One screen: local or remote. Local needs a name and takes defaults for
 everything else, which Settings can change later. Remote needs the host's address, pasted, and the
-sign-in the host uses (Windows sign-in, or a token). The job that follows asks nothing.
+sign-in the host uses (Windows sign-in, or a token). The same screen has the coding agent switches
+with their defaults (S32). The job that follows asks nothing. When it is done, a sign-in step lists the
+chosen agents, each with Sign in, and Continue, which needs none of them (S34). Then a ready screen offers
+T3 Code, marked recommended, and VS Code (S35).
 
 ### 11.7 Host administration
 
@@ -982,6 +995,21 @@ directly, simple pages with tables. Two changes:
 |---|---|
 | Adding a user | After the admin adds a user, the page shows what that user's client needs: the host address to paste and, where the host uses tokens, the token once, with a copy button. |
 | Updating the host | One Update button (12.1), in place of today's four stages. |
+
+
+### 11.8 Coding agents
+
+SETTLED (owner, 2026-11-20, S32, S34, S36).
+
+| Concern | Design |
+|---|---|
+| Choice | The VM's desired state carries the list of coding agents (`AI_TOOLS` in the guest). Create and the VM page show one switch per agent; a change waits for Reprovision like any other setting. Adoption keeps the list the VM has. |
+| Turned off | Not updated, not configured, turned off in T3 Code; not uninstalled. |
+| Sign in | `POST /vms/{name}/agents/{agent}/sign-in` starts the agent's own sign-in on the VM in a terminal session; its output streams as events, a reply goes to its input, and it ends with the process. One runs per VM. The UI shows the text with links opened in the browser. Each agent row shows whether it is signed in, as the VM reports it. The commands: `claude auth login`, `codex login --device-auth`, `opencode auth login` (its own list of integrations, arrow keys included), `agy acp --login`; the Antigravity token then goes into T3 Code's Antigravity home too, which reads the same file format. |
+| No pasted code | As the Claude Code extension does over Remote-SSH (owner, 2026-11-20): the sign-in runs with `BROWSER` set to a helper (`bin/construct-sign-in-browser.sh`) that hands the URL the CLI opens to the sign-in, which reports it with the loopback port its redirect returns to (1024-65535). When that URL sends the browser back to `localhost:<port>` or `127.0.0.1:<port>` (Claude Code, Codex and OpenCode's ChatGPT sign-in listen there on the VM), the UI asks its device agent, which checks with the engine that this sign-in runs, forwards that port from the PC's `127.0.0.1` to the VM over the VM's SSH link and opens the URL; the redirect reaches the CLI and the sign-in ends by itself. The forward closes when the engine says the sign-in is over, when another sign-in takes its place, or after twenty minutes. Codex then uses its browser sign-in instead of the device code. The panel shows one line and Cancel, the CLI's text behind Terminal. Without a device agent (phone, browser), or with the port taken on the PC or no link to the VM, the CLI's own text with the paste field stays (Claude Code prints a link for a pasted code beside the one it opened; Codex starts again with the device code). Antigravity's sign-in returns to a page Google hosts (`antigravity.google/oauth-callback`), not to the VM, so it keeps the paste. |
+| OpenCode | OpenRouter with an API key comes first (owner, 2026-11-20): one field for the key, and Other providers for OpenCode's own list (its other providers and sign-ins). The sign-in runs `opencode auth login openrouter --standalone` (OpenCode 2 names the provider as its target; OpenCode 1 takes `--provider openrouter`), which goes straight to the key prompt, and the key goes to it as a secret input: typed only once the CLI's prompt has turned the terminal's echo off (a key typed earlier would show and be lost), blotted out of the screen should the CLI print it, never logged or audited, and kept only in the sign-in's process. The signed-in check then lists OpenRouter. |
+| Lost sign-in | S36. The engine notes the change from signed in to signed out in the VM's report, for an agent among the VM's desired coding agents, and keeps the note with the stored agent report (`lostAt`), so a restart keeps it; a report or a sign-in that finds the agent signed in clears it, and the owner can put it away. The card ("<VM>: Claude Code is signed out", Sign in, a cross) stands with the vault's cards on top of the pop-out and the overview; its Sign in starts the sign-in above and the card turns into its panel. With Construct closed the tray pops it alone once per loss while the device agent runs (a restart of the agent pops one still waiting again). The checks: Claude Code's `auth status` with its `loginExpiresAt` (an end date its renewals do not move), Codex's `login status` and OpenCode's stored credentials (they see no expiry), Antigravity's token file (without a refresh token it ends with its access token); none sees a sign-in revoked at the provider before the agent next uses it. |
+| T3 Code | Each chosen agent is turned on as a T3 Code provider and points at the copy the VM installed. |
 
 ## 12. Updates
 

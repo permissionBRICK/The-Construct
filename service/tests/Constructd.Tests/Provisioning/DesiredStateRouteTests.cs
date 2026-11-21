@@ -63,6 +63,29 @@ public sealed class DesiredStateRouteTests
     }
 
     [Fact]
+    public async Task The_coding_agents_are_stored_wait_for_the_next_provision_and_are_validated()
+    {
+        await using var h = await ProvisionHarness.StartAsync();
+        var put = await h.Client.PutJsonAsync(Url, new { projects = Array.Empty<string>(), settings = new { }, codingAgents = new[] { "codex", "antigravity" } });
+        Assert.Equal(HttpStatusCode.OK, put.StatusCode);
+        Assert.Equal(["codex", "antigravity"], (await put.ReadAsync<VmDesiredStateResponse>()).Desired!.CodingAgents);
+        Assert.True((await (await h.Client.GetAsync($"/api/v1/vms/{ProvisionHarness.Vm}/provision-status")).ReadAsync<ProvisionStatusResponse>()).SettingsChanged);
+
+        var job = await h.Client.WaitForJobAsync((await (await h.Client.PostJsonAsync($"/api/v1/vms/{ProvisionHarness.Vm}/jobs",
+            new { kind = "provision", requestId = "agents", commit = ProvisionHarness.Commit })).ReadAsync<VmJobAcceptedResponse>()).JobId);
+        Assert.Equal(JobState.Succeeded, job.State);
+        Assert.Equal("codex,antigravity", FakeSshRunner.Variable(h.Ssh.Commands.Single(c => c.Contains("bin/provision.sh", StringComparison.Ordinal)), "AI_TOOLS"));
+
+        foreach (var agents in new[] { new[] { "vim" }, new[] { "codex", "codex" }, new string?[] { null } })
+        {
+            var refused = await h.Client.PutJsonAsync(Url, new { projects = Array.Empty<string>(), settings = new { }, codingAgents = agents });
+            Assert.Equal(HttpStatusCode.BadRequest, refused.StatusCode);
+            Assert.Contains("\"codingAgents\"", await refused.Content.ReadAsStringAsync(), StringComparison.Ordinal);
+        }
+        Assert.Equal(["codex", "antigravity"], (await (await h.Client.GetAsync(Url)).ReadAsync<VmDesiredStateResponse>()).Desired!.CodingAgents);
+    }
+
+    [Fact]
     public async Task The_stored_swap_size_reaches_the_guest()
     {
         await using var h = await ProvisionHarness.StartAsync();

@@ -251,7 +251,11 @@ inside the project repos:
 - Chat history (`INCLUDE_HISTORY=true`, the default): Claude's per-project session
   transcripts (`~/.claude/projects/<slug>/`) and `~/.claude/history.jsonl`; Codex's
   `~/.codex/{sessions,archived_sessions}` rollouts + indexes; Opencode's
-  `~/.local/share/opencode/{storage,project,opencode.db*}`. Codex-specific wrinkle:
+  `~/.local/share/opencode/{storage,project,opencode.db*}`. OpenCode 2 keeps its sign-ins in
+  `opencode.db` too, so the database also needs `INCLUDE_AUTH=true`; a backup without auth
+  leaves the OpenCode sessions out. A restore stops `opencode-serve` while the database is put
+  back, and OpenCode 2 converts a database from an OpenCode 1 backup when it starts.
+  Codex-specific wrinkle:
   modern Codex lists threads from a sqlite index it backfills **once** on first start,
   and the app-server starts before the restore lands — so the restore deletes the
   fresh, empty index (`~/.codex/state_*.sqlite`) and restarts `codex-app-server`,
@@ -268,7 +272,8 @@ inside the project repos:
   `backup-info.json`.
 - **Subscription auth**, so you don't re-authenticate after a reinstall:
   `~/.claude/.credentials.json`, `~/.claude.json`, `~/.codex/auth.json`,
-  `~/.local/share/opencode/auth.json`.
+  `~/.local/share/opencode/auth.json` (OpenCode 1; OpenCode 2 imports it once and then keeps
+  its sign-ins in `opencode.db`).
 - **MCP server auth**, so connected MCP servers stay logged in across a reinstall:
   the OAuth tokens each agent saves after authenticating to a remote MCP server.
   Claude keeps them inside `~/.claude/.credentials.json` (saved above) plus an
