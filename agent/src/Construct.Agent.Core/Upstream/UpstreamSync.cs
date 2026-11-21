@@ -101,8 +101,19 @@ public sealed class UpstreamSync : IAsyncDisposable
         {
             _agent.Events.Publish("upstream");
             if (!_agent.IsRegistered || Engine() is not { } engine) return View();
-            await CarryLegacyOverAsync(engine, ct).ConfigureAwait(false);
-            var links = await Links.ListAsync(ct).ConfigureAwait(false);
+            IReadOnlyList<UpstreamLink> links;
+            try
+            {
+                await CarryLegacyOverAsync(engine, ct).ConfigureAwait(false);
+                links = await Links.ListAsync(ct).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is AgentFailure or HttpRequestException or Constructd.Store.Client.StoreUnavailableException or IOException or JsonException
+                || ex is TaskCanceledException && !ct.IsCancellationRequested)
+            {
+                // The store or the engine was not reached: the last refresh stays what is shown; the next one tries again.
+                return View();
+            }
+
             var statuses = new List<UpstreamLinkStatus>();
             foreach (var link in links.Where(l => l.Files.Count > 0).OrderBy(l => l.Url, StringComparer.Ordinal))
                 statuses.Add(await RefreshLinkAsync(link, engine, ct).ConfigureAwait(false));
@@ -142,6 +153,8 @@ public sealed class UpstreamSync : IAsyncDisposable
         UpstreamLinkStatus Failed(string error) =>
             new(shown, link.Ref, null, error, link.Files.Select(f => new UpstreamFileStatus(f.Profile, f.Path, "failed", error)).ToList());
         if (UpstreamUrls.Refused(link.Url)) return Failed("The URL carries a password; link it again without one (the credential helper supplies it).");
+        var source = link.Ref is { Length: > 0 } r && r != "HEAD" ? r : "HEAD";
+        if (!SafeRef(source)) return Failed("The ref is no branch name.");
         if (GitProcess.Find(_gitPath) is not { } git) return Failed("Git is not installed on this PC.");
 
         var cache = Path.Combine(_directory, "upstream", Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(link.Url)))[..16]);
@@ -151,7 +164,6 @@ public sealed class UpstreamSync : IAsyncDisposable
             if (await GitAsync(git, ["init", "--bare", "-q", cache], ct).ConfigureAwait(false) is not { Exit: 0 }) return Failed("The cache could not be created.");
         }
 
-        var source = link.Ref is { Length: > 0 } r && r != "HEAD" ? r : "HEAD";
         var fetch = await GitAsync(git, ["-C", cache, "-c", "core.hooksPath=", "fetch", "--quiet", "--no-tags", "--depth=1", "--force", "--", link.Url,
             "+" + source + ":refs/construct/upstream"], ct).ConfigureAwait(false);
         if (fetch is not { Exit: 0 }) return Failed(FetchProblem(fetch?.Error));
@@ -219,6 +231,11 @@ public sealed class UpstreamSync : IAsyncDisposable
             _ => null,
         });
     }
+
+    /// <summary>A branch or tag name git takes as the source of a refspec, nothing more.</summary>
+    private static bool SafeRef(string name) =>
+        name.Length is > 0 and <= 255 && !name.StartsWith('-') && !name.Contains("..", StringComparison.Ordinal)
+        && name.All(c => char.IsAsciiLetterOrDigit(c) || c is '.' or '_' or '-' or '/');
 
     /// <summary>A short reason, from git's message without anything it echoed (URLs, helper output).</summary>
     private static string FetchProblem(string? error)

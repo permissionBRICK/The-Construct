@@ -174,6 +174,24 @@ public sealed class UpstreamTests
     }
 
     [Fact]
+    public async Task A_link_whose_ref_is_no_branch_name_is_refused_before_git_runs()
+    {
+        string repo = "";
+        await using var rig = await MovedAsync(Shared((r, _) => repo = r));
+        await rig.Agent.Host.Upstream.Links.AddAsync(new Upstream.UpstreamLink("https://git.example.test/other.git", "--upload-pack=touch /tmp/x",
+            [new Upstream.UpstreamFile("projects/other.json", "other")]), CancellationToken.None);
+
+        var view = await rig.Agent.PostAsync("api/upstream/refresh", null);
+        var other = view["links"]!.AsArray().Single(l => l!["url"]!.GetValue<string>() == "https://git.example.test/other.git")!;
+        Assert.Equal("The ref is no branch name.", other["error"]!.GetValue<string>());
+        // Git never ran for it: no cache was made.
+        Assert.False(Directory.Exists(Path.Combine(rig.Agent.Directory, "upstream", Convert.ToHexStringLower(
+            System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes("https://git.example.test/other.git")))[..16])));
+        // The other link is refreshed all the same.
+        Assert.Equal("up-to-date", view["links"]!.AsArray().Single(l => l!["url"]!.GetValue<string>() == repo)!["files"]![0]!["state"]!.GetValue<string>());
+    }
+
+    [Fact]
     public async Task Before_the_device_is_set_up_a_refresh_does_nothing()
     {
         await using var agent = await TestAgent.StartAsync();

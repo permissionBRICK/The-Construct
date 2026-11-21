@@ -17,7 +17,7 @@ namespace Construct.Agent.Upgrade;
 /// written, and only after that the old backup key comes off the VMs and the old client's autoinstall images are deleted.
 /// </summary>
 public sealed class LegacyConverter(DeviceAgent agent, IDeviceEngines engines, DeviceSettings settings, BridgeFile bridge,
-    IUpgradePlatform platform, string dataDirectory, Action<UpgradeItem> progress)
+    IUpgradePlatform platform, Action<UpgradeItem> progress)
 {
     public const string RecipientLabel = "construct-account";
 

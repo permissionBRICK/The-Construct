@@ -228,7 +228,7 @@ public sealed class UpgradeService
     public async Task<bool> ConvertAsync(CancellationToken ct, Action<UpgradeItem>? progress = null)
     {
         var legacy = Legacy() ?? throw new AgentFailure(409, "no-legacy", "No old Construct install was found on this PC.");
-        var converter = new LegacyConverter(_agent, _engines, _settings, Bridge, _platform, _options.DataDirectory, item =>
+        var converter = new LegacyConverter(_agent, _engines, _settings, Bridge, _platform, item =>
         {
             progress?.Invoke(item);
             _agent.Events.Publish("upgrade", null, JsonSerializer.SerializeToNode(item, Http.AgentJson.Options));
