@@ -79,6 +79,19 @@ public sealed class ReinstallJobTests : IAsyncDisposable
         return (await response.ReadAsync<VmJobAcceptedResponse>()).JobId;
     }
 
+    private async Task ReportAgentsAsync(ProvisionHarness h, bool signedIn)
+    {
+        using var vm = h.App.CreateVmTokenClient(_token!);
+        var posted = await vm.PostJsonAsync($"/api/v1/vms/{ProvisionHarness.Vm}/usage", new
+        {
+            generatedAt = DateTimeOffset.UtcNow, days = Array.Empty<object>(), agents = new[] { new { tool = "claude", version = "2.1.4", signedIn } },
+        });
+        Assert.Equal(HttpStatusCode.NoContent, posted.StatusCode);
+    }
+
+    private static async Task<bool?> SignedInAsync(ProvisionHarness h, string tool) =>
+        (await (await h.Client.GetAsync($"/api/v1/vms/{ProvisionHarness.Vm}/agents")).ReadAsync<VmAgentsResponse>()).Agents.SingleOrDefault(a => a.Tool == tool)?.SignedIn;
+
     private static T Result<T>(JobResponse job) =>
         JsonSerializer.Deserialize<T>(JsonSerializer.Serialize(job.Result), new JsonSerializerOptions(JsonSerializerDefaults.Web))!;
 
@@ -503,11 +516,14 @@ public sealed class ReinstallJobTests : IAsyncDisposable
         var h = await HostAsync(guest);
         var id = await MakeBackupAsync(h, guest);
 
+        guest.AgentReport = """[{"tool":"claude","version":"2.1.4","signedIn":true}]""";
         var job = await RestoreAsync(h, "restore-1", id, guest.Made[id].Key);
 
         Assert.True(job.State == JobState.Succeeded, job.Error);
         Assert.Equal(id, Result<RestoreJobResult>(job).BackupId);
         Assert.Equal([id], guest.Restored);
+        // The guest's agent report ends the job: the restored sign-in shows at once (R10).
+        Assert.Equal(true, (await SignedInAsync(h, "claude")));
         // Not a pre-reinstall backup: the project commands are not run again.
         Assert.DoesNotContain(guest.Commands, c => c.Contains("PROVISION_PHASE", StringComparison.Ordinal));
 
@@ -560,6 +576,7 @@ public sealed class ReinstallJobTests : IAsyncDisposable
     {
         var guest = new FakeBackupGuest();
         var first = await HostAsync(guest);
+        await ReportAgentsAsync(first, true);
         if (at == "create") first.App.Driver.HoldCreate = true;
         else guest.HoldAt = at;
         var jobId = await StartReinstallAsync(first, "reinstall-1");
@@ -589,6 +606,8 @@ public sealed class ReinstallJobTests : IAsyncDisposable
         Assert.Equal(JobState.Failed, interrupted.State);
         Assert.Equal(phase, interrupted.Phase);
 
+        // The rebuilt guest has its agents signed out until the restore brings them back.
+        guest.AgentReport = """[{"tool":"claude","version":"2.1.4","signedIn":false}]""";
         var retry = await ReinstallAsync(second, "reinstall-2", desired: false);
         var result = Result<ReinstallJobResult>(retry);
         var backups = await BackupsAsync(second);
@@ -615,6 +634,10 @@ public sealed class ReinstallJobTests : IAsyncDisposable
                 Assert.True(backups[0].IsPinned(second.App.Clock.UtcNow));
                 Assert.Empty(guest.Restored);
                 Assert.Contains(second.App.Driver.Calls, c => c == "create:" + ProvisionHarness.Vm);
+                // The restore still waits for a device: the report at the job's end loses no sign-in (F35).
+                Assert.Equal(true, await SignedInAsync(second, "claude"));
+                Assert.Null((await (await second.Client.GetAsync($"/api/v1/vms/{ProvisionHarness.Vm}/agents")).ReadAsync<VmAgentsResponse>()).Agents.Single().LostAt);
+                guest.AgentReport = """[{"tool":"claude","version":"2.1.4","signedIn":true}]""";
                 // The device's restore of that backup runs the project commands again after it (F39): they need what
                 // the backup brings back.
                 var before = guest.Commands.Count();

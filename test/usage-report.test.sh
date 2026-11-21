@@ -77,6 +77,13 @@ mkdir -p "${tmp}/home/.gemini/antigravity-cli" && printf 'token' >"${tmp}/home/.
 run
 jq -e '.agents | map(select(.tool == "antigravity")) == [{"tool":"antigravity","version":"1.5.2","signedIn":true}]' "${tmp}/body.json" >/dev/null
 jq -e '.agents | map(select(.tool == "opencode")) | length == 1 and .[0].version == "2.3.2"' "${tmp}/body.json" >/dev/null
+# --agents prints only the agent report, for the engine's finish step: no usage collected or sent, no service needed.
+calls_before="$(wc -l <"${tmp}/curl-argv")" usage_before="$(wc -l <"${tmp}/cc-argv")"
+HOME="${tmp}/home" CONFIG_FILE="${tmp}/missing.env" bash "${ROOT}/bin/construct-usage-report.sh" --agents >"${tmp}/agents.json" 2>"${tmp}/stderr"
+jq -e 'map(select(.tool == "claude" or .tool == "codex" or .tool == "antigravity")) ==
+  [{"tool":"claude","version":"2.1.4","signedIn":false},{"tool":"codex","version":"0.98.0","signedIn":true},{"tool":"antigravity","version":"1.5.2","signedIn":true}]' \
+  "${tmp}/agents.json" >/dev/null
+[[ "$(wc -l <"${tmp}/agents.json")" == 1 && "$(wc -l <"${tmp}/curl-argv")" == "${calls_before}" && "$(wc -l <"${tmp}/cc-argv")" == "${usage_before}" ]]
 jq -e --arg today "$(date +%F)" '.days[] | select(.day == $today and .tool == "claude") | .totalTokens == 37 and .cacheCreateTokens == 3 and .models["model-a"].totalTokens == 37' "${tmp}/body.json" >/dev/null
 jq -e --arg today "$(date +%F)" '.days[] | select(.day == $today and .tool == "codex") | .costUsd == 2.34 and .cacheReadTokens == 4 and .models["model-b"].totalTokens == 30' "${tmp}/body.json" >/dev/null
 [[ -f "${tmp}/state/backfilled" && ! -d "$(cat "${tmp}/work")" ]]
@@ -125,4 +132,4 @@ rg -q '^OnUnitActiveSec=5min$' "${tmp}/units/construct-usage-report.timer"
 [[ -x "${tmp}/installed/construct-usage-report.sh" && -f "${tmp}/installed/lib/usage-collect.sh" && -f "${tmp}/installed/lib/construct-agent-sign-in.py" ]]
 [[ ! -f "${tmp}/state/backfilled" ]]
 rg -q 'enable --now construct-usage-report.timer' "${tmp}/systemctl-argv"
-printf 'Guest usage reporting, backfill, failures, isolation, secret hygiene and timer installation passed.\n'
+printf 'Guest usage reporting, the agent report, backfill, failures, isolation, secret hygiene and timer installation passed.\n'

@@ -201,6 +201,13 @@ public static partial class ProvisionScript
 
     public const string RebootRequiredCommand = "test -e /var/run/reboot-required && echo yes || echo no";
 
+    /// <summary>
+    /// The guest's agent report (the coding agents, their versions and sign-in checks) printed as JSON instead of sent:
+    /// the installed usage report's, else the repository's copy.
+    /// </summary>
+    public const string AgentReportCommand =
+        "s=/usr/local/bin/construct-usage-report.sh; [ -x \"$s\" ] || s=" + RepoDir + "/bin/construct-usage-report.sh; [ -f \"$s\" ] && bash \"$s\" --agents";
+
     /// <summary>The PowerShell's final step: strip the bootstrap key (root path only) and reboot in the background.</summary>
     public static string RebootCommand(string? bootstrapPublicKey, string seedUser)
     {

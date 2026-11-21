@@ -4,6 +4,7 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using Constructd.Core.Abstractions;
 using Constructd.Core.Domain;
+using Constructd.Core.Logic;
 using Constructd.Core.Services;
 
 namespace Constructd.Api.Jobs;
@@ -45,6 +46,40 @@ public sealed partial class VmAgents(IHostConfigStore config, ChangeFeed changes
     public static partial Regex VersionPattern();
 
     private static string Key(string vm) => "vm-agents:" + vm.ToLowerInvariant();
+
+    /// <summary>
+    /// One agent of a report, when it is a known tool with a version and not in <paramref name="into"/> yet. T3 Code has
+    /// no sign-in of its own.
+    /// </summary>
+    public static bool Accept(string? tool, string? version, bool? signedIn, List<VmAgentVersion> into)
+    {
+        if (tool is null || !Names.ContainsKey(tool) || version is null || !VersionPattern().IsMatch(version) || into.Any(a => a.Tool == tool)) return false;
+        into.Add(new(tool, version, tool == "t3" ? null : signedIn));
+        return true;
+    }
+
+    /// <summary>The guest's agent report as <c>construct-usage-report.sh --agents</c> prints it; null when it is not one.</summary>
+    public static IReadOnlyList<VmAgentVersion>? Parse(string json)
+    {
+        try
+        {
+            if (System.Text.Json.Nodes.JsonNode.Parse(json) is not System.Text.Json.Nodes.JsonArray items) return null;
+            var agents = new List<VmAgentVersion>();
+            foreach (var item in items)
+            {
+                string? Text(string name) => item?[name] is System.Text.Json.Nodes.JsonValue v && v.TryGetValue<string>(out var t) ? t : null;
+                bool? signedIn = item?["signedIn"] is System.Text.Json.Nodes.JsonValue b && b.TryGetValue<bool>(out var f) ? f : null;
+                if (!Accept(Text("tool"), Text("version"), signedIn, agents)) return null;
+            }
+
+            return agents;
+        }
+        catch (JsonException) { return null; }
+    }
+
+    /// <summary>The tool ids of the coding agents a VM is meant to have (its desired settings; null: any).</summary>
+    public static IReadOnlyCollection<string>? Chosen(VmDesiredState? desired) => desired is null ? null
+        : (CodingAgents.FromAiTools(CodingAgents.AiTools(desired)) ?? CodingAgents.Default).Select(AgentSignInScript.Tool).ToArray();
 
     /// <summary>
     /// Stores what the VM reports. An agent whose check did not answer keeps what the VM said last. One that was

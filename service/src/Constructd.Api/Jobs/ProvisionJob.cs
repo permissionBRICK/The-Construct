@@ -13,7 +13,10 @@ public sealed class ProvisionStepException(string step, string code, string mess
     public string Code { get; } = code;
 }
 
-/// <summary>One run of the <c>provision</c> job: everything it needs, the secrets in their bag.</summary>
+/// <summary>
+/// One run of the <c>provision</c> job: everything it needs, the secrets in their bag. <c>RestoreFollows</c>: a reinstall
+/// whose restore waits for a device, so the rebuilt guest's signed-out agents are no lost sign-ins yet (F35).
+/// </summary>
 public sealed record ProvisionRun(
     string JobId,
     Vm Vm,
@@ -25,7 +28,8 @@ public sealed record ProvisionRun(
     string DefaultSeedUser,
     string? BootstrapPublicKey,
     JobSecretBag Secrets,
-    ProvisionRestore? Restore = null);
+    ProvisionRestore? Restore = null,
+    bool RestoreFollows = false);
 
 /// <summary>
 /// A backup to restore after <c>provision.sh</c> and before the project commands (the PowerShell's
@@ -50,7 +54,7 @@ public sealed record ProvisionRestore(string BackupId, string? KnownHosts = null
 /// </summary>
 public sealed class ProvisionJob(ISshRunner ssh, ISourceCache sources, IVmAppliedStateStore applied,
     IPersistedJobRunner phases, RecoveryMarks marks, IClock clock, Constructd.Api.Devices.DeviceSshKeys deviceKeys,
-    Constructd.Api.Devices.AccountBackupKeys backupKeys)
+    Constructd.Api.Devices.AccountBackupKeys backupKeys, VmAgents agents, IVmDesiredStateSource desiredStates)
 {
     public static readonly string[] Steps = ["source", "copy", "provision", "restore", "project-commands", "applied", "finish"];
     private static readonly TimeSpan ShortTimeout = TimeSpan.FromMinutes(5);
@@ -181,6 +185,7 @@ public sealed class ProvisionJob(ISshRunner ssh, ISourceCache sources, IVmApplie
             await BeginAsync(context, "finish", cancel);
             await WriteDeviceKeysAsync(context, run);
             await EnrolBackupKeyAsync(context, run);
+            await ReportAgentsAsync(context, run, run.RestoreFollows);
             var rebooted = await FinishAsync(context, run, seedUser);
             context.Done(rebooted ? "the VM reboots in a few seconds" : "the VM keeps running");
 
@@ -237,6 +242,7 @@ public sealed class ProvisionJob(ISshRunner ssh, ISourceCache sources, IVmApplie
             await BeginAsync(context, "restore", cancel);
             await RestoreStepAsync(context, restore);
             var warnings = run.DeferProjectCommands ? await ProjectCommandsAfterRestoreAsync(context, cancel) : [];
+            await ReportAgentsAsync(context, run, false);
             return new JobOutcome(new RestoreJobResult(restore.BackupId, true, null, null, null, warnings.Count == 0 ? null : warnings));
         }
         catch (ProvisionStepException ex)
@@ -532,6 +538,36 @@ public sealed class ProvisionJob(ISshRunner ssh, ISourceCache sources, IVmApplie
         {
             context.Line("the account's backup key was not enrolled (no SSH or sudo)");
         }
+    }
+
+    /// <summary>
+    /// The guest's agent report, read as the job's last word (R10): the coding agents and whether each is signed in now
+    /// that the run (and its restore) is done, so the pages are right the moment the job ends. Recorded as a report from
+    /// outside a job: a sign-in the run lost is a lost sign-in, unless <paramref name="restoreFollows"/>. Not required: the
+    /// guest's timer reports later.
+    /// </summary>
+    private async Task ReportAgentsAsync(Context context, ProvisionRun run, bool restoreFollows)
+    {
+        IReadOnlyList<VmAgentVersion>? reported = null;
+        try
+        {
+            var read = await RootCommandAsync(context with { Quiet = true }, context.Step, ProvisionScript.AgentReportCommand, ShortTimeout);
+            if (read.ExitCode == 0) reported = VmAgents.Parse(string.Join('\n', read.Lines));
+        }
+        catch (ProvisionStepException)
+        {
+            // Unreachable or no sudo: the guest's timer reports.
+        }
+
+        if (reported is null)
+        {
+            context.Line("the coding agents are reported by the VM's next usage report");
+            return;
+        }
+
+        var desired = await desiredStates.GetDesiredForAsync(run.Vm, CancellationToken.None);
+        await agents.SaveAsync(run.Vm, reported, clock.UtcNow, CancellationToken.None, VmAgents.Chosen(desired?.Desired), busy: restoreFollows);
+        context.Line("coding agents reported");
     }
 
     /// <summary>

@@ -120,6 +120,50 @@ public sealed class ProvisionJobTests
         Assert.Contains(job.Progress, p => p.Text == "the account's backup key is enrolled");
     }
 
+    [Fact]
+    public async Task The_finish_step_records_the_guests_agent_report_so_sign_ins_are_right_when_the_job_ends()
+    {
+        var ssh = new FakeSshRunner
+        {
+            AgentReport = """[{"tool":"claude","version":"2.1.4","signedIn":false},{"tool":"codex","version":"0.98.0","signedIn":false}]""",
+        };
+        await using var h = await ProvisionHarness.StartAsync(ssh);
+        using (var vm = h.App.CreateVmTokenClient(h.VmToken!))
+        {
+            // Claude (the VM's chosen agent) was signed in before the run; Codex was never reported (a new engine knows nothing yet).
+            Assert.Equal(HttpStatusCode.NoContent, (await vm.PostJsonAsync($"/api/v1/vms/{ProvisionHarness.Vm}/usage", new
+            {
+                generatedAt = DateTimeOffset.UtcNow, days = Array.Empty<object>(), agents = new[] { new { tool = "claude", version = "2.1.4", signedIn = true } },
+            })).StatusCode);
+        }
+
+        var job = await h.RunAsync("click-agents");
+        Assert.Equal(JobState.Succeeded, job.State);
+
+        // The report the job reads at its end is the last word (R10): signed out is signed out, not "unknown" (R12),
+        // and a sign-in the run lost is a lost sign-in.
+        var agents = await (await h.Client.GetAsync($"/api/v1/vms/{ProvisionHarness.Vm}/agents")).ReadAsync<VmAgentsResponse>();
+        Assert.Equal(false, agents.Agents.Single(a => a.Tool == "claude").SignedIn);
+        Assert.Equal(false, agents.Agents.Single(a => a.Tool == "codex").SignedIn);
+        Assert.NotNull(agents.Agents.Single(a => a.Tool == "claude").LostAt);
+        Assert.Null(agents.Agents.Single(a => a.Tool == "codex").LostAt);
+        // Read as root before the reboot.
+        var commands = ssh.Commands.ToList();
+        var report = commands.FindIndex(c => c.Contains("construct-usage-report.sh", StringComparison.Ordinal) && c.Contains("--agents", StringComparison.Ordinal));
+        Assert.True(report >= 0, "the guest's agent report was read");
+        Assert.True(report < commands.FindIndex(c => c.Contains("sleep 3; reboot", StringComparison.Ordinal)));
+        Assert.Contains(job.Progress, p => p.Step == "finish" && p.Text == "coding agents reported");
+    }
+
+    [Fact]
+    public async Task A_guest_without_an_agent_report_finishes_all_the_same()
+    {
+        await using var h = await ProvisionHarness.StartAsync();
+        var job = await h.RunAsync("click-no-report");
+        Assert.Equal(JobState.Succeeded, job.State);
+        Assert.Empty((await (await h.Client.GetAsync($"/api/v1/vms/{ProvisionHarness.Vm}/agents")).ReadAsync<VmAgentsResponse>()).Agents);
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
