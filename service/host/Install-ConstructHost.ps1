@@ -143,6 +143,11 @@
     (exit code 3; nothing restarts by itself, run the installer again afterwards).
     Without it the installer asks as before, the Hyper-V restart prompt included.
 
+.PARAMETER Channel
+    The update channel of the device that installs this engine for itself (stable, nightly or
+    an https manifest URL): the engine's update channel until its updates settings are saved
+    (Constructd:HostAdmin:Updates:Channel). Empty keeps what an earlier install set.
+
 .PARAMETER BootstrapKeyPath
     With -Solo: the old client's bootstrap private key (keys\bootstrap_ed25519, with
     its .pub beside it), so VMs it installed stay reachable by the engine. Without it a
@@ -226,6 +231,9 @@ param(
     [string]$TokenFile = "",
 
     [string]$BootstrapKeyPath = "",
+
+    [ValidatePattern('^$|^(stable|nightly|main)$|^https://\S+$')]
+    [string]$Channel = "",
 
     [string]$ResultFile = ""
 )
@@ -1035,6 +1043,21 @@ function Set-ConstructHostFirewall {
     Write-Note "The forward ranges are what makes a VM reachable from the LAN; narrow the rules' scope if that is too broad for this network."
 }
 
+function Set-ConstructInstallerChannel {
+    <#
+    .SYNOPSIS
+        The installing device's update channel into the HostAdmin settings
+        (Updates.Channel): the engine follows it until its updates settings are saved.
+        Nothing changes without one.
+    #>
+    param([Parameter(Mandatory = $true)]$HostAdmin, [string]$Channel)
+    if (-not $Channel) { return }
+    if (-not $HostAdmin.PSObject.Properties['Updates']) {
+        $HostAdmin | Add-Member -NotePropertyName Updates -NotePropertyValue ([pscustomobject]@{})
+    }
+    $HostAdmin.Updates | Add-Member -NotePropertyName Channel -NotePropertyValue $Channel -Force
+}
+
 function Add-ConstructSoloSettings {
     <#
         What a solo install's settings add to a shared host's: the solo flag (the LAN
@@ -1580,6 +1603,7 @@ if ($savedHostAdmin.Source.PSObject.Properties['RootDir'] -and $savedHostAdmin.S
 } else {
     $savedHostAdmin.Source | Add-Member -NotePropertyName RootDir -NotePropertyValue $sourceRootDir -Force
 }
+Set-ConstructInstallerChannel -HostAdmin $savedHostAdmin -Channel $Channel
 # Encrypted config backups of the VMs (docs/remote-host.md); an operator's own directory is kept.
 $backupRootDir = Join-Path $DataDir 'backups'
 if ($priorSettings -and $priorSettings.Constructd -and $priorSettings.Constructd.PSObject.Properties['Backups'] -and

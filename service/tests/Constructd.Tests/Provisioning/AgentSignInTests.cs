@@ -154,9 +154,13 @@ public sealed class AgentSignInTests
         Assert.Equal(1455, shown.Browser!.Port);
         Assert.StartsWith("https://sign-in.example/codex/authorize?redirect_uri=http%3A%2F%2Flocalhost%3A1455", shown.Browser.Url, StringComparison.Ordinal);
 
-        // Over: the link goes with the rest of what the sign-in showed.
+        // Over: the link goes with the rest of what the sign-in showed. The engine's log keeps that the CLI opened one, and
+        // to which port, never the link: a sign-in that ended without a browser can be told from one whose forward failed.
         Assert.Equal(HttpStatusCode.NoContent, (await h.Client.DeleteAsync($"{Url}/codex/sign-in?session={started.Id}")).StatusCode);
         Assert.Null((await Read(h.Client, "codex"))!.Browser);
+        var logs = h.App.Logs.AllText();
+        Assert.Contains($"The sign-in {started.Id} of codex on {ProvisionHarness.Vm} opened a link that returns to port 1455.", logs, StringComparison.Ordinal);
+        Assert.DoesNotContain("sign-in.example", logs, StringComparison.Ordinal);
     }
 
     [Fact]

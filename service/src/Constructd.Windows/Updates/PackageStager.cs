@@ -23,7 +23,7 @@ public sealed class PackageStager(IReleaseSource source, IHostConfigStore config
         _ => throw new UpdateException("incompatible")
     };
     public string UpdatesDir => Path.Combine(Path.GetDirectoryName(Path.GetFullPath(options.DatabasePath))!, "updates");
-    public async Task<UpdatesConfig> SettingsAsync(CancellationToken ct) => HostUpdateTrust.Apply(await config.GetAsync<UpdatesConfig>("updates", ct) ?? HostAdminDefaults.Updates, options);
+    public async Task<UpdatesConfig> SettingsAsync(CancellationToken ct) => HostUpdateTrust.Settings(await config.GetAsync<UpdatesConfig>("updates", ct), options);
     public async Task<CheckedRelease?> CheckAsync(string? releaseTag, CancellationToken ct)
     {
         var settings = await SettingsAsync(ct);

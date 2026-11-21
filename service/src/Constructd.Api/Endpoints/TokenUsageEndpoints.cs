@@ -101,7 +101,9 @@ public static class TokenUsageEndpoints
             var desired = await http.RequestServices.GetRequiredService<IVmDesiredStateSource>().GetDesiredForAsync(lookup.Vm!, ct);
             var chosen = desired is null ? null
                 : (CodingAgents.FromAiTools(CodingAgents.AiTools(desired.Desired)) ?? CodingAgents.Default).Select(AgentSignInScript.Tool).ToArray();
-            await http.RequestServices.GetRequiredService<VmAgents>().SaveAsync(lookup.Vm!, agents, clock.UtcNow, ct, chosen);
+            // While a job works on the VM (its gate is held), a signed-out agent is no lost sign-in yet (F35).
+            var busy = http.RequestServices.GetRequiredService<IVmOperationGate>().IsHeld(lookup.Vm!.Name, out _);
+            await http.RequestServices.GetRequiredService<VmAgents>().SaveAsync(lookup.Vm!, agents, clock.UtcNow, ct, chosen, busy);
         }
         http.SetAuditDetail($"rows={days.Count}");
         return TypedResults.NoContent();

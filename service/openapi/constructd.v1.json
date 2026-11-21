@@ -12432,6 +12432,22 @@
           }
         }
       },
+      "JobOverallResponse": {
+        "required": [
+          "percent",
+          "label"
+        ],
+        "type": "object",
+        "properties": {
+          "percent": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "label": {
+            "type": "string"
+          }
+        }
+      },
       "JobProgressResponse": {
         "required": [
           "at",
@@ -12464,6 +12480,19 @@
               "integer"
             ],
             "format": "int32"
+          },
+          "overall": {
+            "type": [
+              "null",
+              "integer"
+            ],
+            "format": "int32"
+          },
+          "label": {
+            "type": [
+              "null",
+              "string"
+            ]
           }
         }
       },
@@ -12537,6 +12566,25 @@
               "null",
               "string"
             ]
+          },
+          "overall": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/JobOverallResponse"
+              }
+            ]
+          },
+          "warnings": {
+            "type": [
+              "null",
+              "array"
+            ],
+            "items": {
+              "type": "string"
+            }
           }
         }
       },

@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http.Json;
 using Constructd.Api.Contracts;
+using Constructd.Core.Abstractions;
 using Constructd.Core.Domain;
 using Constructd.Core.Services;
 using Constructd.Tests.Support;
@@ -63,6 +64,40 @@ public sealed class LostSignInTests
         var notices = seen.Where(c => c.Type == "agent-notice.changed").ToList();
         Assert.Equal(["codex", "codex", "claude"], notices.Select(c => c.Id));
         Assert.All(notices, c => Assert.Equal((ProvisionHarness.Vm, "alice", true), (c.Vm, c.Owner, c.OwnerOnly)));
+    }
+
+    [Fact]
+    public async Task While_a_job_works_on_the_vm_a_signed_out_report_is_no_lost_sign_in_and_the_next_report_after_it_decides()
+    {
+        await using var h = await ProvisionHarness.StartAsync();
+        await ReportAsync(h, ("claude", true), ("codex", true));
+
+        // A reinstall (any job holding the VM) rebuilds it: its fresh guest reports every agent signed out (F35).
+        await using (await h.App.Service<IVmOperationGate>().AcquireAsync(ProvisionHarness.Vm, "job-1", default))
+        {
+            await ReportAsync(h, ("claude", false), ("codex", false));
+            Assert.Empty(await NoticesAsync(h.Client));
+            Assert.Equal(true, (await AgentAsync(h, "claude")).SignedIn);
+        }
+
+        // After the job: the restore brought Claude back; Codex is really gone.
+        await ReportAsync(h, ("claude", true), ("codex", false));
+        Assert.Equal("codex", Assert.Single(await NoticesAsync(h.Client)).Agent);
+    }
+
+    [Fact]
+    public async Task An_agent_a_report_leaves_out_during_a_job_keeps_its_sign_in_so_a_loss_after_the_job_is_still_told()
+    {
+        await using var h = await ProvisionHarness.StartAsync();
+        await ReportAsync(h, ("claude", true), ("codex", true));
+
+        // Mid-provision Claude's check does not answer: the report names Codex only.
+        await using (await h.App.Service<IVmOperationGate>().AcquireAsync(ProvisionHarness.Vm, "job-1", default))
+            await ReportAsync(h, ("codex", true));
+        Assert.Equal(true, (await AgentAsync(h, "claude")).SignedIn);
+
+        await ReportAsync(h, ("claude", false), ("codex", true));
+        Assert.Equal("claude-code", Assert.Single(await NoticesAsync(h.Client)).Agent);
     }
 
     [Fact]

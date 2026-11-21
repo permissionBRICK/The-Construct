@@ -122,13 +122,14 @@ public static partial class ProvisionScript
     }
 
     /// <summary>The variables of the project-commands phase (<c>Invoke-DeferredProjectCommands</c>).</summary>
-    public static IReadOnlyList<KeyValuePair<string, string>> ProjectPhaseEnvironment(ProvisionEnvInput input)
+    /// <param name="rebootFollows">Whether the VM reboots right after the phase; by default the provision's rule (the bootstrap path reboots).</param>
+    public static IReadOnlyList<KeyValuePair<string, string>> ProjectPhaseEnvironment(ProvisionEnvInput input, bool? rebootFollows = null)
     {
         var s = input.Desired.Settings;
         var vars = new List<KeyValuePair<string, string>>
         {
             new("PROVISION_PHASE", "project-commands"),
-            new("REBOOT_AFTER_PROVISION", Bool(!input.ConnectedAsRoot)),
+            new("REBOOT_AFTER_PROVISION", Bool(rebootFollows ?? !input.ConnectedAsRoot)),
             new("CHECKOUT_PROJECTS", Bool(s.CheckoutProjects ?? true)),
         };
         if (!input.SecretNames.Contains(CloneCredentialsVariable)) vars.Add(new(CloneCredentialsVariable, string.Empty));
@@ -214,6 +215,24 @@ public static partial class ProvisionScript
 
     [GeneratedRegex(@"\x1B\[[0-?]*[ -/]*[@-~]")]
     private static partial Regex Ansi();
+
+    /// <summary>What <c>provision.sh</c> prints before each section: <c>::construct-step LABEL|TITLE</c>.</summary>
+    public const string StepMarker = "::construct-step ";
+
+    /// <summary>What a section that measures itself prints: <c>::construct-progress PERCENT</c>.</summary>
+    public const string ProgressMarker = "::construct-progress ";
+
+    /// <summary>A step marker's label (1-3 words) and title; null for a line that is not one.</summary>
+    public static (string Label, string Title)? ParseStepMarker(string line)
+    {
+        if (!line.StartsWith(StepMarker, StringComparison.Ordinal)) return null;
+        var rest = line[StepMarker.Length..].Trim();
+        var bar = rest.IndexOf('|', StringComparison.Ordinal);
+        if (bar <= 0 || bar == rest.Length - 1) return null;
+        var label = rest[..bar].Trim();
+        var title = rest[(bar + 1)..].Trim();
+        return label.Length is 0 or > 64 || title.Length is 0 or > 256 ? null : (label, title);
+    }
 
     /// <summary>A guest output line as it is stored: no colour or cursor sequences, no carriage return.</summary>
     public static string CleanLine(string line) => Ansi().Replace(line, string.Empty).Replace("\r", string.Empty, StringComparison.Ordinal);

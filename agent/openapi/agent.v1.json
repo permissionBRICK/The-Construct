@@ -1905,7 +1905,7 @@
         "tags": [
           "device"
         ],
-        "description": "Changes what is given: the release channel, automatic updates, start with the OS.",
+        "description": "Changes what is given: the release channel (this PC's engine follows it), automatic updates, start with the OS.",
         "operationId": "SetDeviceSettings",
         "requestBody": {
           "content": {

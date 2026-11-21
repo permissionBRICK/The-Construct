@@ -208,7 +208,7 @@ export function toBackup(b: BackupSummary): Backup {
 const PROVISION_STEPS: [string, string][] = [
   ['source', 'Source'], ['copy', 'Copying'], ['provision', 'Provisioning'], ['restore', 'Restoring'], ['project-commands', 'Project commands'], ['applied', 'Checking'], ['finish', 'Finishing'],
 ];
-const REINSTALL_STEPS: [string, string][] = [['backup', 'Backing up'], ['delete', 'Deleting'], ['create', 'Creating'], ...PROVISION_STEPS];
+const REINSTALL_STEPS: [string, string][] = [['media', 'Preparing image'], ['backup', 'Backing up'], ['delete', 'Deleting'], ['create', 'Creating'], ...PROVISION_STEPS];
 const RESTORE_STEPS: [string, string][] = [['restore', 'Restoring']];
 const STEPS: Record<string, [string, string][]> = { provision: PROVISION_STEPS, reinstall: REINSTALL_STEPS, restore: RESTORE_STEPS };
 

@@ -7,6 +7,7 @@ using System.Text.Json.Nodes;
 using Construct.Agent.Engines;
 using Construct.Agent.Tests.Support;
 using Constructd.Core.Domain;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace Construct.Agent.Tests;
 
@@ -25,6 +26,8 @@ public sealed class EngineSetupTests : IAsyncDisposable
     private TestAgent _agent = null!;
     private string _token = "";
     private string? _sha;
+    private JsonNode? _payload;
+    private string _script = "";
 
     public EngineSetupTests() => _platform = new FakeUpgradePlatform(_fixture);
 
@@ -75,6 +78,8 @@ public sealed class EngineSetupTests : IAsyncDisposable
         Assert.Equal(File_(LocalEngineSetup.ResultFileName), payload["resultFile"]!.GetValue<string>());
         Assert.Equal(File_(LocalEngineSetup.LogFileName), payload["log"]!.GetValue<string>());
         Assert.True(File.Exists(payload["zip"]!.GetValue<string>()), "The checked package is there for the elevated part");
+        _payload = payload;
+        _script = script;
         if (token)
             File.WriteAllText(payload["tokenFile"]!.GetValue<string>(),
                 new JsonObject { ["url"] = _engine.Url, ["user"] = "alice", ["token"] = _token, ["certificateSha256"] = _engine.Pin }.ToJsonString());
@@ -87,6 +92,35 @@ public sealed class EngineSetupTests : IAsyncDisposable
         await _agent.PostAsync("api/engines/local/setup", null, HttpStatusCode.Accepted);
         await _agent.Host.EngineSetup.Work;
         return await _agent.GetAsync("api/engines/local/setup");
+    }
+
+    [Fact]
+    public async Task The_engine_updates_on_the_devices_channel_from_its_install_on()
+    {
+        await StartAsync();
+        Installer("done");
+        await SetupAsync();
+
+        // The installer gets the device's channel, when it takes one (F17).
+        Assert.Equal(Manifest, _payload!["channel"]!.GetValue<string>());
+        Assert.Contains("Parameters.ContainsKey('Channel')) { $arguments.Channel = $p.channel }", _script, StringComparison.Ordinal);
+
+        // A later change of the device's channel follows to this PC's engine.
+        var config = _engine.Services.GetRequiredService<Constructd.Core.Abstractions.IHostConfigStore>();
+        using (var put = await _agent.Api.PutAsJsonAsync("api/device/settings", new { channel = "nightly" }))
+            Assert.Equal(HttpStatusCode.OK, put.StatusCode);
+        Assert.Equal("nightly", (await config.GetAsync<UpdatesConfig>("updates", default))!.Channel);
+        using (var put = await _agent.Api.PutAsJsonAsync("api/device/settings", new { channel = "stable" }))
+            Assert.Equal(HttpStatusCode.OK, put.StatusCode);
+        var updates = (await config.GetAsync<UpdatesConfig>("updates", default))!;
+        Assert.Equal("stable", updates.Channel);
+        Assert.Equal(Constructd.Core.Configuration.HostAdminDefaults.Updates.Repository, updates.Repository);
+
+        // An engine that is away leaves the device's own change standing.
+        await _engine.DisposeAsync();
+        using (var put = await _agent.Api.PutAsJsonAsync("api/device/settings", new { channel = "nightly" }))
+            Assert.Equal(HttpStatusCode.OK, put.StatusCode);
+        Assert.Equal("nightly", (await _agent.GetAsync("api/device/settings"))["channel"]!.GetValue<string>());
     }
 
     [Fact]

@@ -61,13 +61,39 @@ public sealed class ProvisionJob(ISshRunner ssh, ISourceCache sources, IVmApplie
     /// <summary>The backup key <c>E</c> (<c>AGE-SECRET-KEY-1…</c>) of the backup a run restores.</summary>
     public const string BackupKeySecret = "backupKey";
 
+    /// <summary>How many sections a first run expects of <c>provision.sh</c>, which names them only as they come.</summary>
+    public const int ExpectedGuestSections = 40;
+
+    /// <summary>The bar's words for an engine step (1-3 words); <c>provision.sh</c> names its own sections.</summary>
+    public static string Label(string step) => step switch
+    {
+        "source" => "Preparing source",
+        "copy" => "Copying files",
+        "provision" => "Provisioning",
+        "restore" => "Restoring backup",
+        "project-commands" => "Project commands",
+        "applied" => "Checking",
+        "finish" => "Finishing",
+        "media" => "Preparing image",
+        "backup" => "Backing up",
+        "delete" => "Deleting VM",
+        "create" => "Creating VM",
+        _ => step,
+    };
+
+    /// <summary>The sub-steps a first provision expects, for the bar's weights (<see cref="JobProgressTracker.Expect"/>).</summary>
+    public static IEnumerable<string> ExpectedSteps(bool restore) => Steps.Where(s => restore || s != "restore");
+
     public async Task<JobOutcome> RunAsync(ProvisionRun run, IProgress<string> progress, CancellationToken cancel)
     {
+        JobProgressTracker.Current?.Expect(ExpectedSteps(run.Restore is not null), GuestStep, ExpectedGuestSections);
         var context = new Context(run, progress);
         var seedUser = run.Desired.Desired.Settings.SeedUser ?? run.DefaultSeedUser;
         // A provision (also of a reinstalled guest) may start from a fresh disk: device keys are written again.
         deviceKeys.Forget(run.Vm);
         var errors = new List<ProvisionStepError>();
+        // A failure that is no optional guest step's (the deferred phase broke off): the job fails after the run.
+        var phaseBroken = false;
         string? payloadHash = null;
         string? tarPath = null;
         try
@@ -132,11 +158,14 @@ public sealed class ProvisionJob(ISshRunner ssh, ISourceCache sources, IVmApplie
                 var phase = await GuestScriptAsync(context, "project-commands", ProvisionScript.ProvisionCommand(phaseVars), phaseVars,
                     [ProvisionScript.CloneCredentialsVariable]);
                 var phaseResult = ProvisionScript.ParseResult(phase.Lines);
-                // Invoke-DeferredProjectCommands: an unreadable result or a hard exit counts as one failure.
-                errors.AddRange(!phaseResult.IsValid || phase.ExitCode is not (0 or 3)
+                // Invoke-DeferredProjectCommands: an unreadable result or a hard exit counts as one failure, and it is
+                // no optional step's: the run goes on (applied state, keys, reboot) and the job fails at its end.
+                phaseBroken = !phaseResult.IsValid || phase.ExitCode is not (0 or 3);
+                errors.AddRange(phaseBroken
                     ? [new ProvisionStepError(ProvisionScript.ProjectCommandsTitle, phase.ExitCode, "")]
                     : phaseResult.Errors.Select(Redacted));
-                context.Done("project provisioning commands finished");
+                if (phaseBroken) context.Report("project-commands", "failed", $"the project commands phase broke off (exit {phase.ExitCode})");
+                else context.Done("project provisioning commands finished");
             }
             else
             {
@@ -155,9 +184,11 @@ public sealed class ProvisionJob(ISshRunner ssh, ISourceCache sources, IVmApplie
             var rebooted = await FinishAsync(context, run, seedUser);
             context.Done(rebooted ? "the VM reboots in a few seconds" : "the VM keeps running");
 
-            var outcome = Result(run, payloadHash, errors, null, null, rebooted, appliedState);
-            if (errors.Count > 0)
-                throw new JobFailureException($"provision-steps-failed: {errors.Count} guest step(s) failed.", outcome);
+            // Optional guest steps that failed are warnings: the job is done (F41). A broken phase is a failure.
+            var outcome = Result(run, payloadHash, errors, phaseBroken ? "project-commands" : null, phaseBroken ? "project-commands-failed" : null,
+                rebooted, appliedState);
+            if (phaseBroken)
+                throw new JobFailureException("project-commands-failed: the project commands phase broke off.", outcome);
             return new JobOutcome(outcome);
         }
         catch (ProvisionStepException ex)
@@ -192,15 +223,21 @@ public sealed class ProvisionJob(ISshRunner ssh, ISourceCache sources, IVmApplie
     /// The <c>restore</c> job (design 7.1): one chosen stored backup into the running VM, as the
     /// client's <c>backup-restore</c> action does. The key came from a device, in the bag.
     /// </summary>
+    /// <remarks>
+    /// With <see cref="ProvisionRun.DeferProjectCommands"/> (a pre-reinstall backup), the project commands run again after
+    /// the restore; their failures are the job's warnings, since the restore itself is done and is never run twice.
+    /// </remarks>
     public async Task<JobOutcome> RestoreOnlyAsync(ProvisionRun run, IProgress<string> progress, CancellationToken cancel)
     {
+        JobProgressTracker.Current?.Expect(run.DeferProjectCommands ? ["restore", "project-commands"] : ["restore"], GuestStep, run.DeferProjectCommands ? 2 : 0);
         var context = new Context(run, progress) { Step = "restore" };
         var restore = run.Restore ?? throw new InvalidOperationException("A restore run names its backup.");
         try
         {
             await BeginAsync(context, "restore", cancel);
             await RestoreStepAsync(context, restore);
-            return new JobOutcome(new RestoreJobResult(restore.BackupId, true, null, null, null));
+            var warnings = run.DeferProjectCommands ? await ProjectCommandsAfterRestoreAsync(context, cancel) : [];
+            return new JobOutcome(new RestoreJobResult(restore.BackupId, true, null, null, null, warnings.Count == 0 ? null : warnings));
         }
         catch (ProvisionStepException ex)
         {
@@ -215,6 +252,26 @@ public sealed class ProvisionJob(ISshRunner ssh, ISourceCache sources, IVmApplie
             throw new JobFailureException($"restore-failed: {safe}", new RestoreJobResult(restore.BackupId, false, context.Step, "restore-failed", safe));
         }
         finally { run.Secrets.Clear(); }
+    }
+
+    /// <summary>The project phase of <c>provision.sh</c> after a restore job's restore; the VM keeps running.</summary>
+    private async Task<IReadOnlyList<ProvisionStepError>> ProjectCommandsAfterRestoreAsync(Context context, CancellationToken cancel)
+    {
+        var run = context.Run;
+        await BeginAsync(context, "project-commands", cancel);
+        var input = new ProvisionEnvInput(run.Vm.Name, run.Desired.Desired, run.DefaultSeedUser, run.Commit, run.Target.IsRoot, true,
+            new HashSet<string>(StringComparer.Ordinal), null, run.Desired.Hash, run.Channel);
+        var vars = ProvisionScript.ProjectPhaseEnvironment(input, rebootFollows: false);
+        var phase = await GuestScriptAsync(context, "project-commands", ProvisionScript.ProvisionCommand(vars), vars, []);
+        var result = ProvisionScript.ParseResult(phase.Lines);
+        if (!result.IsValid || phase.ExitCode is not (0 or 3))
+        {
+            context.Report("project-commands", "failed", $"the project commands phase broke off (exit {phase.ExitCode})");
+            return [new ProvisionStepError(ProvisionScript.ProjectCommandsTitle, phase.ExitCode, "")];
+        }
+
+        context.Done(result.ErrorCount == 0 ? "project provisioning commands finished" : $"project provisioning commands finished with {result.ErrorCount} error(s)");
+        return [.. result.Errors.Select(e => e with { Title = run.Secrets.Redact(e.Title), LogPath = run.Secrets.Redact(e.LogPath) })];
     }
 
     /// <summary>
@@ -327,16 +384,44 @@ public sealed class ProvisionJob(ISshRunner ssh, ISourceCache sources, IVmApplie
         string? failedStep, string? code, bool rebooted, VmAppliedState? appliedState)
     {
         var failed = errors.ToArray();
-        return new(run.Commit, payloadHash ?? "", run.Desired.Hash, run.Channel, failed.Length == 0 && failedStep is null,
-            failedStep, code ?? (failed.Length > 0 ? "provision-steps-failed" : null), failed, ProvisionScript.FixPrompt(failed), rebooted, appliedState);
+        // Failed optional steps alone leave it succeeded: they are the job's warnings (JobWarnings).
+        return new(run.Commit, payloadHash ?? "", run.Desired.Hash, run.Channel, failedStep is null,
+            failedStep, code, failed, ProvisionScript.FixPrompt(failed), rebooted, appliedState);
     }
 
     private async Task BeginAsync(Context context, string step, CancellationToken cancel)
     {
         cancel.ThrowIfCancellationRequested();
         context.Step = step;
+        JobProgressTracker.Current?.Begin(step, Label(step));
         await phases.SetPhaseAsync(context.Run.JobId, step, CancellationToken.None);
         context.Report(step, "running", null);
+    }
+
+    /// <summary>The key prefix of the guest's own sections on the bar (<c>provision.sh</c>'s step markers).</summary>
+    public const string GuestStep = "guest:";
+
+    /// <summary>
+    /// A progress marker of the guest (<c>::construct-step LABEL|TITLE</c> before each <c>provision.sh</c> section,
+    /// <c>::construct-progress PERCENT</c> from a section that measures itself) goes to the bar, never to the log.
+    /// </summary>
+    private static bool Marker(string line)
+    {
+        if (line.StartsWith(ProvisionScript.StepMarker, StringComparison.Ordinal))
+        {
+            if (ProvisionScript.ParseStepMarker(line) is { } section) JobProgressTracker.Current?.Begin(GuestStep + section.Title, section.Label);
+            return true;
+        }
+
+        if (line.StartsWith(ProvisionScript.ProgressMarker, StringComparison.Ordinal))
+        {
+            if (int.TryParse(line.AsSpan(ProvisionScript.ProgressMarker.Length).Trim(), System.Globalization.NumberStyles.None,
+                    System.Globalization.CultureInfo.InvariantCulture, out var percent))
+                JobProgressTracker.Current?.Fraction(percent / 100d);
+            return true;
+        }
+
+        return false;
     }
 
     private sealed record GuestRun(int ExitCode, IReadOnlyList<string> Lines);
@@ -505,6 +590,7 @@ public sealed class ProvisionJob(ISshRunner ssh, ISourceCache sources, IVmApplie
             return new LineProgress(raw =>
             {
                 var line = ProvisionScript.CleanLine(raw);
+                if (Marker(line)) return;
                 collect?.Add(line);
                 if (!Quiet && filter.Pass(line) is { } shown) Report(Step, "running", shown);
             });

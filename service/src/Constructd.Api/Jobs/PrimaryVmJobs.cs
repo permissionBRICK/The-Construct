@@ -15,6 +15,8 @@ public sealed class PrimaryVmJobs(IServiceScopeFactory scopes, IVmOperationGate 
         // The request's secrets live as long as this job and no longer, whatever its outcome.
         try
         {
+            JobProgressTracker.Current?.Expect(desired is null ? [VmJobs.InstallStep] : [VmJobs.InstallStep, .. ProvisionJob.ExpectedSteps(restore: false)],
+                ProvisionJob.GuestStep, desired is null ? 0 : ProvisionJob.ExpectedGuestSections);
             await using var gate = await gates.AcquireAsync(admitted.Name, job.Id, ct);
             var created = await BuildAsync(job, admitted, descriptor, reservationIds, redownload, progress, ct);
             if (desired is null || created is not { Result: VmCreateResult result, OneTimeSecret: { } token }) return created;

@@ -136,6 +136,13 @@ public sealed class ReinstallJobTests : IAsyncDisposable
         Assert.Contains(guest.Calls, c => c.StandardInput?.Contains(ProvisionScript.VmTokenVariable + "=", StringComparison.Ordinal) == true);
         Assert.NotEqual(vm.VmTokenHash, (await h.App.Vms.GetAsync(ProvisionHarness.Vm, default))!.VmTokenHash);
         Assert.Equal("other.test ssh-ed25519 AAAAkeep\n", await File.ReadAllTextAsync(target.KnownHostsFile!));
+
+        // One bar over the whole reinstall (F24/F32): it never goes back, names the install, and ends at 100.
+        var bar = job.Progress.Where(p => p.Overall is not null).Select(p => (p.Overall!.Value, p.Label!)).ToList();
+        Assert.Equal(bar.Select(b => b.Value).Order(), bar.Select(b => b.Value));
+        Assert.Contains(bar, b => b.Item2 == "Installing Ubuntu");
+        Assert.Equal(["Preparing image", "Backing up", "Deleting VM", "Creating VM", "Installing Ubuntu"], bar.Select(b => b.Item2).Distinct().Take(5));
+        Assert.Equal(100, job.Overall!.Percent);
     }
 
     [Fact]
@@ -261,6 +268,36 @@ public sealed class ReinstallJobTests : IAsyncDisposable
         var again = await ReinstallAsync(h, "reinstall-2");
         Assert.True(again.State == JobState.Succeeded, again.Error);
         Assert.Equal([_pc.Fingerprint], guest.Recipients.Keys);
+    }
+
+    [Fact]
+    public async Task Install_media_that_cannot_be_had_stops_the_reinstall_before_the_backup_and_the_delete()
+    {
+        var guest = new FakeBackupGuest();
+        var h = await HostAsync(guest);
+        var iso = h.App.Service<Constructd.Fakes.FakeIsoBuilder>();
+        iso.Failure = new InvalidOperationException("no source ISO");
+
+        var job = await ReinstallAsync(h, "reinstall-1");
+
+        Assert.Equal(JobState.Failed, job.State);
+        var result = Result<ReinstallJobResult>(job);
+        Assert.Equal(("media", "media-unavailable"), (result.FailedStep, result.Code));
+        Assert.False(result.VmDeleted);
+        Assert.Null(result.BackupId);
+        Assert.Empty(guest.Made);
+        Assert.DoesNotContain(h.App.Driver.Calls, c => c.StartsWith("remove:", StringComparison.Ordinal));
+        Assert.Equal(VmState.Running, h.App.Driver.StateOf(ProvisionHarness.Vm));
+        Assert.Equal([_pc.Fingerprint], guest.Recipients.Keys);
+
+        // With media the reinstall builds it first and creates the VM from what it built, once.
+        iso.Failure = null;
+        var built = iso.Built.Count;
+        var again = await ReinstallAsync(h, "reinstall-2");
+        Assert.True(again.State == JobState.Succeeded, again.Error);
+        Assert.Equal([ProvisionHarness.Vm], iso.Built.Skip(built));
+        var steps = again.Progress.Where(p => p.State == "running" && p.Text == $"{p.Step}: running").Select(p => p.Step).ToList();
+        Assert.Equal(["media", "backup", "delete", "create"], steps.Take(4));
     }
 
     [Fact]
@@ -471,8 +508,12 @@ public sealed class ReinstallJobTests : IAsyncDisposable
         Assert.True(job.State == JobState.Succeeded, job.Error);
         Assert.Equal(id, Result<RestoreJobResult>(job).BackupId);
         Assert.Equal([id], guest.Restored);
+        // Not a pre-reinstall backup: the project commands are not run again.
+        Assert.DoesNotContain(guest.Commands, c => c.Contains("PROVISION_PHASE", StringComparison.Ordinal));
 
         // A wrong key is the guest's decryption failure; the VM was not touched, so it may be run again.
+        // A failed restore starts the repair agent by itself, which holds the VM while it sets up; not this test's subject.
+        await h.App.Service<IHostConfigStore>().SetAsync("repair", new RepairConfig(Auto: false), "test", default);
         var wrong = await RestoreAsync(h, "restore-2", id, "AGE-SECRET-KEY-1WRONG");
         Assert.Equal("restore-failed", Result<RestoreJobResult>(wrong).Code);
         Assert.True((await RestoreAsync(h, "restore-3", id, guest.Made[id].Key)).State == JobState.Succeeded);
@@ -561,19 +602,30 @@ public sealed class ReinstallJobTests : IAsyncDisposable
                 Assert.Equal([result.BackupId!], guest.Restored);
                 break;
             case "create" or "provision":
-                // After the delete, with the key gone with the engine: the VM is back and provisioned, the
-                // original backup is untouched and waits for a device's restore job.
-                Assert.Equal(JobState.Failed, retry.State);
-                Assert.Equal("restore-needs-device", result.Code);
+                // After the delete, with the key gone with the engine: the VM is reinstalled and provisioned (done), and
+                // the result names the backup a device restores, with its time, for a one-click restore (F37). The
+                // original backup is untouched and waits for it.
+                Assert.True(retry.State == JobState.Succeeded, retry.Error);
+                Assert.Equal(("restore-needs-device", true, false), (result.Code, result.RestoreNeeded, result.Restored));
+                Assert.StartsWith("Reinstalled. Restore your settings from the backup of ", result.Message, StringComparison.Ordinal);
                 var id = Assert.Single(madeBefore);
                 Assert.Equal(id, result.BackupId);
                 Assert.Equal(id, Assert.Single(backups).Id);
+                Assert.Equal(backups[0].CreatedAt, result.BackupCreatedAt);
                 Assert.True(backups[0].IsPinned(second.App.Clock.UtcNow));
                 Assert.Empty(guest.Restored);
                 Assert.Contains(second.App.Driver.Calls, c => c == "create:" + ProvisionHarness.Vm);
+                // The device's restore of that backup runs the project commands again after it (F39): they need what
+                // the backup brings back.
+                var before = guest.Commands.Count();
                 var restored = await RestoreAsync(second, "restore-1", id, guest.Made[id].Key);
                 Assert.True(restored.State == JobState.Succeeded, restored.Error);
                 Assert.Equal([id], guest.Restored);
+                var after = guest.Commands.Skip(before).ToList();
+                var projects = after.FindIndex(c => c.Contains("PROVISION_PHASE", StringComparison.Ordinal));
+                Assert.True(projects > after.FindIndex(c => c.Contains(" restore --from-host", StringComparison.Ordinal)), string.Join("\n", after));
+                Assert.Equal("false", FakeSshRunner.Variable(after[projects], "REBOOT_AFTER_PROVISION"));
+                Assert.Contains(restored.Progress, p => p.Step == "project-commands" && p.State == "succeeded");
                 break;
             case "restore":
                 // The restore may have changed the new VM: the retry neither deletes it nor restores again.

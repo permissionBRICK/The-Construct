@@ -209,6 +209,10 @@ public sealed class AgentSignIns(IGuestSessionRunner guests, ISshRunner ssh, IPr
                     session.Screen = line.Text ?? "";
                     break;
                 case "browser" when line.Url is not null:
+                    // Kept in the log after the session ends, without the link itself: whether the CLI opened one.
+                    if (session.Link?.Url != line.Url)
+                        logger.LogInformation("The sign-in {Session} of {Agent} on {Vm} opened a link that returns to port {Port}.",
+                            session.Id, session.Agent, session.Vm, line.Port?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "none");
                     session.Link = line;
                     break;
                 case "end":

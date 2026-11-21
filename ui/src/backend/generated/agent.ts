@@ -701,7 +701,7 @@ export interface paths {
             cookie?: never;
         };
         get: operations["GetDeviceSettings"];
-        /** @description Changes what is given: the release channel, automatic updates, start with the OS. */
+        /** @description Changes what is given: the release channel (this PC's engine follows it), automatic updates, start with the OS. */
         put: operations["SetDeviceSettings"];
         post?: never;
         delete?: never;

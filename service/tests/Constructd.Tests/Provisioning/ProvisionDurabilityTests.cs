@@ -94,7 +94,7 @@ public sealed class ProvisionDurabilityTests
                 guest.Provision = _ => (0, [$"echo {token} {tokenB64} {serveWeb} clone-secret-13579 {sudo}", .. FakeSshRunner.Clean]);
                 Assert.Equal(JobState.Succeeded, (await h.RunAsync("ok", secrets: secrets, defer: true)).State);
                 guest.Provision = _ => (3, [$"echo {token}", .. FakeSshRunner.WithErrors(($"failed with {sudo}", 1, $"/var/log/{serveWeb}.log"))]);
-                Assert.Equal(JobState.Failed, (await h.RunAsync("fails", secrets: secrets)).State);
+                Assert.Equal(JobState.Succeeded, (await h.RunAsync("warns", secrets: secrets)).State);
                 guest.Provision = _ => (1, [$"echo {tokenB64}"]);
                 Assert.Equal(JobState.Failed, (await h.RunAsync("critical", secrets: secrets)).State);
             }

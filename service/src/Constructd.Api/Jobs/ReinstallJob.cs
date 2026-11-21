@@ -21,6 +21,8 @@ public sealed record ReinstallRun(
 /// <summary>
 /// The <c>reinstall</c> job (design 7.1, 10.2 "Reinstall without a device", S29). Steps, in order:
 /// <list type="bullet">
+/// <item><c>media</c>: the new VM's install media, built (or the published media taken) before anything happens to
+/// the VM, so a host that cannot build it leaves the VM as it is.</item>
 /// <item><c>backup</c>: a key pair for this job, its public half enrolled on the VM as one more backup
 /// recipient, a host request for a <c>pre-reinstall</c> backup and the guest's
 /// <c>construct backup create</c>, which consumes it (so the backup is host-requested and pinned); the
@@ -41,16 +43,16 @@ public sealed record ReinstallRun(
 /// from it again.
 ///
 /// Retries (design 7.1): every attempt records in <see cref="RecoveryMarks"/> whether the VM was deleted and
-/// which backup the reinstall relies on. A retry after the delete starts at <c>create</c> with the same
+/// which backup the reinstall relies on. A retry after the delete gets the media and starts at <c>create</c> with the same
 /// backup and never makes a new one; without the key (the engine restarted) it rebuilds and provisions
-/// the VM and ends with <c>restore-needs-device</c>, naming the backup a device restores with a
-/// <c>restore</c> job. Once the restore started, a retry stops instead of deleting the VM again.
+/// the VM and succeeds with <c>restore-needs-device</c> (<see cref="ReinstallJobResult.RestoreNeeded"/>), naming the
+/// backup a device restores with a <c>restore</c> job. Once the restore started, a retry stops instead of deleting the VM again.
 /// </summary>
 public sealed class ReinstallJob(ProvisionJob provision, IProvisionTargets targets, BackupCoordinator backups,
     IHypervisorDriver driver, IVmNestedDriver nested, IVmRepository vms, IServiceScopeFactory scopes, RecoveryMarks marks,
     ReinstallKeys keys, IPersistedJobRunner phases, IClock clock)
 {
-    public static readonly string[] Steps = ["backup", "delete", "create"];
+    public static readonly string[] Steps = ["media", "backup", "delete", "create"];
     public const string JobKeySecret = "jobKey";
 
     private sealed class State
@@ -64,6 +66,8 @@ public sealed class ReinstallJob(ProvisionJob provision, IProvisionTargets targe
         public bool NestedForCreate;
         public bool RestoreStarted;
         public bool Restored;
+        /// <summary>The install media the new VM is created from, built before anything happens to the old one.</summary>
+        public string? IsoPath;
         /// <summary>The run the guest commands go through: its bag redacts every line they print; no target until one is resolved.</summary>
         public ProvisionRun Guest = null!;
         public ProvisionJobResult? Provision;
@@ -76,6 +80,8 @@ public sealed class ReinstallJob(ProvisionJob provision, IProvisionTargets targe
 
     public async Task<JobOutcome> RunAsync(ReinstallRun run, IProgress<string> progress, CancellationToken cancel)
     {
+        JobProgressTracker.Current?.Expect([.. Steps, VmJobs.InstallStep, .. ProvisionJob.ExpectedSteps(restore: true)],
+            ProvisionJob.GuestStep, ProvisionJob.ExpectedGuestSections);
         var state = new State();
         var vm = run.Vm;
         var succeeded = false;
@@ -87,9 +93,12 @@ public sealed class ReinstallJob(ProvisionJob provision, IProvisionTargets targe
             if (retry)
             {
                 await ResumeAsync(run, mark!, state, progress);
+                await MediaAsync(run, state, progress, cancel);
             }
             else
             {
+                // The media first: a VM is only deleted once the one that replaces it can be built.
+                await MediaAsync(run, state, progress, cancel);
                 await BackupAsync(run, mark, state, progress, cancel);
                 await DeleteAsync(run, state, progress, cancel);
             }
@@ -111,7 +120,7 @@ public sealed class ReinstallJob(ProvisionJob provision, IProvisionTargets targe
             await using (var scope = scopes.CreateAsyncScope())
             {
                 (_, token) = await VmJobs.BuildMachineAsync(scope.ServiceProvider, descriptor, current, run.FreshImage, () => { },
-                    new StepLines(guest, progress, "create"), CancellationToken.None);
+                    new StepLines(guest, progress, "create"), CancellationToken.None, state.IsoPath);
             }
 
             run.Secrets.Set(ProvisionScript.VmTokenVariable, Convert.ToBase64String(Encoding.UTF8.GetBytes(token)));
@@ -171,11 +180,13 @@ public sealed class ReinstallJob(ProvisionJob provision, IProvisionTargets targe
             await marks.ClearReinstallAsync(vm, CancellationToken.None);
             if (restore is null)
             {
-                // A retry without the key: the VM is back and provisioned, the restore waits for a device.
-                var message = $"restore-needs-device: the VM is reinstalled and provisioned, but the job's key for backup {state.BackupId} is gone (the engine restarted). "
-                    + $"A device restores it with a restore job for backup {state.BackupId}; the backup stays on the host.";
-                ProvisionJob.Report(state.Guest, progress, "restore", "failed", message);
-                throw new JobFailureException(message, Result(state, false, "restore", "restore-needs-device", message));
+                // A retry without the key: the VM is back and provisioned, which is done; the restore waits for a device,
+                // and the result says which backup (F37): a client turns it into a one-click restore of exactly that one.
+                var made = (await backups.Store.GetAsync(state.BackupId!, CancellationToken.None))?.CreatedAt;
+                var message = $"Reinstalled. Restore your settings from the backup of {made?.ToString("u", System.Globalization.CultureInfo.InvariantCulture) ?? state.BackupId}: "
+                    + $"the job's key for backup {state.BackupId} went with an engine restart, so a device restores it (a restore job); the backup stays on the host.";
+                ProvisionJob.Report(state.Guest, progress, "restore", "skipped", message);
+                return new JobOutcome(Result(state, true, null, "restore-needs-device", message) with { RestoreNeeded = true, BackupCreatedAt = made });
             }
 
             return new JobOutcome(Result(state, true, null, null, null));
@@ -210,6 +221,30 @@ public sealed class ReinstallJob(ProvisionJob provision, IProvisionTargets targe
             run.Secrets.Clear();
             state.PrivatePem = null;
         }
+    }
+
+    // ── media ────────────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// The install media of the new VM, built (or the published media taken) before the backup and the delete: a host
+    /// that cannot get them (no source ISO, no builder, no network) leaves the VM as it is.
+    /// </summary>
+    private async Task MediaAsync(ReinstallRun run, State state, IProgress<string> progress, CancellationToken cancel)
+    {
+        await BeginAsync(run, state, progress, "media", cancel);
+        try
+        {
+            await using var scope = scopes.CreateAsyncScope();
+            state.IsoPath = await VmJobs.BuildMediaAsync(scope.ServiceProvider, run.Vm.Name, run.FreshImage, new StepLines(state.Guest, progress, "media"),
+                CancellationToken.None);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            throw Fail("media", "media-unavailable", $"the install media could not be built: {SafeError.Describe(ex)}"
+                + (state.Deleted ? "" : "; the VM is not deleted."));
+        }
+
+        ProvisionJob.Report(state.Guest, progress, "media", "succeeded", "install media ready");
     }
 
     // ── backup ───────────────────────────────────────────────────────────────────
@@ -341,6 +376,8 @@ public sealed class ReinstallJob(ProvisionJob provision, IProvisionTargets targe
             }
 
             keys.Drop(vm.Name);
+            // No media: nothing was done to the VM, and an earlier attempt's mark stays for the next one.
+            if (state.Step == "media") return;
             if (state.RecipientAdded && state.Fingerprint is { } fingerprint && guest.Target is not null)
             {
                 var removed = await provision.RunGuestAsync(guest, progress, "backup", BackupScript.RecipientsRemove(fingerprint));
@@ -368,6 +405,7 @@ public sealed class ReinstallJob(ProvisionJob provision, IProvisionTargets targe
     {
         cancel.ThrowIfCancellationRequested();
         state.Step = step;
+        JobProgressTracker.Current?.Begin(step, ProvisionJob.Label(step));
         await phases.SetPhaseAsync(run.JobId, step, CancellationToken.None);
         ProvisionJob.Report(state.Guest, progress, step, "running", null);
     }

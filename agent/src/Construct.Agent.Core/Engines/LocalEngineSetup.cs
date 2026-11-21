@@ -218,6 +218,33 @@ public sealed class LocalEngineSetup : IDisposable
         await _platform.RestartWindowsAsync(ct).ConfigureAwait(false);
     }
 
+    /// <summary>
+    /// A device channel change follows to this PC's engine (F17): its update settings take the device's channel, so the
+    /// next update brings both from the same channel. No engine on this PC, or one that does not take it: nothing else
+    /// changes, and the device's own change stands.
+    /// </summary>
+    public async Task FollowChannelAsync(string channel, CancellationToken ct)
+    {
+        if (_agent.EngineIdFor($"https://127.0.0.1:{_options.LocalEnginePort}") is not { } engine) return;
+        var engines = new AgentEngines(_agent);
+        try
+        {
+            if ((await engines.GetAsync(engine, "host/config", ct).ConfigureAwait(false))?["updates"] is not JsonObject updates
+                || updates["channel"]?.GetValue<string>() == channel) return;
+            var section = new JsonObject
+            {
+                ["repository"] = updates["repository"]?.DeepClone(), ["channel"] = channel,
+                ["drainTimeoutMinutes"] = updates["drainTimeoutMinutes"]?.DeepClone(), ["healthTimeoutSeconds"] = updates["healthTimeoutSeconds"]?.DeepClone(),
+                ["auto"] = updates["auto"]?.DeepClone(), ["expectedUpdatedAt"] = updates["updatedAt"]?.DeepClone(),
+            };
+            await engines.SendAsync(engine, HttpMethod.Put, "host/config", new JsonObject { ["updates"] = section }, ct).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is AgentFailure or HttpRequestException or TaskCanceledException or JsonException or InvalidOperationException)
+        {
+            // An engine that is away or refuses: it keeps its channel; the Host page shows it.
+        }
+    }
+
     public void Dispose() => Http.Dispose();
 
     private async Task InstallAsync(string? bootstrapKey, CancellationToken ct)
@@ -252,6 +279,8 @@ public sealed class LocalEngineSetup : IDisposable
             {
                 ["zip"] = zip, ["sha256"] = sha.ToLowerInvariant(), ["tokenFile"] = TokenFile, ["resultFile"] = ResultFile, ["log"] = LogFile,
                 ["adminUser"] = Environment.UserDomainName + "\\" + Environment.UserName, ["bootstrapKeyPath"] = bootstrapKey ?? "",
+                // The engine updates on the device's channel (F17).
+                ["channel"] = channel,
             };
             var exit = await _platform.RunElevatedAsync("powershell.exe", ElevatedArguments(payload), ct).ConfigureAwait(false);
             ReadResult(exit);
@@ -348,6 +377,8 @@ public sealed class LocalEngineSetup : IDisposable
             $arguments = @{ Solo = $true; SkipIsoBuild = $true; TokenFile = $p.tokenFile; ResultFile = $p.resultFile; AdminUser = $p.adminUser
                             ScriptsDir = (Join-Path $dir 'scripts'); PublishDir = (Join-Path $dir 'service') }
             if ($p.bootstrapKeyPath) { $arguments.BootstrapKeyPath = $p.bootstrapKeyPath }
+            # An installer from before the channel setting has no -Channel.
+            if ($p.channel -and (Get-Command -Name $installer).Parameters.ContainsKey('Channel')) { $arguments.Channel = $p.channel }
             $global:LASTEXITCODE = 0
             & $installer @arguments *>&1 | Out-File -LiteralPath $p.log -Encoding utf8
             $code = $LASTEXITCODE

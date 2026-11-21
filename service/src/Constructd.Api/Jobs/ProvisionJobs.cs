@@ -172,7 +172,7 @@ public sealed class ProvisionJobs(IJobStore jobs, IJobQueryStore history, IPersi
         var target = await targets.ResolveAsync(vm, ct) ?? throw Refused("copy", "vm-endpoint-unknown", "The VM has no SSH endpoint the engine can dial.");
         // A new VM: whatever key an earlier machine at its address had is not this one's.
         await targets.ForgetHostKeyAsync(target, ct);
-        var channel = HostUpdateTrust.Apply(await config.GetAsync<UpdatesConfig>("updates", ct) ?? HostAdminDefaults.Updates, options).Channel;
+        var channel = HostUpdateTrust.Settings(await config.GetAsync<UpdatesConfig>("updates", ct), options).Channel;
         var bag = secrets ?? new JobSecretBag();
         bag.Set(ProvisionScript.VmTokenVariable, Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(vmToken)));
         var outcome = await job.RunAsync(new ProvisionRun(jobId, vm, target, commit, state, channel, false, options.Iso.SeedUser,
@@ -233,7 +233,7 @@ public sealed class ProvisionJobs(IJobStore jobs, IJobQueryStore history, IPersi
 
             // Saved before the run: a retry, or a reprovision with no client, uses the same settings.
             if (request.Desired is not null) await desired.SetDesiredAsync(vm.Name, state, ct);
-            var channel = HostUpdateTrust.Apply(await config.GetAsync<UpdatesConfig>("updates", ct) ?? HostAdminDefaults.Updates, options).Channel;
+            var channel = HostUpdateTrust.Settings(await config.GetAsync<UpdatesConfig>("updates", ct), options).Channel;
             var queued = new Job(id, request.Kind, vm.Name, vm.Owner, JobState.Queued, [], null, null, clock.UtcNow, null,
                 actor, request.RequestId, request.Kind == JobKinds.Reinstall ? ReinstallJob.Steps[0] : ProvisionJob.Steps[0]);
             await jobs.UpsertAsync(queued, ct);
@@ -281,8 +281,13 @@ public sealed class ProvisionJobs(IJobStore jobs, IJobQueryStore history, IPersi
             var queued = new Job(id, JobKinds.Restore, vm.Name, vm.Owner, JobState.Queued, [], null, null, clock.UtcNow, null,
                 actor, request.RequestId, "restore");
             await jobs.UpsertAsync(queued, ct);
-            // A restore uses no source and no settings: the run carries the VM, its address and the backup.
-            var run = new ProvisionRun(id, vm, target, "", null!, null, false, options.Iso.SeedUser, null, request.Secrets,
+            // A restore uses no source: the run carries the VM, its address and the backup. A backup made for a reinstall
+            // is restored into the VM built from it, whose project commands ran before the restore brought back what they
+            // need (secrets, tokens): they run again after it, with the VM's stored settings (F39).
+            var projects = backup.Trigger == BackupTriggers.PreReinstall;
+            var settings = projects ? await desired.GetDesiredForAsync(vm, ct) : null;
+            settings ??= new StoredDesiredState(new VmDesiredState([], new ProvisionSettings()), "", clock.UtcNow, actor);
+            var run = new ProvisionRun(id, vm, target, "", settings, null, projects, options.Iso.SeedUser, null, request.Secrets,
                 new ProvisionRestore(backupId));
             await runner.StartPersistedAsync(queued, handle, (progress, token) => job.RestoreOnlyAsync(run, progress, token), CancellationToken.None);
             handle = null;

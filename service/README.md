@@ -323,6 +323,19 @@ settings, parses the result block, runs the deferred project phase when asked, r
 `provision`, `restore` (only with a backup to restore), `project-commands`, `applied`, `finish`; progress lines carry `{step, state, percent?}`
 and the job's `phase` is the step it is in.
 
+One bar per job: a create, reinstall, provision or restore names its sub-steps as they start (the engine's steps,
+`Downloading ISO`, `Building image`, `Installing Ubuntu`, and every `provision.sh` section, which prints
+`::construct-step LABEL|TITLE` before it runs), and a sub-step that measures itself moves the bar within its share
+(the ISO download, the T3 download through `::construct-progress PERCENT`). Each progress line then also carries
+`overall` (0 to 99 while the job runs, never going back) and `label` (the sub-step in one to three words), and the job
+carries `overall: {percent, label}` from its latest line, `percent` 100 once it succeeded. A sub-step weighs what it took
+in the last successful run of the same kind on the VM (else of any VM; equal weights without one); the plans are
+`progress-plan:<kind>[:<vm>]` in the host config store. Markers never reach the job log.
+
+A provision whose only failures are optional guest steps (`provision.sh` exit 3) succeeds: `result.succeeded` stays
+true, `result.failedSteps` and the fix prompt name them, and the job carries their titles as `warnings`. A deferred
+project phase that breaks off (no result block, another exit) fails the job, `project-commands-failed`.
+
 - `requestId` identifies the click: the same id returns the job it started (`replayed: true`). One
   job per VM: a second provision or a lifecycle job answers `409 operation-in-progress`.
 - `desired` (`{projects[], settings}`) replaces the VM's stored settings; without it the stored ones
@@ -357,7 +370,9 @@ a 400 naming the field; null keeps the VM's saved choice.
 The same route starts the two other jobs of a VM's life:
 
 - `{kind: "reinstall", requestId, commit?, desired?, freshImage?}` rebuilds the VM with no device online
-  (design 10.2, S29). Steps: `backup` (the job makes an RSA key pair, enrols its public half on the VM
+  (design 10.2, S29). Steps: `media` (the new VM's install media, built or the published one taken before anything
+  happens to the VM: a host that cannot get them fails here with `media-unavailable` and leaves the VM as it is),
+  `backup` (the job makes an RSA key pair, enrols its public half on the VM
   with `construct backup recipients add`, opens the host's `pre-reinstall` request and runs
   `construct backup create`, then unwraps the backup's key with its private half and has the VM
   `verify` it), `delete` (the hypervisor VM only: record, forwards and settings stay), `create` (the
@@ -373,7 +388,9 @@ The same route starts the two other jobs of a VM's life:
   before the delete. Nothing is deleted without a verified, host-requested (pinned) backup. Needs
   backups enabled on the host; an external machine is refused.
 - `{kind: "restore", requestId, backupId, secrets: {backupKey}}` restores a stored backup into the
-  running VM; `backupKey` is the backup's key a device unwrapped. Step: `restore`.
+  running VM; `backupKey` is the backup's key a device unwrapped. Step: `restore`; for a `pre-reinstall` backup
+  also `project-commands`, the project phase of `provision.sh` with the VM's stored settings, since what the
+  commands need came back with the backup (failed project steps are the job's warnings).
 
 `POST /jobs/{id}/retry` (`{secrets?}`) starts the same kind of job again for the same VM with its stored settings
 and the engine's installed commit: a failed `provision`, `reinstall` or `restore` (a restore with its backup's key in
@@ -383,9 +400,10 @@ provision, reinstall or restore on the VM after it `409 job-superseded`. The ret
 second click answers the retry already started. The rules below hold for a retry as for any repeated job.
 
 Retries: the job key's private half lives in the job's memory only. After a reinstall failed past the
-delete it stays in memory for an hour, and a retry starts at `create` with the same backup and key; a
-retry after an engine restart rebuilds and provisions the VM and fails with `restore-needs-device`,
-naming the backup a device restores with a `restore` job. A restore is recorded before the guest
+delete it stays in memory for an hour, and a retry gets the media and starts at `create` with the same backup and key; a
+retry after an engine restart rebuilds and provisions the VM and succeeds with `code: restore-needs-device`,
+`restoreNeeded: true`, the `backupId` and its `backupCreatedAt`: a client turns that into a one-click restore of
+exactly that backup by a device (a `restore` job). A restore is recorded before the guest
 starts it: a restore of the same backup that did not finish is not run again (`restore-already-ran`),
 and a reinstall whose restore started never deletes the VM again; both say what to do by hand. These
 records (`reinstall:<vm>`, `restore:<vm>` in the host config store) hold backup ids, a fingerprint and
@@ -1049,7 +1067,7 @@ Bound from the `Constructd` section of `appsettings.json`, from environment vari
 | `Iso:SeedUser` | `construct` | Seed user of the unattended install. |
 | `Iso:BootstrapPublicKeyPath` | `<ScriptsDir>\keys\bootstrap_ed25519.pub` | Bootstrap key injected into the ISO. |
 | `Iso:SourcePath` | – | The Ubuntu ISO to remaster. Set this **or** `Iso:SourceUrl`; a path wins and is never downloaded or deleted. |
-| `Iso:SourceUrl` | – | Where to fetch the source ISO when no path is set. Admin-configured on purpose: the service does not go looking for "the current LTS", so a host's guests cannot change release because a mirror did. |
+| `Iso:SourceUrl` | – | Where to fetch the source ISO when no path is set. With neither set (the engine an agent installs for one PC), the engine takes the current 24.04 live-server image that `https://releases.ubuntu.com/24.04/SHA256SUMS` names, checks it against that list, and keeps it in the cache; the line stays 24.04, only its point release moves, and an older point release's image goes once the new one is in place. Offline, the newest kept image is used. |
 | `Iso:Sha256` | – | Expected SHA-256 of the source ISO. Empty skips the check; when set it is verified on **every** use, not only after the download. |
 | `Iso:CacheDir` | `C:\ProgramData\Construct\service\iso` | Holds the downloaded source ISO and the ISO catalog (versioned media, sidecars, `current.pointer`). |
 | `Iso:SourceId` | `ubuntu-server-minimal` | `SOURCE_ID` of `bin/build-autoinstall-iso.sh` (`ubuntu-server` for the standard set). |
@@ -1536,7 +1554,8 @@ payload has to be identical in every mode (plan §4.1):
 - **The source ISO** is `Iso:SourcePath` if set (used as-is, never deleted), otherwise `Iso:SourceUrl`
   downloaded **once** into `Iso:CacheDir` (to `<name>.part`, then renamed, so an interrupted download is
   never mistaken for a complete one) and reused by every later build. Size must be > 0; `Iso:Sha256`, when
-  set, is verified on every use.
+  set, is verified on every use. With neither set, the current 24.04 live-server image named by the release
+  directory's `SHA256SUMS` is downloaded the same way and checked against that list.
 - **The output ISO is per VM** (`<vm>-autoinstall.iso`) in `PerVm` mode, because the guest hostname is
   baked into the seed; generic media is written to the versioned path the catalog chose.
 - **Builds are serialized** with a `SemaphoreSlim(1)`: the LF copy is one shared file, and one xorriso
@@ -1828,6 +1847,7 @@ Run it again after publishing a new build: it updates binaries, settings and the
 | `-Solo` | off | This PC's own engine; see *Solo install* below. |
 | `-TokenFile` | – | With `-Solo` (required): where the admin token is written, readable by `-AdminUser` only. |
 | `-BootstrapKeyPath` | – | With `-Solo`: the old client's `keys\bootstrap_ed25519`, taken over with its `.pub`; otherwise a pair is generated once. |
+| `-Channel` | – | The update channel of the device that installs the engine (`stable`, `nightly` or an https manifest URL), written as `Constructd:HostAdmin:Updates:Channel`: the engine's channel until its `updates` settings are saved. The device agent passes its own, and a later change of the device's channel follows to the engine with one `PUT /host/config`. |
 | `-ResultFile` | – | Unattended (the device agent's run): nothing is asked, and the outcome goes to this file as `{result, message}`: `done`, `failed` with the reason in one line, or `restart` (exit 3) when Windows must restart to turn on Hyper-V. Nothing restarts by itself; run it again afterwards. Without it the installer asks as before, the restart prompt included. |
 
 ### Solo install

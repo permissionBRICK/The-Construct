@@ -18,7 +18,8 @@ public sealed class RepairAgentTests
 
     public RepairAgentTests() => RepairSessions.RebootProbeDelay = TimeSpan.FromMilliseconds(20);
 
-    private static FakeSshRunner Failing() => new() { Provision = _ => (3, FakeSshRunner.WithErrors(("Installing SDKs", 2, Log))) };
+    // A step that stops provisioning (a failed optional step alone ends the job done, with a warning).
+    private static FakeSshRunner Failing() => new() { Provision = _ => (1, FakeSshRunner.WithErrors(("Installing SDKs", 2, Log))) };
 
     private static FakeGuestSessionRunner Guests(ProvisionHarness h) => h.App.Service<FakeGuestSessionRunner>();
 
@@ -44,12 +45,13 @@ public sealed class RepairAgentTests
         Until(async () => await RepairOrNull(client) is { } s && s.State == state ? s : null, "repair " + state);
 
     /// <summary>A failed provision with a failed step, and the repair it started, waiting for a reply.</summary>
-    private static async Task<(ProvisionHarness H, JobResponse Failed, RepairSessionResponse Session)> FailedAsync(FakeSshRunner? ssh = null, string? databasePath = null)
+    private static async Task<(ProvisionHarness H, JobResponse Failed, RepairSessionResponse Session)> FailedAsync(FakeSshRunner? ssh = null, string? databasePath = null,
+        bool? defer = null)
     {
         ssh ??= Failing();
         var h = await ProvisionHarness.StartAsync(ssh, databasePath);
         JobRetryTests.Installed(h);
-        var failed = await h.RunAsync("click-1");
+        var failed = await h.RunAsync("click-1", defer: defer);
         Assert.Equal(JobState.Failed, failed.State);
         var session = await InState(h.Client, "waiting");
         return (h, failed, session);
@@ -58,7 +60,12 @@ public sealed class RepairAgentTests
     [Fact]
     public async Task A_failed_provision_starts_the_repair_agent_on_the_vm_with_the_fix_prompt()
     {
-        var (h, failed, session) = await FailedAsync();
+        // A run that went to its end (and rebooted) with a failed optional step, then failed: its deferred phase broke off.
+        var (h, failed, session) = await FailedAsync(new FakeSshRunner
+        {
+            Provision = _ => (3, FakeSshRunner.WithErrors(("Installing SDKs", 2, Log))),
+            ProjectPhase = _ => (1, ["no sentinel here"]),
+        }, defer: true);
         await using var _ = h;
         Assert.Equal(failed.Id, session.JobId);
         Assert.Equal(JobKinds.Provision, session.JobKind);

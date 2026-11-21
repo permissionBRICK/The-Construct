@@ -121,6 +121,25 @@ public class FinalDeliveryTests
     }
 
     [Fact]
+    public async Task TheInstallersChannelIsTheDefaultUntilTheHostStoresOne()
+    {
+        // An engine installed for a nightly device follows nightly from its first update check (F17).
+        using var app = new TestApp(new Dictionary<string, string?> { ["Constructd:HostAdmin:Updates:Channel"] = "nightly" });
+        using var admin = await app.CreateUserClientAsync("admin", Role.Admin);
+        Assert.Equal("nightly", (await app.Service<PackageStager>().SettingsAsync(default)).Channel);
+        var shown = (await admin.GetFromJsonAsync<JsonElement>("/api/v1/host/config")).GetProperty("updates");
+        Assert.Equal(("nightly", "default"), (shown.GetProperty("channel").GetString(), shown.GetProperty("source").GetString()));
+
+        // A channel the host stores (the device's later change) wins.
+        await app.Service<IHostConfigStore>().SetAsync("updates", HostAdminDefaults.Updates with { Channel = "stable" }, "device", default);
+        Assert.Equal("stable", (await app.Service<PackageStager>().SettingsAsync(default)).Channel);
+
+        // Without the setting, or with one that names no channel, the built-in default stays.
+        using var plain = new TestApp(new Dictionary<string, string?> { ["Constructd:HostAdmin:Updates:Channel"] = "no channel" });
+        Assert.Equal(HostAdminDefaults.Updates.Channel, (await plain.Service<PackageStager>().SettingsAsync(default)).Channel);
+    }
+
+    [Fact]
     public async Task CertFileOnlyHostRefusesUpdateBeforeDrainOrReplacement()
     {
         using var app = new TestApp();

@@ -56,6 +56,36 @@ public sealed class ProvisionJobTests
     }
 
     [Fact]
+    public async Task The_job_has_one_overall_percentage_with_the_guest_sections_as_sub_steps_and_keeps_its_durations()
+    {
+        var ssh = new FakeSshRunner
+        {
+            Provision = _ => (0, ["::construct-step Checking access|Checking root privileges", "==> Checking root privileges",
+                "::construct-step Installing T3|Installing T3 Code web GUI", "==> Installing T3 Code web GUI", "::construct-progress 50",
+                "half way", .. FakeSshRunner.Clean]),
+        };
+        await using var h = await ProvisionHarness.StartAsync(ssh);
+        var job = await h.RunAsync("click-1");
+
+        Assert.Equal(JobState.Succeeded, job.State);
+        // The markers move the bar and are no log lines.
+        Assert.DoesNotContain(job.Progress, p => p.Text.StartsWith("::construct-", StringComparison.Ordinal));
+        var bar = job.Progress.Where(p => p.Overall is not null).ToList();
+        Assert.Equal("Copying files", bar.First(p => p.Step == "copy").Label);
+        Assert.Equal("Installing T3", bar.Single(p => p.Text == "half way").Label);
+        Assert.Equal("Checking access", bar.Single(p => p.Text == "==> Checking root privileges").Label);
+        Assert.Equal(bar.Select(p => p.Overall!.Value).Order(), bar.Select(p => p.Overall!.Value));
+        Assert.All(bar, p => Assert.InRange(p.Overall!.Value, 0, 99));
+        Assert.Equal(new JobOverallResponse(100, "Finishing"), job.Overall);
+
+        // The next run weighs each sub-step by what it took in this one.
+        var plan = await h.App.Service<IHostConfigStore>().GetAsync<Constructd.Core.Services.ProgressPlan>("progress-plan:provision:" + ProvisionHarness.Vm, default);
+        Assert.Equal(["source", "copy", "provision", "guest:Checking root privileges", "guest:Installing T3 Code web GUI", "project-commands", "applied", "finish"],
+            plan!.Steps.Select(s => s.Key));
+        Assert.Equal("Installing T3", plan.Steps[4].Label);
+    }
+
+    [Fact]
     public async Task For_an_account_with_devices_the_run_writes_the_device_keys_before_the_reboot()
     {
         await using var h = await ProvisionHarness.StartAsync();
@@ -153,17 +183,20 @@ public sealed class ProvisionJobTests
     }
 
     [Fact]
-    public async Task Optional_step_failures_fail_the_job_with_the_steps_and_the_fix_prompt_after_the_run_finished()
+    public async Task Optional_step_failures_end_the_job_succeeded_with_warnings_the_steps_and_the_fix_prompt()
     {
         var ssh = new FakeSshRunner { Provision = _ => (3, FakeSshRunner.WithErrors(("Installing SDKs", 2, "/var/log/construct/provision/step-0-Installing-SDKs.log"))) };
         await using var h = await ProvisionHarness.StartAsync(ssh);
         var job = await h.RunAsync("click-1");
 
-        Assert.Equal(JobState.Failed, job.State);
-        Assert.StartsWith("provision-steps-failed", job.Error, StringComparison.Ordinal);
+        // Only optional guest steps failed: the job is done, with a warning per step (F41), and no failure.
+        Assert.Equal(JobState.Succeeded, job.State);
+        Assert.Null(job.Error);
+        Assert.Equal(["Installing SDKs"], job.Warnings);
         var result = ProvisionHarness.Result(job);
-        Assert.False(result.Succeeded);
-        Assert.Equal("provision-steps-failed", result.Code);
+        Assert.True(result.Succeeded);
+        Assert.Null(result.FailedStep);
+        Assert.Null(result.Code);
         var step = Assert.Single(result.FailedSteps);
         Assert.Equal(new ProvisionStepError("Installing SDKs", 2, "/var/log/construct/provision/step-0-Installing-SDKs.log"), step);
         Assert.Equal([
@@ -174,6 +207,25 @@ public sealed class ProvisionJobTests
         // As in the PowerShell, the run went on: applied state read, reboot issued.
         Assert.NotNull(result.Applied);
         Assert.True(result.Rebooted);
+    }
+
+    [Fact]
+    public async Task A_clean_run_has_no_warnings_and_a_deferred_phase_that_breaks_off_still_fails_the_job()
+    {
+        await using (var clean = await ProvisionHarness.StartAsync())
+            Assert.Null((await clean.RunAsync("click-1")).Warnings);
+
+        // The project phase ended without a result block: that is no optional step's failure.
+        var ssh = new FakeSshRunner { ProjectPhase = _ => (1, ["no sentinel here"]) };
+        await using var h = await ProvisionHarness.StartAsync(ssh);
+        var job = await h.RunAsync("click-2", defer: true);
+
+        Assert.Equal(JobState.Failed, job.State);
+        Assert.Null(job.Warnings);
+        var result = ProvisionHarness.Result(job);
+        Assert.False(result.Succeeded);
+        Assert.Equal("project-commands", result.FailedStep);
+        Assert.Equal("project-commands-failed", result.Code);
     }
 
     [Theory]
@@ -377,9 +429,11 @@ public sealed class ProvisionJobTests
         await using var h = await ProvisionHarness.StartAsync(ssh);
         var job = await h.RunAsync("click-1", secrets: new { vmTokenB64 = tokenB64, gitCloneCredentialsB64 = creds, sudoPassword = sudo });
 
-        Assert.Equal(JobState.Failed, job.State);
+        // Only an optional step failed: done, with the step as a warning (F41), redacted like everything else.
+        Assert.Equal(JobState.Succeeded, job.State);
         var values = new[] { token, tokenB64, creds, "clone-token-55555", sudo };
-        var stored = string.Join('\n', job.Progress.Select(p => p.Text)) + job.Error + System.Text.Json.JsonSerializer.Serialize(job.Result);
+        var stored = string.Join('\n', job.Progress.Select(p => p.Text)) + job.Error + System.Text.Json.JsonSerializer.Serialize(job.Result)
+            + string.Join('\n', job.Warnings ?? []);
         foreach (var value in values) Assert.DoesNotContain(value, stored, StringComparison.Ordinal);
         Assert.Contains("[secret]", stored, StringComparison.Ordinal);
 

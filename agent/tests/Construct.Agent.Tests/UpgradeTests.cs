@@ -141,6 +141,50 @@ public sealed class UpgradeTests
     }
 
     [Fact]
+    public async Task A_complete_conversion_deletes_the_old_clients_install_images_in_its_own_folder_only()
+    {
+        await using var rig = await UpgradeRig.CreateAsync(SingleVm);
+        // The old client's autoinstall image (3 GB): the engine's ISO builder refuses a patched image as its source (F33).
+        var image = Path.Combine(rig.Fixture.InstallFolder, "agent-vm-autoinstall.iso");
+        var copy = Path.Combine(rig.Fixture.Home, "Downloads", "agent-vm-autoinstall.iso");
+        var other = Path.Combine(rig.Fixture.InstallFolder, "notes.iso.txt");
+        foreach (var file in new[] { image, copy, other })
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(file)!);
+            await File.WriteAllTextAsync(file, "iso");
+        }
+
+        await rig.EngineStepAsync();
+        await rig.SetupAsync();
+        var view = await rig.ConvertAsync();
+
+        Assert.Equal("converted", view["stage"]!.GetValue<string>());
+        Assert.False(File.Exists(image));
+        Assert.True(File.Exists(copy), "a copy outside Construct's own folders stays");
+        Assert.True(File.Exists(other));
+    }
+
+    [Fact]
+    public async Task An_install_named_outside_the_old_clients_root_keeps_its_install_images()
+    {
+        // An old install unpacked elsewhere and named with "from" (a copy in Downloads) is the user's: its images stay.
+        await using var rig = await UpgradeRig.CreateAsync(SingleVm);
+        var outside = Path.Combine(rig.Fixture.Home, "Downloads", "old-construct");
+        Directory.CreateDirectory(outside);
+        File.Copy(Path.Combine(rig.Fixture.InstallFolder, ".construct-settings.json"), Path.Combine(outside, ".construct-settings.json"));
+        var image = Path.Combine(outside, "agent-vm-autoinstall.iso");
+        await File.WriteAllTextAsync(image, "iso");
+
+        await rig.EngineStepAsync();
+        await rig.SetupAsync();
+        await rig.Agent.PostAsync("api/upgrade/convert", new JsonObject { ["from"] = outside }, HttpStatusCode.Accepted);
+        await rig.Agent.Host.Upgrade.Work;
+
+        Assert.Equal("converted", (await rig.Agent.GetAsync("api/upgrade"))["stage"]!.GetValue<string>());
+        Assert.True(File.Exists(image));
+    }
+
+    [Fact]
     public async Task The_dialog_reads_the_old_config_repository_once_per_run_and_the_conversion_reads_it_afresh()
     {
         // The dialog asks for its view several times per step; on the FatPC (2026-11-21) every view ran some 60 git

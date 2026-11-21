@@ -23,8 +23,12 @@ namespace Constructd.Core.Services;
 /// it: not job state, not the SSE stream, not the audit trail, and not the log.
 /// </param>
 /// <param name="changes">The engine's change stream: a job's start, its progress (at most once a second) and its end.</param>
+/// <param name="plans">
+/// The sub-step plans of earlier runs: a job's overall percentage (<see cref="JobProgressTracker"/>) weighs each sub-step
+/// by what it took in the last successful run of the same kind on the same VM, and a successful run leaves its own.
+/// </param>
 public sealed class InProcessJobEngine(IClock clock, IJobStore store, Action<Job, string>? diagnostics = null, IMaintenanceGate? maintenance = null,
-    ChangeFeed? changes = null)
+    ChangeFeed? changes = null, IProgressPlans? plans = null)
     : IJobEngine, IPersistedJobRunner, IDisposable
 {
     private readonly ConcurrentDictionary<string, JobEntry> _jobs = new(StringComparer.Ordinal);
@@ -52,7 +56,7 @@ public sealed class InProcessJobEngine(IClock clock, IJobStore store, Action<Job
             Error: null,
             Created: clock.UtcNow,
             Finished: null,
-            Initiator: initiator));
+            Initiator: initiator), clock);
 
         IDisposable? handle = null;
         if (maintenance is not null && kind is "create-vm" or "remove-vm" or "iso-build" or "iso-acquire" or "host-install" or "host-reachability")
@@ -73,7 +77,7 @@ public sealed class InProcessJobEngine(IClock clock, IJobStore store, Action<Job
         ArgumentNullException.ThrowIfNull(work);
         ct.ThrowIfCancellationRequested();
         if (queued.State != JobState.Queued) throw new ArgumentException("Expected a queued job.", nameof(queued));
-        var entry = new JobEntry(queued);
+        var entry = new JobEntry(queued, clock);
         if (!_jobs.TryAdd(queued.Id, entry)) throw new InvalidOperationException("Job is already running.");
         _ = Task.Run(async () =>
         {
@@ -219,10 +223,13 @@ public sealed class InProcessJobEngine(IClock clock, IJobStore store, Action<Job
         await UpdateAsync(entry, job => job with { State = JobState.Running }).ConfigureAwait(false);
         changes?.Job("job.started", entry.Snapshot);
         var progress = new JobProgress(this, entry);
+        await PlanAsync(entry).ConfigureAwait(false);
+        using var tracking = JobProgressTracker.Use(entry.Tracker);
 
         try
         {
             var outcome = await work(progress, entry.Cancellation.Token).ConfigureAwait(false);
+            await KeepPlanAsync(entry).ConfigureAwait(false);
 
             await CompleteAsync(
                 entry,
@@ -258,6 +265,22 @@ public sealed class InProcessJobEngine(IClock clock, IJobStore store, Action<Job
                 Finished = clock.UtcNow,
             }).ConfigureAwait(false);
         }
+    }
+
+    /// <summary>The weights of the job's sub-steps from its last successful run; a missing plan or store leaves equal weights.</summary>
+    private async Task PlanAsync(JobEntry entry)
+    {
+        if (plans is null) return;
+        try { entry.Tracker.UsePlan(await plans.GetAsync(entry.Snapshot.Kind, entry.Snapshot.VmName, CancellationToken.None).ConfigureAwait(false)); }
+        catch (Exception ex) when (ex is not OperationCanceledException) { }
+    }
+
+    /// <summary>A successful run's sub-steps and durations, for the next run's weights. Never fails the job.</summary>
+    private async Task KeepPlanAsync(JobEntry entry)
+    {
+        if (plans is null || entry.Tracker.Measured() is not { } plan) return;
+        try { await plans.SaveAsync(entry.Snapshot.Kind, entry.Snapshot.VmName, plan, CancellationToken.None).ConfigureAwait(false); }
+        catch (Exception ex) when (ex is not OperationCanceledException) { }
     }
 
     private Task UpdateAsync(JobEntry entry, Func<Job, Job> mutate)
@@ -374,8 +397,8 @@ public sealed class InProcessJobEngine(IClock clock, IJobStore store, Action<Job
 
     private void Report(JobEntry entry, string text, JobStepProgress? step = null)
     {
-        var line = step is null ? new JobProgressLine(clock.UtcNow, text)
-            : new JobProgressLine(clock.UtcNow, text, step.Step, step.State, step.Percent);
+        var overall = entry.Tracker.Snapshot();
+        var line = new JobProgressLine(clock.UtcNow, text, step?.Step, step?.State, step?.Percent, overall?.Percent, overall?.Label);
         Job snapshot;
 
         lock (entry.Gate)
@@ -400,9 +423,12 @@ public sealed class InProcessJobEngine(IClock clock, IJobStore store, Action<Job
         Progressed(entry, snapshot);
     }
 
-    private sealed class JobEntry(Job snapshot)
+    private sealed class JobEntry(Job snapshot, IClock clock)
     {
         public Lock Gate { get; } = new();
+
+        /// <summary>The job's overall percentage, from the sub-steps its code names.</summary>
+        public JobProgressTracker Tracker { get; } = new(() => clock.UtcNow);
 
         public Job Snapshot { get; set; } = snapshot;
 

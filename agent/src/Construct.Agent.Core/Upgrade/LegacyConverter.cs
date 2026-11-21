@@ -9,11 +9,12 @@ namespace Construct.Agent.Upgrade;
 /// <summary>
 /// The converter (13.1): it reads the old client's state (<see cref="LegacyState"/>) and copies it into the
 /// new stack, writing only to the engines, the store and the agent's own files (<c>bridge.json</c>,
-/// <c>device.json</c>, <c>legacy-upstream.json</c>). It changes nothing of the old files. It can be run
+/// <c>device.json</c>, <c>legacy-upstream.json</c>). It changes nothing of the old files but one: once the move is
+/// complete, the old client's autoinstall images go. It can be run
 /// again at any point: an item listed as done in <c>bridge.json</c>, or already present where it goes, is
 /// left alone. Its last steps switch the local VMs over to the engine (the adopt job) and reprovision each adopted
 /// VM with the engine's guest payload, so the move leaves it on the new version; then <c>{stage: converted}</c> is
-/// written, and only after that the old backup key comes off the VMs.
+/// written, and only after that the old backup key comes off the VMs and the old client's autoinstall images are deleted.
 /// </summary>
 public sealed class LegacyConverter(DeviceAgent agent, IDeviceEngines engines, DeviceSettings settings, BridgeFile bridge,
     IUpgradePlatform platform, string dataDirectory, Action<UpgradeItem> progress)
@@ -55,7 +56,11 @@ public sealed class LegacyConverter(DeviceAgent agent, IDeviceEngines engines, D
         var complete = _items.All(i => i.State is not "failed");
         if (complete && bridge.Read().Stage != BridgeState.Converted)
             bridge.Update(b => b with { Stage = BridgeState.Converted, ConvertedAt = DateTimeOffset.UtcNow });
-        if (bridge.Read().Stage == BridgeState.Converted) await RemoveLegacyRecipientsAsync(legacy, instances, legacyKeys, start.LocalEngine, ct).ConfigureAwait(false);
+        if (bridge.Read().Stage == BridgeState.Converted)
+        {
+            await RemoveLegacyRecipientsAsync(legacy, instances, legacyKeys, start.LocalEngine, ct).ConfigureAwait(false);
+            DeleteInstallImages(legacy);
+        }
         bridge.Update(b => b with { Items = _items.ToArray() });
         return complete;
     }
@@ -514,6 +519,29 @@ public sealed class LegacyConverter(DeviceAgent agent, IDeviceEngines engines, D
                     settings.Update(s => s.Mic.Contains($"{localEngine}/{instance.Name}") ? s : s with { Mic = [.. s.Mic, $"{localEngine}/{instance.Name}"] });
                 return state == "succeeded" ? ("done", "Switched over to the engine; it kept running.") : ("failed", $"The adoption job ended {state}; see the job's log, then retry.");
             }).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>
+    /// The old client's autoinstall images (<c>&lt;vm&gt;-autoinstall.iso</c>, about 3 GB each) once the move is complete
+    /// (F33): the engine builds its own media, and its ISO builder refuses an already patched image as its source. Only
+    /// in the old client's own install folders; a copy anywhere else stays, and so does one Windows will not let go of.
+    /// </summary>
+    private static void DeleteInstallImages(LegacyState legacy)
+    {
+        // Only folders inside the old client's own root (%LOCALAPPDATA%\The-Construct): an install named with --from
+        // elsewhere (an extracted copy in Downloads) is the user's, and so are its images.
+        var root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(legacy.Root)) + Path.DirectorySeparatorChar;
+        foreach (var folder in new[] { legacy.InstallFolder }.Concat(legacy.OtherInstallFolders))
+        {
+            if (folder is null || !Directory.Exists(folder)) continue;
+            if (!Path.GetFullPath(folder).StartsWith(root, OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal)) continue;
+            foreach (var image in Directory.EnumerateFiles(folder, "*-autoinstall.iso", SearchOption.TopDirectoryOnly))
+            {
+                try { File.Delete(image); }
+                catch (IOException) { }
+                catch (UnauthorizedAccessException) { }
+            }
         }
     }
 
