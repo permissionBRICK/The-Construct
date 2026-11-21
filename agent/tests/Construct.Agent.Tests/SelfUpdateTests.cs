@@ -17,6 +17,7 @@ public sealed class SelfUpdateTests : IAsyncDisposable
     private readonly byte[] _package = Package();
     private string _published;
     private FakeDevice? _device;
+    private FakeDevice.StaticHandler? _channel;
 
     public SelfUpdateTests() => _published = Convert.ToHexStringLower(SHA256.HashData(_package));
 
@@ -42,6 +43,7 @@ public sealed class SelfUpdateTests : IAsyncDisposable
             "https://updates.example/construct/construct-agent-2222222-linux-x64.zip" => new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent(_package) },
             _ => new HttpResponseMessage(HttpStatusCode.NotFound),
         });
+        _channel = handler;
         _device = new FakeDevice(_directory, channel: handler, running: running, version: Old);
         _device.Settings.Update(s => s with { Channel = Channel });
         if (running is not null)
@@ -82,6 +84,55 @@ public sealed class SelfUpdateTests : IAsyncDisposable
         Assert.Equal([device.Install.ExecutableOf(New)], device.Platform.Launched);
         Assert.Equal(1, device.Stopped);
         Assert.DoesNotContain(Directory.EnumerateFileSystemEntries(device.Install.VersionsDirectory), p => Path.GetFileName(p).StartsWith('.') || p.EndsWith(".partial", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task The_install_says_what_it_waits_for_and_goes_ahead_after_its_limit()
+    {
+        // Finding 21: "installs when the agent is idle" said nothing of what it waited for, and could wait forever.
+        var device = Device();
+        device.Busy = "a device pairing";
+        await device.Updater.CheckAsync(CancellationToken.None);
+
+        device.Updater.StartInstall();
+        await FakeDevice.WaitAsync(() => device.Updater.View().Waiting == "a device pairing", "the reason");
+        Assert.Equal("waiting", device.Updater.View().State);
+        await device.Updater.Work.WaitAsync(TimeSpan.FromSeconds(10));
+
+        // Still busy, but the limit (two seconds here, ten minutes by default) passed: the switch happened.
+        Assert.Equal([device.Install.ExecutableOf(New)], device.Platform.Launched);
+        Assert.Null(device.Updater.View().Waiting);
+    }
+
+    [Fact]
+    public async Task The_new_version_opens_the_window_and_the_pop_out_that_were_open()
+    {
+        // Finding 5: the window did not come back after a self-update.
+        var device = Device();
+        device.Updater.OpenSurfaces = () => ["win", "pop", "alone"];
+        await device.Updater.CheckAsync(CancellationToken.None);
+
+        device.Updater.StartInstall();
+        await device.Updater.Work.WaitAsync(TimeSpan.FromSeconds(10));
+
+        Assert.Equal([["win", "pop"]], device.Platform.LaunchedSurfaces);
+    }
+
+    [Fact]
+    public async Task Opening_the_pop_out_checks_the_channel_at_most_once_per_quarter_hour()
+    {
+        // Finding 16: the agent checked only a minute after start and then every six hours.
+        var device = Device();
+        int Reads() { lock (_channel!.Requests) return _channel.Requests.Count(r => r.AbsoluteUri == Channel); }
+
+        device.Updater.CheckIfStale();
+        await FakeDevice.WaitAsync(() => device.Updater.View().CheckedAt is not null, "the first check");
+        Assert.Equal(New, device.Updater.View().Available);
+        device.Updater.CheckIfStale();
+        device.Updater.CheckIfStale();
+        await Task.Delay(200);
+
+        Assert.Equal(1, Reads());
     }
 
     [Fact]

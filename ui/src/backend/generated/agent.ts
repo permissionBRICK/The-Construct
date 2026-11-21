@@ -1402,6 +1402,7 @@ export interface components {
             installed: boolean;
             /** Format: date-time */
             checkedAt: null | string;
+            waiting?: null | string;
         };
         UpgradeFound: {
             installFolder: null | string;

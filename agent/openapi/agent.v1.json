@@ -4417,6 +4417,12 @@
               "string"
             ],
             "format": "date-time"
+          },
+          "waiting": {
+            "type": [
+              "null",
+              "string"
+            ]
           }
         }
       },

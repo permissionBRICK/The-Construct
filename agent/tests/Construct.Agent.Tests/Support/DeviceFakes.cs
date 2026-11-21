@@ -36,6 +36,9 @@ public sealed class FakePlatform : IDevicePlatform, IAgentLauncher, IDisposable
 
     public ConcurrentQueue<string> Launched { get; } = new();
 
+    /// <summary>The surfaces each launch was asked to open.</summary>
+    public ConcurrentQueue<string[]> LaunchedSurfaces { get; } = new();
+
     public Task OpenAsync(string uri, CancellationToken ct)
     {
         Opened.Enqueue(uri);
@@ -52,9 +55,10 @@ public sealed class FakePlatform : IDevicePlatform, IAgentLauncher, IDisposable
 
     public void SetStartWithOs(bool on, string executable) => StartWithOs = on;
 
-    public Task LaunchAsync(string executable, CancellationToken ct)
+    public Task LaunchAsync(string executable, IReadOnlyList<string> surfaces, CancellationToken ct)
     {
         Launched.Enqueue(executable);
+        LaunchedSurfaces.Enqueue([.. surfaces]);
         return Task.CompletedTask;
     }
 
@@ -77,9 +81,10 @@ public sealed class FakeEngines : IDeviceEngines
 
     public ConcurrentQueue<(string Engine, string Call, JsonNode? Body)> Calls { get; } = new();
 
-    public FakeEngines Add(string id, string url = "https://engine.test")
+    /// <param name="known">False: the engine's own id is not known (an engine on the old stack never tells it).</param>
+    public FakeEngines Add(string id, string url = "https://engine.test", bool known = true)
     {
-        Engines.Add(new EngineView(id, id, url, new string('A', 64), "engine-" + id, true, false, false));
+        Engines.Add(new EngineView(id, id, url, new string('A', 64), known ? "engine-" + id : null, known, !known, false));
         return this;
     }
 
@@ -169,7 +174,8 @@ public sealed class FakeDevice : IAsyncDisposable
         Install = new AgentInstall(dataDirectory, "construct-agent");
         UpdateEverything? everything = null;
         Updater = new AgentUpdater(Options, Install, Settings, new HttpClient(channel ?? new StaticHandler()), "agentLinux",
-            () => everything?.Running != true, Platform, () => Stopped++, () => { }) { Running = running };
+            () => Busy ?? (everything?.Running == true ? "the update of hosts and VMs" : null), Platform, () => Stopped++, () => { })
+            { Running = running, IdlePoll = TimeSpan.FromMilliseconds(50), IdleLimit = TimeSpan.FromSeconds(2) };
         Everything = new UpdateEverything(Engines, Updater, () => { }, TimeProvider.System) { PollInterval = TimeSpan.FromMilliseconds(20), HostUpdateLimit = TimeSpan.FromSeconds(5) };
         everything = Everything;
         Services = new DeviceServices(Platform, Settings, ssh, Links, Updater, Everything, Engines);
@@ -198,6 +204,9 @@ public sealed class FakeDevice : IAsyncDisposable
     public DeviceServices Services { get; }
 
     public int Stopped { get; private set; }
+
+    /// <summary>What the agent is busy with, as the updater sees it; null: idle.</summary>
+    public string? Busy { get; set; }
 
     public async ValueTask DisposeAsync()
     {

@@ -92,8 +92,23 @@ internal sealed class TrayShell : ApplicationContext, IAgentShell
         else Show(surface, route);
     }
 
+    /// <summary>The surfaces shown now; called from any thread (a self-update opens them again in the new version).</summary>
+    public IReadOnlyList<string> Visible()
+    {
+        if (_dispatcher.InvokeRequired)
+        {
+            try { return (IReadOnlyList<string>)_dispatcher.Invoke(Visible); }
+            catch (Exception ex) when (ex is InvalidOperationException or ObjectDisposedException) { return []; }
+        }
+
+        // The pop-out first: the new version shows the window behind it.
+        return new[] { "win", "pop", "alone" }.Where(Visible).ToArray();
+    }
+
     private void Show(string surface, string? route)
     {
+        // A new release shows when the pop-out opens, not only after the six-hourly check (finding 16).
+        if (surface == "pop") _device.Updater.CheckIfStale();
         Renew(surface);
         if (!_windows.TryGetValue(surface, out var window))
         {

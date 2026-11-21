@@ -72,11 +72,21 @@ internal sealed partial class WindowsPlatform : IDevicePlatform, IAgentLauncher
         else _registry.DeleteValue(DesktopRegistration.RunKey, RunValue);
     }
 
-    /// <summary>Starts an installed version; the Run value follows it so the next sign-in starts the same one.</summary>
-    public Task LaunchAsync(string executable, CancellationToken ct)
+    /// <summary>
+    /// Starts an installed version; the Run value follows it so the next sign-in starts the same one. The surfaces open
+    /// now open again in it (<c>--open pop,win</c>).
+    /// </summary>
+    public Task LaunchAsync(string executable, IReadOnlyList<string> surfaces, CancellationToken ct)
     {
         if (StartWithOs == true) SetStartWithOs(true, executable);
-        using var _ = Process.Start(new ProcessStartInfo(executable) { UseShellExecute = false, ArgumentList = { "--background" } });
+        var start = new ProcessStartInfo(executable) { UseShellExecute = false, ArgumentList = { "--background" } };
+        if (surfaces.Count > 0)
+        {
+            start.ArgumentList.Add("--open");
+            start.ArgumentList.Add(string.Join(',', surfaces));
+        }
+
+        using var _ = Process.Start(start);
         return Task.CompletedTask;
     }
 
