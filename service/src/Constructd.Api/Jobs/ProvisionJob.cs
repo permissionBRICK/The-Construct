@@ -61,8 +61,32 @@ public sealed class ProvisionJob(ISshRunner ssh, ISourceCache sources, IVmApplie
     /// <summary>The backup key <c>E</c> (<c>AGE-SECRET-KEY-1…</c>) of the backup a run restores.</summary>
     public const string BackupKeySecret = "backupKey";
 
+    /// <summary>How many sections a first run expects of <c>provision.sh</c>, which names them only as they come.</summary>
+    public const int ExpectedGuestSections = 40;
+
+    /// <summary>The bar's words for an engine step (1-3 words); <c>provision.sh</c> names its own sections.</summary>
+    public static string Label(string step) => step switch
+    {
+        "source" => "Preparing source",
+        "copy" => "Copying files",
+        "provision" => "Provisioning",
+        "restore" => "Restoring backup",
+        "project-commands" => "Project commands",
+        "applied" => "Checking",
+        "finish" => "Finishing",
+        "media" => "Preparing image",
+        "backup" => "Backing up",
+        "delete" => "Deleting VM",
+        "create" => "Creating VM",
+        _ => step,
+    };
+
+    /// <summary>The sub-steps a first provision expects, for the bar's weights (<see cref="JobProgressTracker.Expect"/>).</summary>
+    public static IEnumerable<string> ExpectedSteps(bool restore) => Steps.Where(s => restore || s != "restore");
+
     public async Task<JobOutcome> RunAsync(ProvisionRun run, IProgress<string> progress, CancellationToken cancel)
     {
+        JobProgressTracker.Current?.Expect(ExpectedSteps(run.Restore is not null), GuestStep, ExpectedGuestSections);
         var context = new Context(run, progress);
         var seedUser = run.Desired.Desired.Settings.SeedUser ?? run.DefaultSeedUser;
         // A provision (also of a reinstalled guest) may start from a fresh disk: device keys are written again.
@@ -201,6 +225,7 @@ public sealed class ProvisionJob(ISshRunner ssh, ISourceCache sources, IVmApplie
     /// </summary>
     public async Task<JobOutcome> RestoreOnlyAsync(ProvisionRun run, IProgress<string> progress, CancellationToken cancel)
     {
+        JobProgressTracker.Current?.Expect(["restore"]);
         var context = new Context(run, progress) { Step = "restore" };
         var restore = run.Restore ?? throw new InvalidOperationException("A restore run names its backup.");
         try
@@ -343,8 +368,35 @@ public sealed class ProvisionJob(ISshRunner ssh, ISourceCache sources, IVmApplie
     {
         cancel.ThrowIfCancellationRequested();
         context.Step = step;
+        JobProgressTracker.Current?.Begin(step, Label(step));
         await phases.SetPhaseAsync(context.Run.JobId, step, CancellationToken.None);
         context.Report(step, "running", null);
+    }
+
+    /// <summary>The key prefix of the guest's own sections on the bar (<c>provision.sh</c>'s step markers).</summary>
+    public const string GuestStep = "guest:";
+
+    /// <summary>
+    /// A progress marker of the guest (<c>::construct-step LABEL|TITLE</c> before each <c>provision.sh</c> section,
+    /// <c>::construct-progress PERCENT</c> from a section that measures itself) goes to the bar, never to the log.
+    /// </summary>
+    private static bool Marker(string line)
+    {
+        if (line.StartsWith(ProvisionScript.StepMarker, StringComparison.Ordinal))
+        {
+            if (ProvisionScript.ParseStepMarker(line) is { } section) JobProgressTracker.Current?.Begin(GuestStep + section.Title, section.Label);
+            return true;
+        }
+
+        if (line.StartsWith(ProvisionScript.ProgressMarker, StringComparison.Ordinal))
+        {
+            if (int.TryParse(line.AsSpan(ProvisionScript.ProgressMarker.Length).Trim(), System.Globalization.NumberStyles.None,
+                    System.Globalization.CultureInfo.InvariantCulture, out var percent))
+                JobProgressTracker.Current?.Fraction(percent / 100d);
+            return true;
+        }
+
+        return false;
     }
 
     private sealed record GuestRun(int ExitCode, IReadOnlyList<string> Lines);
@@ -513,6 +565,7 @@ public sealed class ProvisionJob(ISshRunner ssh, ISourceCache sources, IVmApplie
             return new LineProgress(raw =>
             {
                 var line = ProvisionScript.CleanLine(raw);
+                if (Marker(line)) return;
                 collect?.Add(line);
                 if (!Quiet && filter.Pass(line) is { } shown) Report(Step, "running", shown);
             });

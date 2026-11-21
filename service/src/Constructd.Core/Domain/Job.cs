@@ -3,9 +3,13 @@ namespace Constructd.Core.Domain;
 /// <summary>
 /// A timestamped progress line of a job, as streamed over SSE. A job that reports steps (design 7.1)
 /// also fills <paramref name="Step"/>, <paramref name="State"/> and, where known, <paramref name="Percent"/>;
-/// <paramref name="Text"/> is then the output line, or a short "step: state" summary.
+/// <paramref name="Text"/> is then the output line, or a short "step: state" summary. A job that names its
+/// sub-steps (<see cref="Constructd.Core.Services.JobProgressTracker"/>) stamps every line with the whole job's percentage
+/// (<paramref name="Overall"/>, 0 to 99 while it runs, never going back) and the current sub-step in a few words
+/// (<paramref name="Label"/>).
 /// </summary>
-public sealed record JobProgressLine(DateTimeOffset At, string Text, string? Step = null, string? State = null, int? Percent = null);
+public sealed record JobProgressLine(DateTimeOffset At, string Text, string? Step = null, string? State = null, int? Percent = null,
+    int? Overall = null, string? Label = null);
 
 /// <summary>Structured progress of a step-wise job: <c>{step, state, line?, percent?}</c>.</summary>
 public sealed record JobStepProgress(string Step, string State, string? Line = null, int? Percent = null);

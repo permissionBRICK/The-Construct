@@ -205,10 +205,20 @@ public sealed record VmStateResponse(VmState State);
 /// <summary>Answer to every call that starts a job: <c>202 Accepted</c> plus the job id.</summary>
 public sealed record JobAcceptedResponse(string JobId);
 
-public sealed record JobProgressResponse(DateTimeOffset At, string Text, string? Step = null, string? State = null, int? Percent = null)
+/// <param name="Overall">The whole job's percentage when this line was reported (see <see cref="JobResponse.Overall"/>).</param>
+/// <param name="Label">The sub-step the job was in, in a few words.</param>
+public sealed record JobProgressResponse(DateTimeOffset At, string Text, string? Step = null, string? State = null, int? Percent = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? Overall = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Label = null)
 {
-    public static JobProgressResponse From(JobProgressLine line) => new(line.At, line.Text, line.Step, line.State, line.Percent);
+    public static JobProgressResponse From(JobProgressLine line) => new(line.At, line.Text, line.Step, line.State, line.Percent, line.Overall, line.Label);
 }
+
+/// <summary>
+/// One progress bar for a whole job: <paramref name="Percent"/> from 0 to 100 (100 only once the job succeeded; it never
+/// goes back) and the current sub-step in one to three words (<paramref name="Label"/>: "Downloading ISO", "Installing T3").
+/// </summary>
+public sealed record JobOverallResponse(int Percent, string Label);
 
 /// <summary>
 /// Result of a creation job as the API presents it: the durable part (<see cref="Name"/>,
@@ -229,7 +239,7 @@ public sealed record JobResponse(
     IReadOnlyList<JobProgressResponse> Progress,
     object? Result,
     string? Error, string? Initiator = null, string? OperationKey = null, string? Phase = null,
-    IReadOnlyList<string>? Warnings = null)
+    JobOverallResponse? Overall = null, IReadOnlyList<string>? Warnings = null)
 {
     /// <param name="vmToken">
     /// The consumed one-time secret, if this projection is the one that got it. It is merged into the
@@ -245,8 +255,22 @@ public sealed record JobResponse(
             job.Finished,
             [.. job.Progress.Select(JobProgressResponse.From)],
             ProjectResult(job, vmToken),
-            job.Error, job.Initiator, job.OperationKey, job.Phase, JobWarnings.Of(job));
+            job.Error, job.Initiator, job.OperationKey, job.Phase, OverallOf(job), JobWarnings.Of(job));
 
+    /// <summary>
+    /// The job's bar: the overall percentage and label of its latest line that has one, 100 once it succeeded; null for a
+    /// job that names no sub-steps.
+    /// </summary>
+    private static JobOverallResponse? OverallOf(Job job)
+    {
+        for (var i = job.Progress.Count - 1; i >= 0; i--)
+        {
+            if (job.Progress[i] is { Overall: { } percent, Label: { } label })
+                return new(job.State == JobState.Succeeded ? 100 : percent, label);
+        }
+
+        return null;
+    }
 
     /// <summary>
     /// Projects the stored (secret-free) result for the wire. For a creation job the VM token is

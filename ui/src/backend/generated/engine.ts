@@ -5042,6 +5042,11 @@ export interface components {
             jobId: string;
             cancelled: boolean;
         };
+        JobOverallResponse: {
+            /** Format: int32 */
+            percent: number;
+            label: string;
+        };
         JobProgressResponse: {
             /** Format: date-time */
             at: string;
@@ -5050,6 +5055,9 @@ export interface components {
             state?: null | string;
             /** Format: int32 */
             percent?: null | number;
+            /** Format: int32 */
+            overall?: null | number;
+            label?: null | string;
         };
         JobResponse: {
             id: string;
@@ -5066,6 +5074,7 @@ export interface components {
             initiator?: null | string;
             operationKey?: null | string;
             phase?: null | string;
+            overall?: null | components["schemas"]["JobOverallResponse"];
             warnings?: null | string[];
         };
         JobRetryRequest: {

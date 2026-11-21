@@ -56,6 +56,36 @@ public sealed class ProvisionJobTests
     }
 
     [Fact]
+    public async Task The_job_has_one_overall_percentage_with_the_guest_sections_as_sub_steps_and_keeps_its_durations()
+    {
+        var ssh = new FakeSshRunner
+        {
+            Provision = _ => (0, ["::construct-step Checking access|Checking root privileges", "==> Checking root privileges",
+                "::construct-step Installing T3|Installing T3 Code web GUI", "==> Installing T3 Code web GUI", "::construct-progress 50",
+                "half way", .. FakeSshRunner.Clean]),
+        };
+        await using var h = await ProvisionHarness.StartAsync(ssh);
+        var job = await h.RunAsync("click-1");
+
+        Assert.Equal(JobState.Succeeded, job.State);
+        // The markers move the bar and are no log lines.
+        Assert.DoesNotContain(job.Progress, p => p.Text.StartsWith("::construct-", StringComparison.Ordinal));
+        var bar = job.Progress.Where(p => p.Overall is not null).ToList();
+        Assert.Equal("Copying files", bar.First(p => p.Step == "copy").Label);
+        Assert.Equal("Installing T3", bar.Single(p => p.Text == "half way").Label);
+        Assert.Equal("Checking access", bar.Single(p => p.Text == "==> Checking root privileges").Label);
+        Assert.Equal(bar.Select(p => p.Overall!.Value).Order(), bar.Select(p => p.Overall!.Value));
+        Assert.All(bar, p => Assert.InRange(p.Overall!.Value, 0, 99));
+        Assert.Equal(new JobOverallResponse(100, "Finishing"), job.Overall);
+
+        // The next run weighs each sub-step by what it took in this one.
+        var plan = await h.App.Service<IHostConfigStore>().GetAsync<Constructd.Core.Services.ProgressPlan>("progress-plan:provision:" + ProvisionHarness.Vm, default);
+        Assert.Equal(["source", "copy", "provision", "guest:Checking root privileges", "guest:Installing T3 Code web GUI", "project-commands", "applied", "finish"],
+            plan!.Steps.Select(s => s.Key));
+        Assert.Equal("Installing T3", plan.Steps[4].Label);
+    }
+
+    [Fact]
     public async Task For_an_account_with_devices_the_run_writes_the_device_keys_before_the_reboot()
     {
         await using var h = await ProvisionHarness.StartAsync();

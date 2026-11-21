@@ -76,6 +76,8 @@ public sealed class ReinstallJob(ProvisionJob provision, IProvisionTargets targe
 
     public async Task<JobOutcome> RunAsync(ReinstallRun run, IProgress<string> progress, CancellationToken cancel)
     {
+        JobProgressTracker.Current?.Expect([.. Steps, VmJobs.InstallStep, .. ProvisionJob.ExpectedSteps(restore: true)],
+            ProvisionJob.GuestStep, ProvisionJob.ExpectedGuestSections);
         var state = new State();
         var vm = run.Vm;
         var succeeded = false;
@@ -368,6 +370,7 @@ public sealed class ReinstallJob(ProvisionJob provision, IProvisionTargets targe
     {
         cancel.ThrowIfCancellationRequested();
         state.Step = step;
+        JobProgressTracker.Current?.Begin(step, ProvisionJob.Label(step));
         await phases.SetPhaseAsync(run.JobId, step, CancellationToken.None);
         ProvisionJob.Report(state.Guest, progress, step, "running", null);
     }

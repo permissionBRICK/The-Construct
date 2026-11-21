@@ -75,7 +75,8 @@ public static class ServiceComposition
                 // rendered form would carry the dependency's message, stack trace and Data with it.
                 (job, error) => logger.LogError(
                     "Job {JobId} ({Kind}) for {Vm} failed: {Error}.",
-                    job.Id, job.Kind, job.VmName ?? "-", error), sp.GetRequiredService<IMaintenanceGate>(), sp.GetRequiredService<ChangeFeed>());
+                    job.Id, job.Kind, job.VmName ?? "-", error), sp.GetRequiredService<IMaintenanceGate>(), sp.GetRequiredService<ChangeFeed>(),
+                new HostConfigProgressPlans(sp.GetRequiredService<IHostConfigStore>()));
         });
         services.AddSingleton<IJobEngine>(sp => sp.GetRequiredService<InProcessJobEngine>());
 

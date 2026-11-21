@@ -2,6 +2,7 @@ using Constructd.Core.Abstractions;
 using Constructd.Core.Configuration;
 using Constructd.Core.Domain;
 using Constructd.Core.Logic;
+using Constructd.Core.Services;
 
 namespace Constructd.Api.Jobs;
 
@@ -15,6 +16,9 @@ namespace Constructd.Api.Jobs;
 /// </summary>
 public static class VmJobs
 {
+    /// <summary>The bar's sub-step from the new VM's start until it answers: the unattended Ubuntu install.</summary>
+    public const string InstallStep = "vm:install";
+
     public static async Task<JobOutcome> CreateAsync(
         IServiceScopeFactory scopes,
         VmDescriptor descriptor,
@@ -102,6 +106,7 @@ public static class VmJobs
             cancellationToken, redownload).ConfigureAwait(false);
 
         mayExist();
+        JobProgressTracker.Current?.Begin(InstallStep, "Installing Ubuntu");
         await driver.CreateVmAsync(descriptor with { IsoPath = isoPath }, progress, cancellationToken)
             .ConfigureAwait(false);
 

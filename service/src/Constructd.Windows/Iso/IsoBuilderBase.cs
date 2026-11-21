@@ -1,6 +1,7 @@
 using Constructd.Core.Abstractions;
 using Constructd.Core.Configuration;
 using Constructd.Core.Logic;
+using Constructd.Core.Services;
 using Constructd.Windows.Internal;
 using Microsoft.Extensions.Logging;
 
@@ -210,6 +211,7 @@ public abstract class IsoBuilderBase : IIsoBuilder, IIsoMediaBuilder, IDisposabl
             }
 
             safeProgress?.Report(describing);
+            JobProgressTracker.Current?.Begin("iso:build", "Building image");
             var result = await RunToolAsync(sourceIso, outputIso, buildScript, user, password, identity,
                 pubKey, sourceId, safeProgress, cancellationToken).ConfigureAwait(false);
 
@@ -319,6 +321,7 @@ public abstract class IsoBuilderBase : IIsoBuilder, IIsoMediaBuilder, IDisposabl
             var pending = cached + "." + Guid.NewGuid().ToString("N") + ".download";
             try
             {
+                JobProgressTracker.Current?.Begin("iso:download", "Downloading ISO");
                 await _downloader.DownloadAsync(url, pending, progress, cancellationToken).ConfigureAwait(false);
                 if (!_files.FileExists(pending) || _files.FileLength(pending) <= 0)
                     throw Fail(vmName, "the downloaded source ISO is missing or empty");

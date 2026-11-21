@@ -136,6 +136,13 @@ public sealed class ReinstallJobTests : IAsyncDisposable
         Assert.Contains(guest.Calls, c => c.StandardInput?.Contains(ProvisionScript.VmTokenVariable + "=", StringComparison.Ordinal) == true);
         Assert.NotEqual(vm.VmTokenHash, (await h.App.Vms.GetAsync(ProvisionHarness.Vm, default))!.VmTokenHash);
         Assert.Equal("other.test ssh-ed25519 AAAAkeep\n", await File.ReadAllTextAsync(target.KnownHostsFile!));
+
+        // One bar over the whole reinstall (F24/F32): it never goes back, names the install, and ends at 100.
+        var bar = job.Progress.Where(p => p.Overall is not null).Select(p => (p.Overall!.Value, p.Label!)).ToList();
+        Assert.Equal(bar.Select(b => b.Value).Order(), bar.Select(b => b.Value));
+        Assert.Contains(bar, b => b.Item2 == "Installing Ubuntu");
+        Assert.Equal(["Backing up", "Deleting VM", "Creating VM", "Installing Ubuntu"], bar.Select(b => b.Item2).Distinct().Take(4));
+        Assert.Equal(100, job.Overall!.Percent);
     }
 
     [Fact]

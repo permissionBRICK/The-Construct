@@ -167,6 +167,54 @@ _finish_provision() {
   exit "${final_rc}"
 }
 
+# The step's name on the host's progress bar, in one to three words. Pure (unit-tested).
+_step_label() {
+  case "$1" in
+    "Checking root privileges") printf 'Checking access' ;;
+    "Checking free disk space") printf 'Checking disk' ;;
+    "Recording busy T3 Code threads") printf 'Saving T3 threads' ;;
+    Granting*"passwordless sudo") printf 'Setting up sudo' ;;
+    "Running core host bootstrap") printf 'Installing packages' ;;
+    "Writing configuration to"*) printf 'Writing config' ;;
+    "Setting up the swap file") printf 'Setting up swap' ;;
+    "Installing the VM service token") printf 'Installing token' ;;
+    "Requesting host port forwards"*) printf 'Requesting forwards' ;;
+    "Configuring global git identity") printf 'Configuring git' ;;
+    "Setting up SMB share"*) printf 'Setting up SMB' ;;
+    "Setting up root SSH key") printf 'Setting up SSH' ;;
+    "Installing AI tool: claude-code") printf 'Installing Claude' ;;
+    "Installing AI tool: codex") printf 'Installing Codex' ;;
+    "Installing AI tool: opencode") printf 'Installing OpenCode' ;;
+    "Installing AI tool: antigravity") printf 'Installing Antigravity' ;;
+    "Installing AI tool: "*) printf 'Installing %s' "${1#Installing AI tool: }" ;;
+    "Installing T3 Code web GUI") printf 'Installing T3' ;;
+    "Disabling T3 Code"*) printf 'Disabling T3' ;;
+    "Recording the forwarded T3 address") printf 'Recording T3 address' ;;
+    "Installing AI tool console integration") printf 'Installing integrations' ;;
+    "Installing construct CLI") printf 'Installing CLI' ;;
+    "Setting up reflink-seeded git worktrees") printf 'Setting up worktrees' ;;
+    "Installing browser console gateway") printf 'Installing console' ;;
+    "Setting up the notification spool") printf 'Setting up notifications' ;;
+    "Setting up the OOM guard") printf 'Setting up OOM guard' ;;
+    "Keeping pkill/pgrep off the calling shell") printf 'Guarding pkill' ;;
+    "Setting up the activity heartbeat timer") printf 'Setting up heartbeat' ;;
+    "Setting up the token usage timer") printf 'Setting up usage' ;;
+    "Setting up endpoint refresh at boot") printf 'Setting up refresh' ;;
+    "Generating runtime config") printf 'Generating config' ;;
+    "Configuring MCP servers"*) printf 'Configuring MCP' ;;
+    "Installing project SDKs/runtimes") printf 'Installing SDKs' ;;
+    "Seeding git credentials"*) printf 'Seeding credentials' ;;
+    "Checking out project repos") printf 'Cloning projects' ;;
+    "Running project provisioning commands") printf 'Project commands' ;;
+    "Requesting project port forwards") printf 'Project forwards' ;;
+    "(Re)starting construct service") printf 'Restarting services' ;;
+    "Setting up VS Code server"*) printf 'Setting up VS Code' ;;
+    "Recording provisioning timestamps") printf 'Finishing' ;;
+    "Scheduling the resume of interrupted T3 Code threads") printf 'Resuming T3 threads' ;;
+    *) printf '%s' "$1" | awk '{ print $1 (NF > 1 ? " " $2 : "") (NF > 2 ? " " $3 : "") }' | tr -d '\n' ;;
+  esac
+}
+
 run_step() {
   local criticality="$1" title="$2" rc log_file
   shift 2
@@ -175,6 +223,10 @@ run_step() {
     *) printf '%srun_step: invalid criticality: %s%s\n' "${_C_ERR}" "${criticality}" "${_C_RESET}"; return 2 ;;
   esac
 
+  # One countable marker per step for the host's progress bar (label|title); the host shows the label.
+  local shown
+  shown="$(_sanitize_step_title "${title}")"
+  printf '::construct-step %s|%s\n' "$(_step_label "${shown}")" "${shown}"
   step "${title}"
   log_file="${_PROVISION_LOG_DIR}/step-$(( ${#_FAILED_TITLES[@]} + 1 ))-${RANDOM}.log"
   if "$@" 2>&1 | tee "${log_file}"; then
