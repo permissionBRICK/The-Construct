@@ -134,6 +134,29 @@ public sealed class DeviceLinkTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task A_vm_back_from_its_reinstall_is_tried_with_the_device_key_at_once()
+    {
+        var ssh = Path.Combine(_device.Platform.Home, ".ssh");
+        Directory.CreateDirectory(ssh);
+        var old = Path.Combine(ssh, "agent_vm_ed25519");
+        File.WriteAllText(old, "old");
+        File.WriteAllText(Path.Combine(ssh, "construct_ed25519"), "device");
+        File.WriteAllText(Path.Combine(ssh, "config"), $"Host work\n    HostName host.example\n    User root\n    IdentityFile {old}\n    IdentitiesOnly yes\n    Port 2201\n");
+        await _device.Links.RefreshAsync(CancellationToken.None);
+        Assert.Single(_device.KeyProbes);
+
+        // A reinstall keeps the VM's record (same creation time); the machine it builds has the device key only.
+        _device.Engines.On("e1", "GET vms", """[{"name":"work","owner":"alice","kind":"primary","state":"running","deleting":false,"currentOperation":{"jobId":"j1","kind":"reinstall"}}]""");
+        await _device.Links.RefreshAsync(CancellationToken.None);
+        _device.DeviceKeyWorks = true;
+        _device.Engines.On("e1", "GET vms", """[{"name":"work","owner":"alice","kind":"primary","state":"running","deleting":false}]""");
+        await _device.Links.RefreshAsync(CancellationToken.None);
+
+        Assert.Equal(2, _device.KeyProbes.Count);
+        Assert.Equal(Path.Combine(ssh, "construct_ed25519"), _device.LinkKeys["e1/work"]);
+    }
+
+    [Fact]
     public async Task Closing_a_forward_deletes_it_at_the_engine()
     {
         await _device.Links.RefreshAsync(CancellationToken.None);

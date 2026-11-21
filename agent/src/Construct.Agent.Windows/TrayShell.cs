@@ -101,7 +101,7 @@ internal sealed class TrayShell : ApplicationContext, IAgentShell
             catch (Exception ex) when (ex is InvalidOperationException or ObjectDisposedException) { return []; }
         }
 
-        // The pop-out first: the new version shows the window behind it.
+        // The window first: the new version shows the pop-out over it.
         return new[] { "win", "pop", "alone" }.Where(Visible).ToArray();
     }
 

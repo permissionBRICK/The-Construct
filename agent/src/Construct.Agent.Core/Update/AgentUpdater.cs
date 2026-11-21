@@ -236,7 +236,7 @@ public sealed class AgentUpdater : IAsyncDisposable
             Set("installing");
             await WaitUntilIdleAsync(ct).ConfigureAwait(false);
             _install.Write(new InstallState(package.Version, Running, Pending: true));
-            // The surfaces open now open again in the new version (finding 5); the pop-out first, as the user left it.
+            // The surfaces open now open again in the new version (finding 5), the window first so the pop-out shows over it.
             var surfaces = (OpenSurfaces?.Invoke() ?? []).Where(s => s is "pop" or "win").ToArray();
             await _launcher.LaunchAsync(_install.ExecutableOf(package.Version), surfaces, ct).ConfigureAwait(false);
             _stop();

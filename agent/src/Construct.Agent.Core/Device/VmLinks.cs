@@ -166,6 +166,8 @@ public sealed class VmLinks : IAsyncDisposable
             var state = Text(vm, "state").ToLowerInvariant();
             // A reinstall replaces the machine and a create builds it: no link until it is done.
             var rebuilding = vm["currentOperation"] is JsonObject operation && Text(operation, "kind") is "reinstall" or "create-vm";
+            // The rebuilt machine is tried with the device key as soon as it is back.
+            if (rebuilding) lock (_keyProbes) _keyProbes.Remove(Key(engine.Id, name));
             VmAddress? address = null;
             if (state == "running" && !rebuilding)
             {

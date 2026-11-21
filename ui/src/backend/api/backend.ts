@@ -343,10 +343,11 @@ export class ApiBackend implements Backend {
     }
   }
 
-  /** The notices put away on this device; the agent keeps them, so the pop-out and the window hide the same ones. */
+  /** The notices put away on this device; the agent keeps them, so the pop-out and the window hide the same ones.
+      Added to what this page put away: a dismissal still on its way to the agent stays away. */
   private async loadDismissed() {
     try {
-      this.dismissed = new Set(await ok(this.agent.GET('/api/notices/dismissed')));
+      for (const key of await ok(this.agent.GET('/api/notices/dismissed'))) this.dismissed.add(key);
       this.compose();
     } catch { /* the notices stay as they were */ }
   }
