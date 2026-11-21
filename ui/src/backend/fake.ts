@@ -1,4 +1,4 @@
-import type { AgentId, Backend, CreateVmRequest, FirstRun, FirstRunRequest, Host, HostProbe, HostUser, Job, JobKind, Prefs, Profile, ProfileSave, SettingsPatch, SignInInput, State, Upgrade, Vm } from './types';
+import type { AgentId, Backend, CreateVmRequest, FirstRun, FirstRunRequest, Host, HostProbe, HostUser, Job, JobKind, Prefs, Profile, ProfileSave, SettingsPatch, SignInInput, State, T3Thread, Upgrade, Vm } from './types';
 import { NEXT_RELEASE, NIGHTLY_RELEASE, PAIR_WORDS, RECOVERY_CODE, REINSTALL_STEPS, REPROVISION_STEPS, SIGN_IN_BROWSER_TEXT, SIGN_IN_TEXT, sampleState } from './sample';
 import { activeJob, newer, vmUpdateTarget } from '../model/vm';
 import { AGENTS, agentSwitches, applies, applyPatch } from '../model/settings';
@@ -12,12 +12,12 @@ import { spanText } from './api/map';
    own, so a scene stays exactly as it is. */
 
 export type Scene =
-  | 'calm' | 'update' | 'update-nightly' | 'changed' | 'lease' | 'enter' | 'job' | 'failed' | 'failed-reinstall' | 'repair' | 'updating' | 'restart'
+  | 'calm' | 'update' | 'update-nightly' | 'changed' | 'lease' | 'enter' | 'job' | 'failed' | 'failed-reinstall' | 'repair' | 'repair-chat' | 'updating' | 'restart'
   | 'pairing' | 'pair-confirm' | 'revoked' | 'handout' | 'creating' | 'created' | 'sign-in' | 'sign-in-failed' | 'sign-in-browser' | 'sign-in-key' | 'signed-out' | 'signed-out-two'
   | 'upgrade-intro' | 'upgrade-engine' | 'upgrade-name' | 'upgrade-code' | 'upgrade-close' | 'upgrade-convert' | 'upgrade-host' | 'upgrade-done' | 'upgrade-restart'
   | 'first-run' | 'first-run-restart' | 'warned' | 'old-guest' | 'upstream';
 
-export const SCENES: Scene[] = ['calm', 'update', 'update-nightly', 'changed', 'lease', 'enter', 'job', 'failed', 'failed-reinstall', 'repair', 'updating', 'restart', 'pairing', 'pair-confirm', 'revoked', 'handout', 'creating', 'created', 'sign-in', 'sign-in-failed', 'sign-in-browser', 'sign-in-key', 'signed-out', 'signed-out-two', 'upgrade-intro', 'upgrade-engine', 'upgrade-name', 'upgrade-code', 'upgrade-close', 'upgrade-convert', 'upgrade-host', 'upgrade-done', 'upgrade-restart', 'first-run', 'first-run-restart', 'warned', 'old-guest', 'upstream'];
+export const SCENES: Scene[] = ['calm', 'update', 'update-nightly', 'changed', 'lease', 'enter', 'job', 'failed', 'failed-reinstall', 'repair', 'repair-chat', 'updating', 'restart', 'pairing', 'pair-confirm', 'revoked', 'handout', 'creating', 'created', 'sign-in', 'sign-in-failed', 'sign-in-browser', 'sign-in-key', 'signed-out', 'signed-out-two', 'upgrade-intro', 'upgrade-engine', 'upgrade-name', 'upgrade-code', 'upgrade-close', 'upgrade-convert', 'upgrade-host', 'upgrade-done', 'upgrade-restart', 'first-run', 'first-run-restart', 'warned', 'old-guest', 'upstream'];
 
 /** Things the preview frame can make happen, beside the user's own actions. */
 export type Demo = 'lease' | 'enter' | 'release' | 'fail-next' | 'change';
@@ -107,7 +107,9 @@ export class FakeBackend implements Backend {
       case 'lease': d.vaultRequests.push({ id: 'r1', kind: 'lease', secret: 'forge-token', vmId: 'atlas', vmName: 'atlas', hostName: 'This PC', reason: 'Push the release', span: '2 h', ttlSeconds: 7200 }); break;
       case 'enter': d.vaultRequests.push({ id: 'r2', kind: 'enter', secret: 'payments-sandbox', vmId: 'atlas', vmName: 'atlas', hostName: 'This PC', reason: 'API key of the payments sandbox', span: '' }); break;
       case 'job': d.jobs.push(this.newJob('atlas', 'reprovision', 3, 62)); break;
-      case 'failed': case 'repair': {
+      case 'failed': case 'repair': case 'repair-chat': {
+        // 'repair-chat': the host runs the repair in Construct's chat (`repair.chat`) instead of a T3 Code thread.
+        if (scene === 'repair-chat') for (const h of d.hosts) h.repairChat = true;
         const j = this.newJob('atlas', 'reprovision', 3, 48);
         this.failJob(j);
         if (scene === 'failed') j.repair!.messages = j.repair!.messages.slice(0, 1);
@@ -220,9 +222,13 @@ export class FakeBackend implements Backend {
     j.error = 'apt is locked by another process';
     j.log.push(...APT_LOG, `fail ${j.step}: E: Could not get lock /var/lib/dpkg/lock-frontend`);
     // The hosts here start the repair agent by themselves (`repair.auto`); a host with it off offers the button.
-    const auto = this.s.hosts.find(h => h.id === this.s.vms.find(v => v.id === j.vmId)?.hostId)?.repairAuto !== false;
-    j.repair = auto ? newRepair() : null;
+    const auto = this.hostOf(j.vmId)?.repairAuto !== false;
+    j.repair = auto ? newRepair(true, this.hostOf(j.vmId)?.repairChat === true) : null;
     j.canRepair = !auto;
+  }
+
+  private hostOf(vmId: string) {
+    return this.s.hosts.find(h => h.id === this.s.vms.find(v => v.id === vmId)?.hostId);
   }
 
   private startJob(vmId: string, kind: JobKind, extra?: Partial<Job>): string | null {
@@ -323,9 +329,9 @@ export class FakeBackend implements Backend {
 
   /* --- VM actions --- */
 
-  open(vmId: string, what: 't3' | 'vscode' | 'ssh') {
+  open(vmId: string, what: 't3' | 'vscode' | 'ssh', thread?: T3Thread) {
     const name = { t3: 'T3 Code', vscode: 'VS Code', ssh: 'SSH' }[what];
-    this.set(() => {}, `${name} opens ${this.vmName(vmId)}`);
+    this.set(() => {}, what === 't3' && thread ? 'T3 Code opens on the repair thread' : `${name} opens ${this.vmName(vmId)}`);
   }
 
   async t3Link(vmId: string): Promise<string> { return `https://${this.vmName(vmId)}.example:5177/pair#token=sample`; }
@@ -404,7 +410,7 @@ export class FakeBackend implements Backend {
   startRepair(jobId: string) {
     const j = this.s.jobs.find(x => x.id === jobId);
     if (!j || j.state !== 'failed' || !j.canRepair) return;
-    this.set(d => { const x = this.job(d, jobId)!; x.repair = newRepair(false); x.canRepair = false; });
+    this.set(d => { const x = this.job(d, jobId)!; x.repair = newRepair(false, this.hostOf(x.vmId)?.repairChat === true); x.canRepair = false; });
     this.repairScript(jobId);
   }
 
@@ -420,7 +426,9 @@ export class FakeBackend implements Backend {
 
   replyRepair(jobId: string, text: string) {
     const t = text.trim();
-    if (!t || this.s.jobs.find(x => x.id === jobId)?.repair?.state !== 'asking') return;
+    const r = this.s.jobs.find(x => x.id === jobId)?.repair;
+    // A repair in a T3 Code thread is answered there.
+    if (!t || r?.state !== 'asking' || r.t3Thread) return;
     this.set(d => {
       const j = this.job(d, jobId);
       if (!j?.repair) return;
@@ -836,6 +844,10 @@ export class FakeBackend implements Backend {
     this.hostSet(hostId, x => { x.repairAuto = on; }, on ? 'The repair agent starts by itself' : 'The repair agent starts when asked');
   }
 
+  setRepairChat(hostId: string, on: boolean) {
+    this.hostSet(hostId, x => { x.repairChat = on; }, on ? 'The repair runs in Construct\'s chat' : 'The repair runs in T3 Code');
+  }
+
   saveConfig(hostId: string, section: string, json: string): string | null {
     try { JSON.parse(json); } catch (e) { return (e as Error).message; }
     this.hostSet(hostId, x => { const c = x.config.find(y => y.name === section); if (c) { c.json = json; c.updated = 'now'; } x.audit.unshift({ at: 'now', actor: 'alex', action: 'config.save', target: section }); }, `Saved ${section}`);
@@ -935,7 +947,12 @@ function firstRun(extra: Partial<FirstRun> = {}): FirstRun {
   return { step: 'start', localAddress: null, thisPc: 'setup', restart: null, busy: false, problem: null, code: null, pairing: null, ...extra };
 }
 
-const newRepair = (auto = true): NonNullable<Job['repair']> => ({ agent: 'Claude Code', state: 'working', messages: [{ from: 'agent', text: REPAIR_SCRIPT[0] }], t3Thread: false, outcome: null, at: '14:02', auto });
+/** The repair of a failed job: by default a T3 Code thread in the VM, with `repair.chat` the agent answered in Construct's chat. */
+const newRepair = (auto = true, chat = false): NonNullable<Job['repair']> => ({
+  agent: chat ? 'Claude Code' : 'T3 Code', state: 'working', messages: [{ from: 'agent', text: REPAIR_SCRIPT[0] }],
+  t3Thread: chat ? null : { environmentId: '6f1c0b9e-2d4a-4c55-9a41-0e2b7c1d5f60', threadId: 'thread-repair', title: 'Construct repair: provision failed' },
+  outcome: null, at: '14:02', auto,
+});
 
 /** The converter's items as the agent reports them: one per thing it copies, its id naming the group. */
 /** The converter's items in their order, each with the few words it ends with (R6). */

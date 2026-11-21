@@ -37,6 +37,8 @@ const SHOTS: [Surf, string, string, string?][] = [
   ['win', 'settings', 'calm', 'settings'],
   ['win', 'settings-agents-unknown', 'old-guest', 'settings/agents'],
   ['win', 'repair', 'repair'],
+  // With `repair.chat` the repair is answered in Construct's chat instead of T3 Code.
+  ['win', 'repair-chat', 'repair-chat'],
   ['win', 'updating', 'updating'],
   ['win', 'projects', 'calm', 'projects'],
   ['win', 'projects-upstream', 'upstream', 'projects'],
@@ -135,8 +137,15 @@ test('a swap file size is checked, then waits for the next reprovision', async (
   await expect(page.getByText('Saved, applies at the next reprovision')).toBeVisible();
 });
 
-test('the repair agent takes a reply', async ({ page }) => {
+test('the repair in a T3 Code thread opens there and has no reply box', async ({ page }) => {
   await open(page, 'win', 'repair', 'dark');
+  await expect(page.getByRole('textbox', { name: 'Reply' })).toHaveCount(0);
+  await page.getByRole('button', { name: 'Open in T3 Code' }).click();
+  await expect(page.getByRole('status')).toHaveText('T3 Code opens on the repair thread');
+});
+
+test('the repair agent in Construct\'s chat takes a reply', async ({ page }) => {
+  await open(page, 'win', 'repair-chat', 'dark');
   await page.getByRole('textbox', { name: 'Reply' }).fill('wait for them');
   await page.getByRole('button', { name: 'Send' }).click();
   await expect(page.locator('.chat p.user')).toHaveText('wait for them');

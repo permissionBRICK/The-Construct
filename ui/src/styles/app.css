@@ -99,6 +99,8 @@ html[data-surf="alone"] body { background: transparent; }
 .app .chat p.end.okc { color: var(--ok); }
 .app .chat p.typing::after { content: "_"; animation: blink 1s steps(1) infinite; }
 .app .reply { display: flex; gap: 8px; }
+.app .repair .open { display: flex; align-items: center; gap: 8px; }
+.app .repair .open span { flex: 1; color: var(--dim); font-size: 12.5px; }
 .app .reply .in { flex: 1; width: auto; height: 38px; background: var(--bg); }
 .app .reply .b { width: 38px; padding: 0; }
 /* the ready screen after Create: T3 Code marked recommended */

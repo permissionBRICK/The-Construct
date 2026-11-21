@@ -1355,7 +1355,41 @@ describe('ApiBackend repair agent', () => {
     be.setRepairAuto(E2, false);
     be.setRepairAuto(E1, false);
     await settle();
-    expect(posts(calls).map(c => [c.path, c.body])).toEqual([[`${P}/host/config`, { repair: { auto: false } }]]);
+    expect(posts(calls).map(c => [c.path, c.body])).toEqual([[`${P}/host/config`, { repair: { auto: false, chat: false } }]]);
+  });
+
+  it('switches repair.chat (the repair in Construct\'s chat instead of T3 Code) and keeps repair.auto', async () => {
+    const { be, calls, on, settle } = world();
+    on('GET', `${P}/host/config`, { json: { repair: { auto: false, chat: false, source: 'default', updatedAt: null } } });
+    on('PUT', `${P}/host/config`, { status: 200, json: {} });
+    await be.start();
+    expect(be.snapshot().hosts.find(h => h.id === E1)).toMatchObject({ repairAuto: false, repairChat: false });
+    be.setRepairChat(E1, true);
+    await settle();
+    expect(posts(calls).map(c => [c.path, c.body])).toEqual([[`${P}/host/config`, { repair: { auto: false, chat: true } }]]);
+    expect(be.snapshot().notice?.text).toBe('The repair runs in Construct\'s chat');
+  });
+
+  it('shows a repair that runs as a T3 Code thread and opens T3 Code on that thread', async () => {
+    const { be, calls, on, settle } = world();
+    const thread = { environmentId: 'env-1', threadId: 't-1', title: 'Construct repair: provision failed' };
+    on('GET', `${P}/jobs`, { json: [failed()] });
+    on('GET', `${P}/vms/atlas/repair`, { json: session({ agent: 't3', via: 't3', t3Thread: thread, state: 'waiting', lines: [line(1, 'start', null), line(2, 'text', 'Retry, or switch the mirror?'), line(3, 'turn', null, 'question')] }) });
+    on('POST', `/api/connections/${E1}/atlas/open`, { json: { what: 't3', alias: 'atlas', kind: 'desktop', threadOpened: true } });
+    await be.start();
+    await settle();
+    const r = activeJob(be.snapshot(), 'atlas')!.repair!;
+    expect(r).toMatchObject({ agent: 'T3 Code', state: 'asking', t3Thread: thread, messages: [{ from: 'agent', text: 'Retry, or switch the mirror?' }] });
+
+    be.open('atlas', 't3', r.t3Thread!);
+    await settle();
+    expect(posts(calls).filter(c => c.path.endsWith('/open')).map(c => c.body)).toEqual([{ what: 't3', environmentId: 'env-1', threadId: 't-1' }]);
+    expect(be.snapshot().notice?.text).toBe('T3 Code opens on the repair thread');
+    // T3 Code on the web cannot be sent to the thread: the notice names it.
+    on('POST', `/api/connections/${E1}/atlas/open`, { json: { what: 't3', alias: 'atlas', kind: 'forwarded', threadOpened: false } });
+    be.open('atlas', 't3', r.t3Thread!);
+    await settle();
+    expect(be.snapshot().notice?.text).toBe('T3 Code opens; the repair is the thread "Construct repair: provision failed"');
   });
 });
 

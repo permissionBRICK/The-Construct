@@ -465,7 +465,7 @@ export type RepairSession = E['schemas']['RepairSessionResponse'];
 export type RepairLine = E['schemas']['RepairLineResponse'];
 /** Engine job kinds the repair agent works on. */
 export const REPAIRABLE = new Set(['provision', 'reinstall', 'restore']);
-const AGENT_NAMES: Record<string, string> = { claude: 'Claude Code', codex: 'Codex', opencode: 'OpenCode' };
+const AGENT_NAMES: Record<string, string> = { claude: 'Claude Code', codex: 'Codex', opencode: 'OpenCode', t3: 'T3 Code' };
 
 /** One line of a session as the chat shows it, or null for lines that are not shown (the start, a turn's end, the retry: the outcome says it). */
 function repairMessage(l: RepairLine): RepairMessage | null {
@@ -492,7 +492,7 @@ export function toRepair(s: Omit<RepairSession, 'lines'>, lines: RepairLine[], s
     agent: (s.agent && AGENT_NAMES[s.agent]) || 'Repair agent',
     state,
     messages: lines.map(repairMessage).filter((m): m is RepairMessage => m !== null),
-    t3Thread: false,
+    t3Thread: s.t3Thread ? { environmentId: s.t3Thread.environmentId ?? null, threadId: s.t3Thread.threadId, title: s.t3Thread.title ?? null } : null,
     outcome,
     at: clock(s.started),
     auto: s.automatic,
