@@ -21,6 +21,8 @@
 
     -Repo / -Ref are the old parameters; any further arguments (once passed on to
     Auto-Install.ps1) are ignored with a warning.
+
+    ConstructSetup.exe (agent/src/Construct.Agent.Setup) takes the same steps; change both together.
 #>
 param(
     [string]$Repo = "permissionBRICK/The-Construct",

@@ -26,15 +26,28 @@ They cannot touch your PC.
 
 ## ⚡ Install
 
-On Windows, open PowerShell and paste:
+On Windows, download and start **ConstructSetup.exe**:
+
+- [ConstructSetup.exe](https://github.com/permissionBRICK/The-Construct/releases/latest/download/ConstructSetup.exe) (stable)
+- [ConstructSetup.exe](https://github.com/permissionBRICK/The-Construct/releases/download/channel-nightly/ConstructSetup.exe) (nightly)
+
+It installs the device agent for your user and opens its window, which sets up the engine and your
+first VM. The setup itself needs no administrator rights: Windows asks once, and only when you choose
+to run the engine on this PC; a PC that only connects to a remote host never asks. An existing install
+of the old client moves over in the same window. Started while Construct runs, the setup opens Construct
+and lets it update itself.
+
+The setup is not code-signed yet, so Windows SmartScreen may stop it with "Windows protected your PC":
+choose **More info**, then **Run anyway**. Its SHA-256 is in the release's `SHA256SUMS`.
+
+Or open PowerShell and paste the one-liner, which does the same:
 
 ```powershell
 irm https://raw.githubusercontent.com/permissionBRICK/The-Construct/main/install.ps1 | iex
 ```
 
-It installs the device agent for your user and opens its window, which sets up the engine and your
-first VM. An existing install of the old client moves over in the same window. On Linux,
-`agent/install/install-construct-agent.sh` installs the agent for your user ([agent/README.md](agent/README.md)).
+On Linux, `agent/install/install-construct-agent.sh` installs the agent for your user
+([agent/README.md](agent/README.md)).
 
 ## 📚 Documentation
 

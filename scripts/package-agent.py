@@ -1,12 +1,16 @@
 #!/usr/bin/env python3
-"""Build the device agent's packages: Windows x64 (the tray app) and Linux x64 (the console host).
+"""Build the device agent's packages: Windows x64 (the tray app) and Linux x64 (the console host),
+and the Windows setup, ConstructSetup.exe.
 
 Each zip holds a self-contained publish with construct-agent(.exe) at its root, the UI bundle in
 ui/ and the VS Code extension as construct.vsix (extension/ with the agent's install scripts in
-install/; the install scripts put it into VS Code where VS Code is installed). The release workflow runs this into the host release's output directory; package-construct-release.py
-then lists both in the channel manifest with their SHA-256 (docs/release-flow.md).
+install/; the install scripts put it into VS Code where VS Code is installed). ConstructSetup.exe is one
+small file that installs the Windows package of its channel (built in with --channel) for the user who
+starts it. The release workflow runs this into the host release's output directory; package-construct-release.py
+then lists them in the channel manifest with their SHA-256 (docs/release-flow.md).
 
-    python3 scripts/package-agent.py --output DIR --commit SHA --version X.Y.Z [--ui-dist ui/dist]
+    python3 scripts/package-agent.py --output DIR --commit SHA --version X.Y.Z [--channel stable|nightly]
+        [--repository OWNER/NAME] [--ui-dist ui/dist]
 """
 import argparse
 import json
@@ -24,6 +28,11 @@ PACKAGES = {
     'agentWindows': ('win-x64', 'agent/src/Construct.Agent.Windows/Construct.Agent.Windows.csproj', 'construct-agent.exe'),
     'agentLinux': ('linux-x64', 'agent/src/construct-agent/construct-agent.csproj', 'construct-agent'),
 }
+
+
+SETUP_PROJECT = 'agent/src/Construct.Agent.Setup.Windows/Construct.Agent.Setup.Windows.csproj'
+SETUP_NAME = 'ConstructSetup.exe'
+DEFAULT_REPOSITORY = 'permissionBRICK/The-Construct'
 
 
 def asset_name(key, commit):
@@ -95,9 +104,24 @@ def build_vsix(root, target):
     return target
 
 
-def build(root, output, commit, version, ui_dist):
+def build_setup(root, output, commit, version, channel, repository):
+    """ConstructSetup.exe: one trimmed self-contained file with the channel and repository built in."""
+    with tempfile.TemporaryDirectory(prefix='construct-setup-package-') as work:
+        subprocess.run(['dotnet', 'publish', str(root / SETUP_PROJECT), '-c', 'Release', '-r', 'win-x64',
+                        f'-p:InformationalVersion={version}+{commit}', '-p:IncludeSourceRevisionInInformationalVersion=false',
+                        f'-p:ConstructChannel={channel}', f'-p:ConstructRepository={repository}',
+                        '-p:EnableWindowsTargeting=true', '-p:DebugType=none', '-o', work], check=True)
+        if not (Path(work) / SETUP_NAME).is_file():
+            raise ValueError('The setup publish has no ' + SETUP_NAME)
+        shutil.copyfile(Path(work) / SETUP_NAME, output / SETUP_NAME)
+    print(output / SETUP_NAME)
+
+
+def build(root, output, commit, version, ui_dist, channel='stable', repository=DEFAULT_REPOSITORY):
     if not re.fullmatch(r'[0-9a-f]{40}', commit) or not re.fullmatch(r'\d+\.\d+\.\d+', version):
         raise ValueError('Invalid commit or version')
+    if channel not in ('stable', 'nightly') or not re.fullmatch(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', repository):
+        raise ValueError('Invalid channel or repository')
     output.mkdir(parents=True, exist_ok=True)
     if ui_dist is None:
         subprocess.run(['npm', 'install', '--no-audit', '--no-fund'], cwd=root / 'ui', check=True)
@@ -117,6 +141,7 @@ def build(root, output, commit, version, ui_dist):
             build_vsix(root, publish / VSIX_NAME)
             zip_directory(publish, output / asset_name(key, commit), executable)
             print(output / asset_name(key, commit))
+    build_setup(root, output, commit, version, channel, repository)
 
 
 if __name__ == '__main__':
@@ -126,5 +151,7 @@ if __name__ == '__main__':
     parser.add_argument('--commit', required=True)
     parser.add_argument('--version', required=True, help='X.Y.Z; the build reports X.Y.Z+<commit>')
     parser.add_argument('--ui-dist', type=Path, help='A built UI bundle; by default ui/ is built here')
+    parser.add_argument('--channel', choices=['stable', 'nightly'], default='stable', help='The channel ConstructSetup.exe installs from')
+    parser.add_argument('--repository', default=DEFAULT_REPOSITORY, help='The GitHub repository whose releases ConstructSetup.exe reads')
     args = parser.parse_args()
-    build(args.root, args.output, args.commit, args.version, args.ui_dist)
+    build(args.root, args.output, args.commit, args.version, args.ui_dist, args.channel, args.repository)

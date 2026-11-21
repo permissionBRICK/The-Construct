@@ -1,0 +1,43 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    ConstructSetup.exe: the one file a user downloads to install Construct on Windows (the one-line install.ps1 is
+    the other way). It installs the device agent for this user without elevation, as install.ps1 does
+    (Construct.Agent.Setup), and leaves the administrator prompt to the agent's own engine step. Published as one
+    trimmed, compressed, self-contained file: it needs no .NET on the PC. The channel it installs from is built in
+    (ConstructChannel, set by scripts/package-agent.py per channel); its channel argument overrides it.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <OutputType>Exe</OutputType>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <IsPackable>false</IsPackable>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <AssemblyName>ConstructSetup</AssemblyName>
+    <RootNamespace>Construct.Agent.Setup.Windows</RootNamespace>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>true</SelfContained>
+    <PublishSingleFile>true</PublishSingleFile>
+    <PublishTrimmed>true</PublishTrimmed>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <!-- asInvoker: never an administrator prompt for this per-user install. -->
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>..\Construct.Agent.Windows\construct.ico</ApplicationIcon>
+    <ConstructChannel Condition="'$(ConstructChannel)' == ''">stable</ConstructChannel>
+    <ConstructRepository Condition="'$(ConstructRepository)' == ''">permissionBRICK/The-Construct</ConstructRepository>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <AssemblyMetadata Include="ConstructChannel" Value="$(ConstructChannel)" />
+    <AssemblyMetadata Include="ConstructRepository" Value="$(ConstructRepository)" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Construct.Agent.Setup\Construct.Agent.Setup.csproj" />
+  </ItemGroup>
+
+</Project>

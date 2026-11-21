@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    The setup's install logic (ConstructSetup.exe, agent/src/Construct.Agent.Setup.Windows): what install.ps1 does,
+    in C#, behind a small platform seam so the tests run it on Linux. No dependency beyond the base library: the
+    setup is published trimmed as one small file.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <IsPackable>false</IsPackable>
+    <IsTrimmable>true</IsTrimmable>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <RootNamespace>Construct.Agent.Setup</RootNamespace>
+  </PropertyGroup>
+
+</Project>

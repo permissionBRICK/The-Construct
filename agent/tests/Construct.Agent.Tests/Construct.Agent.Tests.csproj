@@ -18,6 +18,8 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\Construct.Agent.Core\Construct.Agent.Core.csproj" />
+    <!-- ConstructSetup.exe's install logic (the Windows exe itself only builds here). -->
+    <ProjectReference Include="..\..\src\Construct.Agent.Setup\Construct.Agent.Setup.csproj" />
     <!-- For the repair test, which starts the real executable; aliased, so its Program does not meet the engine's. -->
     <ProjectReference Include="..\..\src\construct-agent\construct-agent.csproj" Aliases="cli" />
     <!-- The real engine, in fake mode, on a loopback HTTPS port. -->

@@ -34,7 +34,25 @@ The channel manifest is the release manifest with these keys added:
 | `channel` | `stable` or `nightly` |
 | `version` | `X.Y.Z+<commit>` |
 | `guestPayloadHash` | SHA-256 of the source archive, which is what a VM receives |
-| `packages` | Per package (`payload`, `frameworkDependent`, `linux`, `source`): `asset` and `sha256` |
+| `packages` | Per package (`payload`, `frameworkDependent`, `linux`, `source`, `agentWindows`, `agentLinux`, `setupWindows`): `asset` and `sha256` |
+
+## The Windows setup
+
+Every build publishes `ConstructSetup.exe` (`scripts/package-agent.py`, from
+`agent/src/Construct.Agent.Setup.Windows`) under that fixed name, with its channel built in, so one
+link per channel always serves the newest:
+
+| Channel | Setup |
+|---|---|
+| `stable` | `https://github.com/<owner>/<repo>/releases/latest/download/ConstructSetup.exe` |
+| `nightly` | `https://github.com/<owner>/<repo>/releases/download/channel-nightly/ConstructSetup.exe` |
+
+A stable build's setup is an asset of its release, which becomes latest; a nightly build's is an
+asset of its prerelease and also replaces the one on `channel-nightly`, beside the manifest. The
+setup reads its channel's manifest when it runs and installs the `agentWindows` package the way
+`install.ps1` does, so a setup downloaded long ago still installs the current agent.
+`ConstructSetup.exe --channel stable|nightly|<manifest URL>` overrides the built-in channel. The
+setup is not code-signed.
 
 Manifests are fetched over HTTPS and not signed. New code in `service/` resolves a channel
 and reads a manifest through `ReleaseChannel` (`service/src/Constructd.Core/Logic/ReleaseChannel.cs`).
