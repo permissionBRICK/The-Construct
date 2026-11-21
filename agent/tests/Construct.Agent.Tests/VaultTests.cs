@@ -179,6 +179,40 @@ public sealed class VaultTests
         await EventAsync(laptop, "vault.entry-request.ended", askId);
     }
 
+    [Fact]
+    public async Task An_answer_here_ends_the_request_on_every_surface_also_without_the_engines_events()
+    {
+        // Finding 47: a request allowed in the pop-out stayed in the window; an old host sends no events at all.
+        using var engine = new EngineHost(services => services.AddTransient<Microsoft.AspNetCore.Hosting.IStartupFilter, NoEventStream>());
+        var (laptop, engineId) = await SetUpAsync(engine, "available");
+        await using var _ = laptop;
+        await laptop.PostAsync("api/vault/secrets", new { name = "db", description = "Database", value = "db_pw_123456" });
+        var vm = await CreateVmAsync(laptop, engine, engineId);
+
+        var request = await SubmitAsync(engine, vm, new { v = 1, op = "request", names = new[] { "db" } });
+        await laptop.PostAsync($"api/vault/approvals/{engineId}/{request.PendingId}", new { decision = "deny" }, HttpStatusCode.NoContent);
+        Assert.Equal(engineId, (await EventAsync(laptop, "vault.approval.ended", request.PendingId!)).Engine);
+
+        var ask = await SubmitAsync(engine, vm, new { v = 1, op = "ask", names = new[] { "jira" }, description = "Jira token" });
+        var askId = ask.Response!["requestId"]!.GetValue<string>();
+        await laptop.PostAsync($"api/vault/entry-requests/{engineId}/{askId}/decline", null, HttpStatusCode.NoContent);
+        await EventAsync(laptop, "vault.entry-request.ended", askId);
+    }
+
+    /// <summary>An engine whose event stream does not answer (an old host has none).</summary>
+    private sealed class NoEventStream : Microsoft.AspNetCore.Hosting.IStartupFilter
+    {
+        public Action<Microsoft.AspNetCore.Builder.IApplicationBuilder> Configure(Action<Microsoft.AspNetCore.Builder.IApplicationBuilder> next) => app =>
+        {
+            app.Use(call => context =>
+            {
+                if (context.Request.Path.StartsWithSegments("/api/v1/events")) { context.Response.StatusCode = 404; return Task.CompletedTask; }
+                return call(context);
+            });
+            next(app);
+        };
+    }
+
     private static async Task<Events.AgentEvent> EventAsync(TestAgent agent, string type, string id)
     {
         var until = DateTime.UtcNow + TimeSpan.FromSeconds(20);

@@ -215,6 +215,21 @@ public sealed class DeviceLinkTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task T3_code_opens_the_patched_desktop_app_where_construct_installed_one_and_mints_no_link()
+    {
+        // Finding 28: the button opened the web UI with a fresh pairing link although the desktop app was there.
+        await _device.Links.RefreshAsync(CancellationToken.None);
+        _device.Platform.T3Desktop = true;
+        var actions = new VmActions(_device.Links, _device.Platform);
+
+        var opened = await actions.OpenAsync("e1", "work", "t3", CancellationToken.None);
+
+        Assert.Equal("desktop", opened.Kind);
+        Assert.Equal(["t3-desktop"], _device.Platform.Opened);
+        Assert.Empty(_device.Transports["e1/work"].Scripts);
+    }
+
+    [Fact]
     public async Task T3_desktop_gets_a_pairing_link_for_its_own_vm_with_the_administrative_scopes_and_nothing_opens()
     {
         await _device.Links.RefreshAsync(CancellationToken.None);

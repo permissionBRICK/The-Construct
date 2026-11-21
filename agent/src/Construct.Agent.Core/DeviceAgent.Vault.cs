@@ -268,7 +268,14 @@ public sealed partial class DeviceAgent
 
         await EngineSendAsync(entry, HttpMethod.Post, $"api/v1/vault/approvals/{Uri.EscapeDataString(id)}",
             ttlSeconds is null ? new { decision = allow ? "approve" : "deny" } : new { decision = "approve", ttlSeconds }, ct).ConfigureAwait(false);
+        Answered("vault.approval.ended", engineId, id);
     }
+
+    /// <summary>
+    /// A request answered here ends on every surface at once (finding 47), also where the engine sends no event of its
+    /// own (a host on the old stack has no event stream).
+    /// </summary>
+    private void Answered(string type, string engineId, string id) => Events.Publish(type, engineId, new JsonObject { ["id"] = id });
 
     /// <summary>Ends a lease before its time (the engine scrubs the value from the VM as on expiry).</summary>
     public async Task EndLeaseAsync(string engineId, string id, CancellationToken ct)
@@ -311,12 +318,14 @@ public sealed partial class DeviceAgent
         var payload = VaultSeal.SealEntry(keys.Vault, request.Name, stamp, username, input.Value, autoApprove: false);
         await EngineSendAsync(entry, HttpMethod.Post, $"api/v1/vault/entry-requests/{Uri.EscapeDataString(id)}",
             new { payload, updatedAt = stamp, hasUsername = username.Length > 0 }, ct).ConfigureAwait(false);
+        Answered("vault.entry-request.ended", engineId, id);
     }
 
     public async Task DeclineEntryAsync(string engineId, string id, CancellationToken ct)
     {
         var entry = Find(engineId) ?? throw NoEngine();
         await EngineSendAsync(entry, HttpMethod.Post, $"api/v1/vault/entry-requests/{Uri.EscapeDataString(id)}/decline", null, ct).ConfigureAwait(false);
+        Answered("vault.entry-request.ended", engineId, id);
     }
 
     /// <summary>The engine's vault mode and whether it holds <c>K</c> now.</summary>

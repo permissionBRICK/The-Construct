@@ -64,6 +64,27 @@ internal sealed partial class WindowsPlatform : IDevicePlatform, IAgentLauncher
         return Task.CompletedTask;
     }
 
+    /// <summary>
+    /// Construct's patched T3 Code desktop app, as the old client installed it (<c>Programs\t3code</c>, with the record of
+    /// the patched build in <c>The-Construct\artifacts\t3code\installed.json</c>): started detached, as the Companion did;
+    /// a running one comes to the front (the app allows one instance). False without one: a stock T3 Desktop would not
+    /// know this agent, so the web UI opens instead.
+    /// </summary>
+    public Task<bool> OpenT3DesktopAsync(CancellationToken ct)
+    {
+        var local = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+        var directory = Path.Combine(local, "Programs", "t3code");
+        if (!File.Exists(Path.Combine(local, "The-Construct", "artifacts", "t3code", "installed.json")) || !Directory.Exists(directory)) return Task.FromResult(false);
+        var executable = Directory.EnumerateFiles(directory, "*.exe")
+            .FirstOrDefault(p => !Path.GetFileName(p).StartsWith("Uninstall", StringComparison.OrdinalIgnoreCase));
+        if (executable is null) return Task.FromResult(false);
+        var start = new ProcessStartInfo(executable) { UseShellExecute = false, CreateNoWindow = true, WorkingDirectory = directory };
+        // Electron attaches to its parent's console unless told not to.
+        start.Environment["ELECTRON_NO_ATTACH_CONSOLE"] = "1";
+        using var _ = Process.Start(start);
+        return Task.FromResult(true);
+    }
+
     public bool? StartWithOs => _registry.ReadString(DesktopRegistration.RunKey, RunValue) is { Length: > 0 };
 
     public void SetStartWithOs(bool on, string executable)

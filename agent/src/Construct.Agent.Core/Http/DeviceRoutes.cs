@@ -105,7 +105,7 @@ public static class DeviceRoutes
 
         vm.MapPost("/open", async (string engine, string vm, [FromBody] OpenRequest request, CancellationToken ct) =>
             TypedResults.Ok(await device.Actions.OpenAsync(engine, vm, request.What, ct))).WithName("OpenVm")
-            .WithDescription("Opens the VM: `t3` (T3 Code's pairing link in the browser), `vscode` (Remote-SSH), `ssh` (a terminal).");
+            .WithDescription("Opens the VM: `t3` (the patched T3 Code desktop app Construct installed here, else T3 Code's pairing link in the browser), `vscode` (Remote-SSH), `ssh` (a terminal).");
 
         vm.MapPost("/t3-pairing", async (string engine, string vm, CancellationToken ct) =>
             TypedResults.Ok(await device.Actions.T3PairingAsync(engine, vm, ct))).WithName("CreateT3PairingLink")
@@ -136,6 +136,19 @@ public static class DeviceRoutes
 
         api.MapPost("/update/everything", () => TypedResults.Accepted((string?)null, device.Everything.Start())).WithName("UpdateEverything")
             .WithDescription("Each engine the user administers updates itself, each engine reprovisions the user's own VMs, then this device updates; the parts and their state, never stored.");
+
+        // ---- notices put away (finding 45): the pop-out and the window hide the same ones ----
+
+        api.MapGet("/notices/dismissed", () => TypedResults.Ok(device.Settings.Read().Dismissed)).WithName("ListDismissedNotices")
+            .WithDescription("The notices (a failed job's, by the UI's key) put away on this device, newest last.");
+
+        api.MapPost("/notices/dismissed", (DeviceAgent agent, [FromBody] DismissNoticeRequest request) =>
+        {
+            if (request.Key is not { Length: > 0 and <= 300 } key) throw new AgentFailure(400, "invalid-request", "key is 1 to 300 characters.");
+            var kept = device.Settings.Update(s => s.Dismissed.Contains(key) ? s : s with { Dismissed = [.. s.Dismissed.Append(key).TakeLast(200)] }).Dismissed;
+            agent.Events.Publish("notices");
+            return TypedResults.Ok(kept);
+        }).WithName("DismissNotice").WithDescription("Puts a notice away on every surface of this device; the others hear a `notices` event.");
 
         // ---- the desktop shell ----
 
@@ -173,3 +186,5 @@ public sealed record SwitchRequest(bool On);
 public sealed record OpenRequest(string What);
 
 public sealed record ShellOpenRequest(string Surface, string? Route = null);
+
+public sealed record DismissNoticeRequest(string Key);

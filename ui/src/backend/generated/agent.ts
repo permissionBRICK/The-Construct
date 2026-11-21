@@ -827,6 +827,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/notices/dismissed": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description The notices (a failed job's, by the UI's key) put away on this device, newest last. */
+        get: operations["ListDismissedNotices"];
+        put?: never;
+        /** @description Puts a notice away on every surface of this device; the others hear a `notices` event. */
+        post: operations["DismissNotice"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/shell/open": {
         parameters: {
             query?: never;
@@ -921,7 +939,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** @description Opens the VM: `t3` (T3 Code's pairing link in the browser), `vscode` (Remote-SSH), `ssh` (a terminal). */
+        /** @description Opens the VM: `t3` (the patched T3 Code desktop app Construct installed here, else T3 Code's pairing link in the browser), `vscode` (Remote-SSH), `ssh` (a terminal). */
         post: operations["OpenVm"];
         delete?: never;
         options?: never;
@@ -1172,6 +1190,9 @@ export interface components {
             protection: string;
             protectionWeak: boolean;
             recoveryUnconfirmed: boolean;
+        };
+        DismissNoticeRequest: {
+            key: string;
         };
         EngineProbe: {
             url: string;
@@ -3296,6 +3317,68 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["EverythingView"];
+                };
+            };
+            /** @description An error. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["AgentProblem"];
+                };
+            };
+        };
+    };
+    ListDismissedNotices: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": string[];
+                };
+            };
+            /** @description An error. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["AgentProblem"];
+                };
+            };
+        };
+    };
+    DismissNotice: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DismissNoticeRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": string[];
                 };
             };
             /** @description An error. */

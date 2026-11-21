@@ -18,8 +18,9 @@ public sealed record T3PairingLinkEntry(string Kind, string PairUrl);
 
 /// <summary>
 /// The "open" actions of a VM (11.2: T3 Code, VS Code, an SSH terminal) and its workspace share, as the
-/// Companion's dispatcher ran them (<c>openAgentWeb</c>, <c>connect</c>, <c>Mount-RepoShare</c>), without
-/// prompts: T3 Code opens the first link the VM offers (its order: the user's proxy, the forward, direct).
+/// Companion's dispatcher ran them (<c>openT3</c>, <c>openAgentWeb</c>, <c>connect</c>, <c>Mount-RepoShare</c>),
+/// without prompts: T3 Code opens (or brings to the front) the patched T3 Code desktop app Construct installed on this
+/// device, and only without one the first web link the VM offers (its order: the user's proxy, the forward, direct).
 /// </summary>
 public sealed class VmActions(VmLinks links, IDevicePlatform platform)
 {
@@ -41,6 +42,7 @@ public sealed class VmActions(VmLinks links, IDevicePlatform platform)
                 return new(what, target.Alias);
             case "t3":
             {
+                if (await platform.OpenT3DesktopAsync(ct).ConfigureAwait(false)) return new(what, target.Alias, "desktop");
                 var ssh = links.Transport(engine, vm);
                 var pairing = await ssh.RunRemoteScriptAsync(T3Code.BuildPairingScript(new JsonObject { ["name"] = vm }), TimeSpan.FromSeconds(90), ct).ConfigureAwait(false);
                 if (pairing.Code == 7) throw new AgentFailure(409, "t3-forward-not-ready", "T3 Code's port forward is not ready yet; try again in a moment.");
