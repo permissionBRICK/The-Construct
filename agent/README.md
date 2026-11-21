@@ -164,12 +164,12 @@ of the old release by hand.
 
 | Route | What it does |
 |---|---|
-| `GET /api/upgrade` | `{legacy, stage, steps, found, storeEngine, localEngine, items, notes, oldWriters, running, error, oldHosts}`: the steps `engine`, `recovery` (done once the code was confirmed), `close`, `convert` with their state, what the old install holds (names and counts, no value), the last run's items; its notes until read, to the account they were written for; the shared hosts that still run the old stack (no `GET /engine`, so this device stays signed in the old way there), as the engine step and the converter found them |
+| `GET /api/upgrade` | `{legacy, stage, steps, found, storeEngine, localEngine, items, notes, oldWriters, running, error, oldHosts, progress}`: the steps `engine`, `recovery` (done once the code was confirmed), `close`, `convert` with their state, what the old install holds (names and counts, no value; `found.stayOld`, the remote VMs whose host runs the old stack and does not move with this PC, asked once per agent run in the background with the old pin and token), the items of the running conversion or else of the last run (a few words each, a running VM reprovision with its job's `percent`); its notes until read, to the account they were written for; the shared hosts that still run the old stack (no `GET /engine`, so this device stays signed in the old way there), as the engine step and the converter found them; while the engine or the convert step runs, its one bar `{percent, label}`. Once `converted` the UI shows its normal screens at once and the notes as a card |
 | `POST /api/upgrade/engine` | Step 1 (202): where the PC has a local VM, the engine setup below; the step's state is `restart` when Windows must restart first. The old shared hosts are added with their pins and stored sign-ins. Chooses the store engine. |
 | `POST /api/device/setup` | Step 2, the existing first-device setup against `storeEngine`: with an old vault on the PC its key becomes the account's `K` |
 | `GET /api/upgrade/writers` | Step 3: `{open}`, the old writers still running (VS Code, the old Companion, a lifecycle script). The Windows agent holds the Companion's single-instance mutex. |
 | `POST /api/upgrade/convert {from?}` | Step 4 (202): the converter, progress as `upgrade` events. Refused while writers are open or before step 2 is confirmed. |
-| `POST /api/upgrade/notes/read` | After `converted`: the user went on from the notes; they are not shown again |
+| `POST /api/upgrade/notes/read` | After `converted`: the user put the notes' card away; they are not shown again |
 
 **The engine on this PC** (`Engines/LocalEngineSetup.cs`), one step for the first run and the upgrade: the host
 package of the device's channel, checked against the manifest's SHA-256, and `Install-ConstructHost.ps1 -Solo
@@ -178,20 +178,34 @@ package of the device's channel, checked against the manifest's SHA-256, and `In
 writes, into `%ProgramData%\Construct\host` made writable by SYSTEM and Administrators only. The installer's output
 goes to `engine-install.log`, its outcome to `engine-install.json`; its token file (`engine-token.json`, this user
 only) is taken into the state and deleted once the engine is added (kept until then, so a retry needs no second
-prompt). A token file that names anything but loopback is refused.
+prompt). A token file that names anything but loopback is refused. While it runs, `GET /api/engines/local/setup`
+and the upgrade's view carry one bar: the download by its bytes, the install by the `==> ` steps in its log,
+then the engine starting (`engine-setup` events).
 
 The converter copies, per item, and lists each item it copied in `bridge.json` so a second run leaves it
 alone: the device channel (`constructRef`: `main` is stable, a branch nightly); the old shared hosts as
-engines with their pins and sign-ins, connected with the vault mode the Companion recorded; the config
+engines with their pins and sign-ins, connected with the vault mode the Companion recorded; a shared host of the
+old stack that the user administers moves to the new version through its own update API when it offers it
+(`Update/OldHostUpdate.cs`: `GET /host/updates/status`, `POST /host/updates/check`, `stage` with `autoApply`, or
+`apply` for one staged; "the new version" is a release whose manifest names the device agent's package, so another
+release of the old stack is never applied), and this device connects there as at a new host; the config
 repository's `main` profiles through the store engine's `PUT /profiles/{name}`; a VM branch's unmerged
 change as that VM's write with the merge base as its base, so the engine merges per field and opens a
 conflict (branch ours, main theirs); the upstream links into `legacy-upstream.json`; the vault's secrets
 (only when the account's `K` is the old key); each old backup private key wrapped under `U` into a
 `setting` record `setting:legacy-backup-key:<fingerprint>`; the account's `B.pub` onto every VM, through the engine that runs it
 (`POST /vms/{name}/backup-recipients`), over SSH with the old client's key only for a VM no engine reaches yet (a local VM
-before its adoption, a host where this device holds no device token); never for a VM a host answers is not the user's; last, each local VM adopted by the engine (`POST /vms/{name}/adopt`, which enrols `B.pub` as well).
+before its adoption, a host where this device holds no device token); never for a VM a host answers is not the user's; then each local VM adopted by the engine (`POST /vms/{name}/adopt`, which enrols `B.pub` as well);
+last, each adopted VM reprovisioned with the engine's guest payload (its row shows the job's percentage and step) and the
+user's VMs on each host that moved (`POST /me/vms/reprovision`).
 Then `stage: converted`, and only then the old backup keys come off the VMs, through the engine (`DELETE
-/vms/{name}/backup-recipients/{fingerprint}`, refused while `B.pub` is not on the VM) or, for a VM no engine runs, over SSH. Open vault leases and pending cleanups are not carried over: a VM asks again.
+/vms/{name}/backup-recipients/{fingerprint}`, refused while `B.pub` is not on the VM) or, for a VM no engine runs, over SSH;
+the old client's autoinstall images are deleted; and the old install folders' entry scripts become the new Construct's
+(`Upgrade/OldInstallScripts.cs`): `Update-T3Code.ps1`, `Get-ConstructT3PairingLink.ps1`, `Update-Construct.ps1`,
+`install.ps1` and `lib/Construct.AgentShim.ps1` as this tree ships them, every other script at the folder's top
+`lib/Construct.MovedScript.ps1`, which only says where things moved. So a T3 Code Desktop or panel of the old stack can
+only act through the agent. The agent does the same at each start of a converted install. The way back reinstalls the
+last old release, which brings its scripts back. Open vault leases and pending cleanups are not carried over: a VM asks again.
 
 ### Device routes
 
@@ -209,7 +223,7 @@ Then `stage: converted`, and only then the old backup keys come off the VMs, thr
 | `POST /api/connections/{engine}/{vm}/t3-pairing` | A one-time T3 Code pairing link for T3 Desktop on one of the user's own running VMs, minted on the VM as the old `Get-ConstructT3PairingLink.ps1` did (label `construct-t3-desktop[-<vm>]`, ten minutes, the administrative scopes where the VM's T3 offers them): `{pairUrl, links: [{kind, pairUrl}], scopes}`. The link carries a one-time token; it is in this answer only, never in a log or a message. The shim `Get-ConstructT3PairingLink.ps1` prints it in its old one-line format |
 | `GET`, `POST`, `DELETE /api/connections/{engine}/{vm}/share` | The workspace share of a VM on this PC on a drive letter (Windows) |
 | `GET /api/update`, `POST /api/update/check`, `POST /api/update/install` | Version, channel, the version on offer; install it when idle (`waiting` says what it waits for; after ten minutes it goes ahead). The new version opens the window and pop-out that were open (`--open pop,win`); opening the pop-out checks the channel when the last check is older than fifteen minutes |
-| `GET`, `POST /api/update/everything` | "Update everything": the parts and their state; a host on the old stack is left out with a note, and the VM part waits until an updated engine answers healthy |
+| `GET`, `POST /api/update/everything` | "Update everything": the parts and their state; a host on the old stack moves through its own update when the user administers it and it offers the new version, else it is left out with a note; the VM part waits until an updated engine answers healthy |
 | `GET`, `POST /api/notices/dismissed {key}` | The notices (a failed job's) put away on this device, so every surface hides them; a change is a `notices` event |
 | `POST /api/shell/open {surface, route?}` | Shows the tray app's `pop`, `win` or `alone` surface (a second start hands over this way) |
 
@@ -245,7 +259,9 @@ agent not running from `versions/` (a development build) does not update itself.
 
 **Update everything.** For each engine: when the user is its admin and it offers an update, `POST
 /host/updates/run`, then its job is followed through the engine's restart; then `POST
-/me/vms/reprovision`, which the engine scopes to the caller's own VMs. A host update that fails
+/me/vms/reprovision`, which the engine scopes to the caller's own VMs. A host of the old stack moves
+through its own old update API as the converter's does, when the user is its admin and it offers the new
+version; after it this device connects there and its VMs are reprovisioned. A host update that fails
 leaves that host's VMs alone. Last, this device installs its own update. The parts live in memory
 only; nothing is stored.
 
