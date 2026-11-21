@@ -78,10 +78,11 @@ public sealed class SetupTests : IDisposable
         Assert.False(File.ReadAllBytes(Path.Combine(AgentHome, "install.json")).AsSpan().StartsWith(Encoding.UTF8.Preamble), "no BOM");
         // The extension it carries went into VS Code, before the agent started.
         Assert.Equal([("/vscode/bin/code.cmd", $"--install-extension {Path.Combine(AgentHome, "versions", Version, "construct.vsix")} --force")], _windows.Ran);
-        // Starts with Windows, in the background, and was started with its window open.
+        // Starts with Windows, in the background, and was started the way a user starts it.
         Assert.Equal($"\"{Installed(Version)}\" --background", _windows.RunValues[AgentSetup.AgentRunValue]);
-        // Started with its window: a just started agent answers its API before its window exists and would refuse the request.
-        Assert.Equal([(Installed(Version), "--background --open win")], _windows.Started);
+        // Started the way a user starts it, which opens its window; a just started agent answers its API before its window
+        // exists and would refuse a request for it.
+        Assert.Equal([(Installed(Version), "")], _windows.Started);
         Assert.DoesNotContain(_web.Requests, r => r.Url.EndsWith("/api/shell/open", StringComparison.Ordinal));
         Assert.False(_windows.RunValues.ContainsKey(AgentSetup.CompanionRunValue));
         Assert.Contains("Its window finishes the setup", _output.ToString(), StringComparison.Ordinal);

@@ -187,8 +187,8 @@ Assert (-not ($run.Calls | Where-Object { $_ -like 'start *ConstructCompanion.ex
 Assert (-not (Test-Path (Join-Path $world 'local/The-Construct/The-Construct-rework'))) 'no install folder per ref'
 Assert ($run.Output -notmatch 'agent-token-value|companion-token') 'no token in the output'
 # The agent starts in the background, the way Windows starts it at sign-in; the installer opens its window.
-# The agent starts with its window: asked over the API, a just started agent answers before its window exists.
-Assert (@($run.Calls | Where-Object { $_ -like 'start *construct-agent.exe --background --open win' }).Count -eq 1) "the agent starts with its window: $($run.Calls -join ' | ')"
+# The agent starts the way a user starts it (its window opens): asked over the API, a just started agent answers before its window exists.
+Assert (@($run.Calls | Where-Object { $_ -match 'construct-agent\.exe\s*$' -and $_ -like 'start *' }).Count -eq 1) "the agent starts as a user starts it: $($run.Calls -join ' | ')"
 Assert (-not ($run.Calls -contains 'rest Post http://127.0.0.1:5555/api/shell/open')) 'no window request to an agent that may not have one yet' 
 
 Assert ($run.Output -match 'VS Code is not installed') "no VS Code is no failure: $($run.Output)"

@@ -275,8 +275,9 @@ public sealed class AgentSetup(ISetupPlatform platform, HttpClient web, HttpClie
 
         var exe = Path.Combine(target, AgentExecutable);
         platform.SetRunValue(AgentRunValue, $"\"{exe}\" --background");
-        // Started with its window: asked over the API instead, the agent answers before its window exists and refuses.
-        platform.Start(exe, "--background --open win");
+        // Started the way a user starts it, which opens its window (any agent version), and hands that over to an agent
+        // that runs by then. Not asked over the API: a just started agent answers it before its window exists and refuses.
+        platform.Start(exe, "");
         return package.Version;
     }
 

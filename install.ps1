@@ -173,8 +173,9 @@ function Install-ConstructAgentPackage {
 
     $exe = Join-Path $target 'construct-agent.exe'
     Set-ItemProperty -Path $runKey -Name 'ConstructAgent' -Value ('"' + $exe + '" --background')
-    # Started with its window: asked over the API instead, the agent answers before its window exists and refuses.
-    Start-Process -FilePath $exe -ArgumentList '--background', '--open', 'win' | Out-Null
+    # Started the way a user starts it, which opens its window (any agent version), and hands that over to an agent that
+    # runs by then. Not asked over the API: a just started agent answers it before its window exists and refuses.
+    Start-Process -FilePath $exe | Out-Null
     return $version
 }
 
