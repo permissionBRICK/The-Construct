@@ -198,7 +198,7 @@ export function sampleState(): State {
     jobs: [],
     vaultRequests: [],
     secrets: [
-      { name: 'forge-token', note: 'Git forge, push', usedBy: ['atlas'], last: 'now', auto: false },
+      { name: 'forge-token', note: 'Git forge, push access for the release pipeline of webshop and toolkit; rotate it after every handover to another team', usedBy: ['atlas'], last: 'now', auto: false },
       { name: 'staging-db', note: 'Staging database', usedBy: ['harbor'], last: '2 d', auto: false },
       { name: 'deploy-key', note: 'Production deploy', usedBy: [], last: '9 d', auto: false },
       { name: 'npm-publish', note: 'Registry, publish', usedBy: ['atlas', 'harbor'], last: '1 h', auto: true },
