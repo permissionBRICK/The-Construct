@@ -70,8 +70,8 @@ public sealed class DeviceServices : IAsyncDisposable
         var probe = new SocketPortProbe();
         var engines = new AgentEngines(agent);
         var links = new VmLinks(engines, platform, ssh, settings,
-            target => new ProcessSshTransport(runner, probe,
-                new SshConfiguration(target.Address!.Host, target.Alias, "root", "", target.Address.Port, 12, target.Ipv4), platform.SshExecutable, ssh.KeyFor(target.Alias)),
+            (target, key) => new ProcessSshTransport(runner, probe,
+                new SshConfiguration(target.Address!.Host, target.Alias, "root", "", target.Address.Port, 12, target.Ipv4), platform.SshExecutable, key),
             new SshProcessSupervisor(clock), new LoopbackAudioServerFactory(), clock, agent.Events);
         var install = new AgentInstall(options.DataDirectory, OperatingSystem.IsWindows() ? "construct-agent.exe" : "construct-agent");
         var running = install.RunningVersion(Environment.ProcessPath);

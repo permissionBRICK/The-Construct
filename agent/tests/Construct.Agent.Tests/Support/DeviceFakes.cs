@@ -165,10 +165,19 @@ public sealed class FakeDevice : IAsyncDisposable
         Options = new AgentOptions { DataDirectory = dataDirectory, Version = version };
         Settings = new DeviceSettings(Path.Combine(dataDirectory, "device.json"));
         var ssh = new SshClientConfig(Platform);
-        Links = new VmLinks(Engines, Platform, ssh, Settings, target =>
+        Links = new VmLinks(Engines, Platform, ssh, Settings, (target, key) =>
         {
             var transport = new FakeSshTransport();
+            // A try of the device key on a VM whose alias names another one; it logs in when the test says so.
+            if (key == ssh.DeviceKeyPath && ssh.KeyFor(target.Alias) != key)
+            {
+                transport.ScriptHandler = (_, _) => Task.FromResult(new ProcessResult(DeviceKeyWorks ? 0 : 255));
+                KeyProbes.Enqueue(target.Vm);
+                return transport;
+            }
+
             Transports[target.Engine + "/" + target.Vm] = transport;
+            LinkKeys[target.Engine + "/" + target.Vm] = key;
             return transport;
         }, Processes, new FakeAudioServerFactory(), new SystemClock(TimeProvider.System), null);
         Install = new AgentInstall(dataDirectory, "construct-agent");
@@ -192,6 +201,15 @@ public sealed class FakeDevice : IAsyncDisposable
     public SpawningProcesses Processes { get; } = new();
 
     public ConcurrentDictionary<string, FakeSshTransport> Transports { get; } = new();
+
+    /// <summary>The key each VM's link dials with.</summary>
+    public ConcurrentDictionary<string, string> LinkKeys { get; } = new();
+
+    /// <summary>The VMs the device key was tried on.</summary>
+    public ConcurrentQueue<string> KeyProbes { get; } = new();
+
+    /// <summary>Whether the device key logs in on the VMs.</summary>
+    public bool DeviceKeyWorks { get; set; }
 
     public VmLinks Links { get; }
 

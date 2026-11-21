@@ -12,7 +12,8 @@ namespace Construct.Agent.Device;
 public sealed record VmAddress(string Host, int Port, string Kind);
 
 /// <summary>One of the user's own VMs on one engine, as the device sees it.</summary>
-public sealed record VmTarget(string Engine, string Vm, string Alias, string State, VmAddress? Address, bool Ipv4);
+/// <param name="Generation">The VM's creation time and incarnation: another value is another machine under the same name.</param>
+public sealed record VmTarget(string Engine, string Vm, string Alias, string State, VmAddress? Address, bool Ipv4, string Generation = "");
 
 /// <summary>A VM on the Connections page: its address, its local forwards and the microphone.</summary>
 public sealed record ConnectionView(string Engine, string Vm, string Alias, string State, VmAddress? Address, bool Linked,
@@ -32,8 +33,13 @@ public sealed record AudioView(bool Enabled, bool Capturing, string? Error);
 /// The device's side of every running VM the user owns (5.1): local forwards (the Companion's
 /// <see cref="Forwarder"/> with the engine's forward list), <c>construct notify</c> from the VM (its
 /// <see cref="Notifier"/>), the microphone (<see cref="AudioSession"/>) and the SSH alias. The VM list is
-/// read from each engine every 30 seconds; a VM that stops loses its link. Other users' VMs, and VMs on
-/// an engine that does not answer, are left as they are.
+/// read from each engine every 30 seconds; a VM that stops, is being rebuilt (a reinstall or create runs on
+/// it) or comes back as another machine loses its link, so no tunnel to a gone VM stays; its old tunnels end
+/// before the new link opens. Other users' VMs, and VMs on an engine that does not answer, are left as they are.
+///
+/// An alias the old client wrote names its own key. Once the device key works on the VM (the engine writes it
+/// at every provision), the alias is switched to the device key and the link reopens with it, so a VM rebuilt
+/// with the device key only keeps working for ssh, VS Code and the agent's tunnels (finding 38).
 /// </summary>
 public sealed class VmLinks : IAsyncDisposable
 {
@@ -41,7 +47,7 @@ public sealed class VmLinks : IAsyncDisposable
     private readonly IDevicePlatform _platform;
     private readonly SshClientConfig _ssh;
     private readonly DeviceSettings _settings;
-    private readonly Func<VmTarget, ISshTransport> _sshFor;
+    private readonly Func<VmTarget, string, ISshTransport> _sshFor;
     private readonly IRuntimeProcesses _processes;
     private readonly IAudioServerFactory _audioServers;
     private readonly IClock _clock;
@@ -51,11 +57,12 @@ public sealed class VmLinks : IAsyncDisposable
     private readonly CancellationTokenSource _stop = new();
     private readonly Dictionary<string, Link> _links = new(StringComparer.Ordinal);
     private readonly Dictionary<string, VmTarget> _targets = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, (DateTimeOffset At, string Generation)> _keyProbes = new(StringComparer.Ordinal);
     private SharedAudioCapture? _capture;
     private Task _loop = Task.CompletedTask;
 
     public VmLinks(IDeviceEngines engines, IDevicePlatform platform, SshClientConfig ssh, DeviceSettings settings,
-        Func<VmTarget, ISshTransport> sshFor, IRuntimeProcesses processes, IAudioServerFactory audioServers, IClock clock, AgentEvents? events)
+        Func<VmTarget, string, ISshTransport> sshFor, IRuntimeProcesses processes, IAudioServerFactory audioServers, IClock clock, AgentEvents? events)
     {
         _engines = engines;
         _platform = platform;
@@ -69,6 +76,9 @@ public sealed class VmLinks : IAsyncDisposable
     }
 
     public static string Key(string engine, string vm) => engine + "/" + vm;
+
+    /// <summary>How often a VM whose alias names an old key is tried with the device key.</summary>
+    public TimeSpan KeyProbeEvery { get; init; } = TimeSpan.FromMinutes(5);
 
     public void Start() => _loop = LoopAsync();
 
@@ -94,6 +104,9 @@ public sealed class VmLinks : IAsyncDisposable
             catch (AgentFailure) { found.Add((engine.Id, null)); }
         }
 
+        foreach (var target in found.SelectMany(f => f.Targets ?? []).Where(t => t.State == "running" && t.Address is not null))
+            await SwitchToDeviceKeyAsync(target, ct).ConfigureAwait(false);
+
         await _serial.WaitAsync(ct).ConfigureAwait(false);
         try
         {
@@ -112,12 +125,15 @@ public sealed class VmLinks : IAsyncDisposable
                 foreach (var key in _targets.Keys.Where(k => !known.Contains(_targets[k].Engine)).ToArray()) _targets.Remove(key);
                 foreach (var (key, link) in _links.ToArray())
                 {
-                    if (_targets.TryGetValue(key, out var target) && target.State == "running" && target.Address == link.Target.Address) continue;
+                    // Kept only while it is the same running machine at the same address with the same key.
+                    if (_targets.TryGetValue(key, out var target) && target.State == "running" && target.Address == link.Target.Address
+                        && target.Generation == link.Target.Generation && SafeKeyFor(target.Alias) == link.KeyPath) continue;
                     _links.Remove(key);
                     closing.Add(link);
                 }
             }
 
+            // The old tunnels end before any new one opens: a new one would find the old one's port taken.
             foreach (var link in closing) await link.DisposeAsync().ConfigureAwait(false);
             VmTarget[] opening;
             lock (_targets) opening = _targets.Where(p => p.Value.State == "running" && p.Value.Address is not null && !_links.ContainsKey(p.Key)).Select(p => p.Value).ToArray();
@@ -148,8 +164,10 @@ public sealed class VmLinks : IAsyncDisposable
             if (name.Length == 0 || !Text(vm, "owner").Equals(user, StringComparison.OrdinalIgnoreCase) || user.Length == 0) continue;
             if (Text(vm, "kind").Equals("child", StringComparison.OrdinalIgnoreCase) || vm["deleting"]?.GetValue<bool>() == true) continue;
             var state = Text(vm, "state").ToLowerInvariant();
+            // A reinstall replaces the machine and a create builds it: no link until it is done.
+            var rebuilding = vm["currentOperation"] is JsonObject operation && Text(operation, "kind") is "reinstall" or "create-vm";
             VmAddress? address = null;
-            if (state == "running")
+            if (state == "running" && !rebuilding)
             {
                 try
                 {
@@ -165,7 +183,7 @@ public sealed class VmLinks : IAsyncDisposable
 
             // A host service's forward listens on IPv4 only (SshArgs); a literal IPv6 endpoint is dialled as it is.
             var ipv4 = address is { Kind: "forwarded" } && !(System.Net.IPAddress.TryParse(address.Host, out var ip) && ip.AddressFamily == System.Net.Sockets.AddressFamily.InterNetworkV6);
-            targets.Add(new(engine.Id, name, name, state, address, ipv4));
+            targets.Add(new(engine.Id, name, name, state, address, ipv4, Text(vm, "created") + "/" + Text(vm, "incarnation")));
         }
 
         return targets;
@@ -177,14 +195,15 @@ public sealed class VmLinks : IAsyncDisposable
         try { sshConfig = WriteAlias(target).Status; }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or AgentFailure) { sshConfig = "failed"; }
 
-        if (_ssh.KeyFor(target.Alias) == _ssh.DeviceKeyPath && !File.Exists(_ssh.DeviceKeyPath))
+        var keyPath = SafeKeyFor(target.Alias);
+        if (keyPath == _ssh.DeviceKeyPath && !File.Exists(_ssh.DeviceKeyPath))
         {
             try { await _ssh.EnsureDeviceKeyAsync("construct-agent", ct).ConfigureAwait(false); }
             catch (AgentFailure) { /* reported by GET /api/device/ssh-key */ }
         }
 
-        var transport = _sshFor(target);
-        var link = new Link(target, sshConfig);
+        var transport = _sshFor(target, keyPath);
+        var link = new Link(target, sshConfig, keyPath);
         link.Forwarder = new Forwarder(target.Vm, new EngineForwardTransport(_engines, target.Engine, target.Vm, transport), _processes, _ports, _clock, _ => Changed());
         var outcome = await link.Forwarder.StartAsync(ct).ConfigureAwait(false);
         if (outcome != "supported")
@@ -202,6 +221,40 @@ public sealed class VmLinks : IAsyncDisposable
         link.Transport = transport;
         if (_settings.Read().Mic.Contains(Key(target.Engine, target.Vm))) await EnableMicAsync(link, ct).ConfigureAwait(false);
         return link;
+    }
+
+    /// <summary>The key the VM is dialled with now (the alias's, else the device's); a config that cannot be read counts as the device's.</summary>
+    private string SafeKeyFor(string alias)
+    {
+        try { return _ssh.KeyFor(alias); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return _ssh.DeviceKeyPath; }
+    }
+
+    /// <summary>
+    /// An alias that names another key than the device's (an install moved over) is switched to the device key once
+    /// that key logs in on the VM. Tried at most every <see cref="KeyProbeEvery"/>, and at once for a VM that came back
+    /// as another machine. A failure leaves the alias as it is.
+    /// </summary>
+    private async Task SwitchToDeviceKeyAsync(VmTarget target, CancellationToken ct)
+    {
+        if (target.Address is not { } address || SafeKeyFor(target.Alias) == _ssh.DeviceKeyPath || !File.Exists(_ssh.DeviceKeyPath)) return;
+        var key = Key(target.Engine, target.Vm);
+        var now = _clock.UtcNow;
+        lock (_keyProbes)
+        {
+            if (_keyProbes.TryGetValue(key, out var last) && last.Generation == target.Generation && now - last.At < KeyProbeEvery) return;
+            _keyProbes[key] = (now, target.Generation);
+        }
+
+        try
+        {
+            var probe = await _sshFor(target, _ssh.DeviceKeyPath).RunRemoteScriptAsync("true", TimeSpan.FromSeconds(20), ct).ConfigureAwait(false);
+            if (probe.Code == 0) _ssh.WriteAlias(target.Alias, address.Host, address.Port, target.Ipv4, _ssh.DeviceKeyPath);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or AgentFailure)
+        {
+            // Tried again later.
+        }
     }
 
     /// <summary>Writes the VM's SSH alias and VS Code's platform entry for it.</summary>
@@ -374,10 +427,13 @@ public sealed class VmLinks : IAsyncDisposable
         }
     }
 
-    private sealed class Link(VmTarget target, string? sshConfig) : IAsyncDisposable
+    private sealed class Link(VmTarget target, string? sshConfig, string keyPath) : IAsyncDisposable
     {
         public VmTarget Target { get; } = target;
         public string? SshConfig { get; } = sshConfig;
+
+        /// <summary>The key its transport dials with.</summary>
+        public string KeyPath { get; } = keyPath;
         public ISshTransport? Transport { get; set; }
         public Forwarder? Forwarder { get; set; }
         public Notifier? Notifier { get; set; }
