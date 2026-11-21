@@ -1,7 +1,8 @@
 import type { Upgrade } from '../backend/types';
 
 type Item = Upgrade['items'][number];
-export type ConvertRow = { key: string; name: string; state: Item['state']; count: string; pct: number };
+/** `group`: a row standing for several items, whose `count` is "n / total". */
+export type ConvertRow = { key: string; name: string; state: Item['state']; count: string; pct: number; group?: boolean };
 
 /** The groups the converter has many items of, by the prefix of their id (finding 6). */
 const GROUPS: [string, string][] = [['profile:', 'Profiles'], ['secret:', 'Secrets']];
@@ -22,7 +23,7 @@ export function convertRows(items: Item[]): ConvertRow[] {
     const failed = all.filter(x => x.state === 'failed');
     const state: Item['state'] = finished === all.length ? (failed.length ? 'failed' : 'done')
       : finished === 0 && all.every(x => x.state === 'waiting') ? 'waiting' : 'running';
-    out.push({ key: g[0], name: g[1], state, count: `${finished} / ${all.length}`, pct: Math.round((finished / all.length) * 100) });
+    out.push({ key: g[0], name: g[1], state, count: `${finished} / ${all.length}`, pct: Math.round((finished / all.length) * 100), group: true });
     for (const f of failed) out.push({ key: f.id, name: f.name, state: 'failed', count: f.count, pct: 0 });
   }
   return out;

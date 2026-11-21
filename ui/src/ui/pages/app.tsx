@@ -240,10 +240,21 @@ function RestartLine({ text }: { text: string }) {
   );
 }
 
+/** A running step's one bar: a few words and a percentage (R2, R7). */
+function StepBar({ p }: { p: { pct: number; label: string } }) {
+  return (
+    <div class="wprog" role="progressbar" aria-label={p.label} aria-valuenow={p.pct} aria-valuemin={0} aria-valuemax={100}>
+      <div class="bh"><b>{p.label}</b><span class="m">{p.pct}%</span></div>
+      <Bar pct={p.pct} />
+    </div>
+  );
+}
+
 const STEPS: [UpgradeStep, string][] = [['engine', 'New Construct'], ['recovery', 'Recovery code'], ['close', 'Close programs'], ['convert', 'Moving over']];
 
 /** The one-time upgrade dialog (first screen of the window): the agent's steps in their order, each with its state;
-    a failed step shows its error in place with Retry. Continue runs the step the backend reports, never another. */
+    a failed step shows its error in place with Retry. Continue runs the step the backend reports, never another.
+    A running step shows one bar with a few words (R2, R7). Once converted the normal screens take over at once (R9). */
 export function Upgrade() {
   const { s, be, toast } = useApp();
   const u = s.upgrade;
@@ -252,7 +263,7 @@ export function Upgrade() {
   // A new code (shown again after a reload or a replaced one) is confirmed anew.
   useEffect(() => setStored(false), [u?.code?.join('-')]);
   if (!u) return null;
-  const at = u.step === 'done' ? STEPS.length : STEPS.findIndex(x => x[0] === u.step);
+  const at = STEPS.findIndex(x => x[0] === u.step);
   const top = (
     <>
       <span class="brand"><Icon n="cube" />The Construct</span>
@@ -261,6 +272,7 @@ export function Upgrade() {
   );
   const wl = (icon: preact.ComponentChildren, label: string, right?: preact.ComponentChildren, cls = '') => <div class={`wl ${cls}`}>{icon}<span>{label}</span>{right}</div>;
   const problem = u.error && <div class="line badc" role="alert">{u.error}</div>;
+  const progress = u.progress && <StepBar p={u.progress} />;
   const next = (label: string, icon: 'right' | 'open' = 'right', disabled = false) => (
     <Btn kind="pri" icon={u.error ? 'retry' : icon} disabled={u.running || disabled} onClick={() => be.upgradeNext({ deviceName })}>{u.running ? 'Working' : u.error ? 'Retry' : label}</Btn>
   );
@@ -274,9 +286,13 @@ export function Upgrade() {
       </div>
       {u.found && (
         <div class="wz"><div class="cap">Comes along</div>
-          <KV k="VMs">{u.found.vms.join(', ') || '–'}</KV><KV k="Projects">{u.found.profiles}</KV><KV k="Key vault">{u.found.vault ? 'Yes' : 'No'}</KV>
+          <KV k="VMs">{u.found.vms.length ? u.found.vms.map((v, i) => (
+            <>{i > 0 && ', '}{v}{u.found!.stayOld.includes(v) && <span class="d"> (stays on its host's old Construct)</span>}</>
+          )) : '–'}</KV>
+          <KV k="Projects">{u.found.profiles}</KV><KV k="Key vault">{u.found.vault ? 'Yes' : 'No'}</KV>
         </div>
       )}
+      {progress}
       {problem}
       {u.restart
         ? <RestartLine text={u.restart} />
@@ -301,6 +317,7 @@ export function Upgrade() {
   }
   if (u.step === 'recovery') return (
     <div class="solo">{top}<h3>Recovery code</h3>
+      <div class="d">The recovery code is needed to restore your key vault if something happens to your PC. Store it somewhere safe.</div>
       <div class="blk form">
         <label class="lab">Device name<Field value={deviceName} onInput={setDeviceName} label="Device name" placeholder="Device name" wide onEnter={() => deviceName.trim() && be.upgradeNext({ deviceName })} /></label>
       </div>
@@ -315,25 +332,18 @@ export function Upgrade() {
       <div class="wft"><span class="d"><Icon n="repro" />Waiting</span></div>
     </div>
   );
-  if (u.step === 'done') return (
-    <div class="solo">{top}<h3>Moved over</h3>
-      <div class="wz">{u.notes.map(n => wl(<Icon n="log" />, n))}</div>
-      {problem}
-      <div class="wft"><span />{next('Continue')}</div>
-    </div>
-  );
   return (
     <div class="solo">{top}<h3>Moving over</h3>
       {u.items.length > 0 && (
         <div class="wz">
           {convertRows(u.items).map(it => wl(it.state === 'done' || it.state === 'skipped' ? <Icon n="check" /> : it.state === 'running' ? <Icon n="repro" /> : it.state === 'failed' ? <Icon n="x" /> : <i class="ring" />, it.name,
-            <>{it.count && <span class={`rv ${it.state === 'failed' ? 'badc' : ''}`} title={it.count}>{it.count}</span>}{it.state === 'running' && it.pct > 0 && <div class="bar"><i style={{ width: `${it.pct}%` }} /></div>}</>,
+            <>{it.count && <span class={`rv ${it.group ? 'm' : ''} ${it.state === 'failed' ? 'badc' : ''}`} title={it.count}>{it.count}</span>}{it.state === 'running' && it.pct > 0 && <Bar pct={it.pct} />}</>,
             it.state === 'done' || it.state === 'skipped' ? 'ok' : it.state === 'waiting' ? 'wait' : ''))}
         </div>
       )}
-      {u.oldHosts.length > 0 && <div class="line d">{u.oldHosts.join(', ')} {u.oldHosts.length === 1 ? 'runs' : 'run'} the old Construct and {u.oldHosts.length === 1 ? 'stays' : 'stay'} as {u.oldHosts.length === 1 ? 'it is' : 'they are'}; this PC keeps its sign-in there.</div>}
+      {progress}
       {problem}
-      <div class="wft"><span class="d"><Icon n="power" />VMs keep running</span>{next('Move over')}</div>
+      <div class="wft"><span />{next('Move over')}</div>
     </div>
   );
 }
@@ -404,6 +414,7 @@ export function FirstRun() {
           <label class="lab">Device name<Field value={deviceName} onInput={setDeviceName} label="Device name" placeholder="Device name" wide onEnter={goHere} /></label>
           {f.problem && <span class="badc" role="alert">{f.problem}</span>}
         </div>
+        {f.busy && f.progress && <StepBar p={f.progress} />}
         {f.restart
           ? <RestartLine text={f.restart} />
           : (

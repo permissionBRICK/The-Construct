@@ -14,10 +14,10 @@ import { spanText } from './api/map';
 export type Scene =
   | 'calm' | 'update' | 'update-nightly' | 'changed' | 'lease' | 'enter' | 'job' | 'failed' | 'failed-reinstall' | 'repair' | 'updating' | 'restart'
   | 'pairing' | 'pair-confirm' | 'revoked' | 'handout' | 'creating' | 'created' | 'sign-in' | 'sign-in-failed' | 'sign-in-browser' | 'sign-in-key' | 'signed-out' | 'signed-out-two'
-  | 'upgrade-intro' | 'upgrade-code' | 'upgrade-close' | 'upgrade-convert' | 'upgrade-host' | 'upgrade-done' | 'upgrade-restart'
+  | 'upgrade-intro' | 'upgrade-engine' | 'upgrade-name' | 'upgrade-code' | 'upgrade-close' | 'upgrade-convert' | 'upgrade-host' | 'upgrade-done' | 'upgrade-restart'
   | 'first-run' | 'first-run-restart' | 'warned' | 'old-guest';
 
-export const SCENES: Scene[] = ['calm', 'update', 'update-nightly', 'changed', 'lease', 'enter', 'job', 'failed', 'failed-reinstall', 'repair', 'updating', 'restart', 'pairing', 'pair-confirm', 'revoked', 'handout', 'creating', 'created', 'sign-in', 'sign-in-failed', 'sign-in-browser', 'sign-in-key', 'signed-out', 'signed-out-two', 'upgrade-intro', 'upgrade-code', 'upgrade-close', 'upgrade-convert', 'upgrade-host', 'upgrade-done', 'upgrade-restart', 'first-run', 'first-run-restart', 'warned', 'old-guest'];
+export const SCENES: Scene[] = ['calm', 'update', 'update-nightly', 'changed', 'lease', 'enter', 'job', 'failed', 'failed-reinstall', 'repair', 'updating', 'restart', 'pairing', 'pair-confirm', 'revoked', 'handout', 'creating', 'created', 'sign-in', 'sign-in-failed', 'sign-in-browser', 'sign-in-key', 'signed-out', 'signed-out-two', 'upgrade-intro', 'upgrade-engine', 'upgrade-name', 'upgrade-code', 'upgrade-close', 'upgrade-convert', 'upgrade-host', 'upgrade-done', 'upgrade-restart', 'first-run', 'first-run-restart', 'warned', 'old-guest'];
 
 /** Things the preview frame can make happen, beside the user's own actions. */
 export type Demo = 'lease' | 'enter' | 'release' | 'fail-next' | 'change';
@@ -172,14 +172,18 @@ export class FakeBackend implements Backend {
       }
       case 'sign-in-browser': d.signIn = { vmId: 'atlas', agent: 'codex', state: 'running', text: SIGN_IN_BROWSER_TEXT.codex, browser: true }; break;
       case 'upgrade-intro': d.upgrade = upgrade('engine'); break;
+      case 'upgrade-engine': d.upgrade = upgrade('engine', { running: true, progress: { pct: 34, label: 'Downloading engine' } }); break;
+      case 'upgrade-name': d.upgrade = upgrade('recovery'); break;
       case 'upgrade-code': d.upgrade = upgrade('recovery', { code: RECOVERY_CODE }); break;
       case 'upgrade-close': d.upgrade = upgrade('close', { writers: ['VS Code'] }); break;
-      case 'upgrade-convert': d.upgrade = upgrade('convert', { running: true, items: UPGRADE_ITEMS(8) }); break;
-      case 'upgrade-host': d.upgrade = upgrade('convert', { oldHosts: ['lab.example'] }); break;
+      case 'upgrade-convert': d.upgrade = upgrade('convert', { running: true, items: UPGRADE_ITEMS(8), progress: { pct: 9, label: 'Secret staging-db' } }); break;
+      // The whole list as a PC with a shared host of the old stack sees it, the reprovision at the end running (R6, R7).
+      case 'upgrade-host': d.upgrade = upgrade('convert', { running: true, items: UPGRADE_ITEMS(CONVERT.length - 1), progress: { pct: 34, label: 'VM atlas on the new version' } }); break;
       case 'upgrade-restart': d.upgrade = upgrade('engine', { restart: 'Windows has to restart to turn on Hyper-V.' }); break;
       case 'first-run': d.firstRun = firstRun(); break;
       case 'first-run-restart': d.firstRun = firstRun({ restart: 'Windows has to restart to turn on Hyper-V.' }); break;
-      case 'upgrade-done': d.upgrade = upgrade('done', { notes: ['The VM mesa was not reached; the next run moves it.', 'Open vault leases end with the upgrade: a VM that needs a secret again asks for it again.'] }); break;
+      // Converted: the normal screens at once, the notes as a card (R9).
+      case 'upgrade-done': d.movedNotes = ['Open vault leases end with the upgrade: a VM that needs a secret again asks for it again.']; break;
     }
     this.timers = t;
   }
@@ -861,7 +865,6 @@ export class FakeBackend implements Backend {
       if (!input?.deviceName?.trim()) return to('recovery', { error: 'Name this device' });
       return to('recovery', { code: RECOVERY_CODE });
     }
-    if (u.step === 'done') { this.set(d => { d.upgrade = null; }, 'Moved over'); return; }
     if (u.step === 'close') return to('convert');
     to('convert', { running: true, items: UPGRADE_ITEMS(0) });
     const step = (i: number) => this.after(1, () => {
@@ -871,6 +874,8 @@ export class FakeBackend implements Backend {
     });
     if (this.timers) step(1); else this.set(d => { d.upgrade = null; }, 'Moved over');
   }
+
+  readMovedNotes() { this.set(d => { d.movedNotes = []; }); }
 
   /** The fake has a first run only in its scenes: This PC goes to the recovery code at once, a remote host is not simulated. */
   firstRunStart(req: FirstRunRequest) {
@@ -915,8 +920,8 @@ const APT_LOG = [
 const ROTATE = [{ secret: 'forge-token', last: '4 d' }, { secret: 'deploy-key', last: '9 d' }, { secret: 'staging-db', last: '12 d' }];
 
 function upgrade(step: Upgrade['step'], extra: Partial<Upgrade> = {}): Upgrade {
-  return { step, running: false, error: null, code: null, writers: [], items: [], found: { vms: ['atlas', 'harbor', 'mesa', 'quarry'], profiles: 4, vault: true },
-    oldHosts: [], notes: [], restart: null, ...extra };
+  return { step, running: false, error: null, code: null, writers: [], items: [], found: { vms: ['atlas', 'harbor', 'mesa', 'quarry'], stayOld: ['quarry'], profiles: 4, vault: true },
+    oldHosts: [], restart: null, progress: null, ...extra };
 }
 
 function firstRun(extra: Partial<FirstRun> = {}): FirstRun {
@@ -926,16 +931,24 @@ function firstRun(extra: Partial<FirstRun> = {}): FirstRun {
 const newRepair = (auto = true): NonNullable<Job['repair']> => ({ agent: 'Claude Code', state: 'working', messages: [{ from: 'agent', text: REPAIR_SCRIPT[0] }], t3Thread: false, outcome: null, at: '14:02', auto });
 
 /** The converter's items as the agent reports them: one per thing it copies, its id naming the group. */
-const CONVERT: [string, string][] = [
-  ['channel', 'Release channel'], ['host:lab', 'Host lab.example'],
-  ...['webshop', 'toolkit', 'flat-plan', 'docs-site'].map((p): [string, string] => ['profile:' + p, 'Profile ' + p]),
-  ...['forge-token', 'staging-db', 'deploy-key', 'npm-publish', 'mail-api'].map((x): [string, string] => ['secret:' + x, 'Secret ' + x]),
-  ['backup-key:pc-key.dpapi', 'Old backup key'], ['vm:atlas', 'VM atlas'], ['reprovision:atlas', 'VM atlas on the new version'],
+/** The converter's items in their order, each with the few words it ends with (R6). */
+const CONVERT: [string, string, string][] = [
+  ['channel', 'Release channel', 'Stays stable'], ['host:lab', 'Host lab.example', 'Old Construct, unchanged'],
+  ...['webshop', 'toolkit', 'flat-plan', 'docs-site'].map((p): [string, string, string] => ['profile:' + p, 'Profile ' + p, 'Written']),
+  ['upstream', 'Upstream links', 'Kept for later'],
+  ...['forge-token', 'staging-db', 'deploy-key', 'npm-publish', 'mail-api'].map((x): [string, string, string] => ['secret:' + x, 'Secret ' + x, '']),
+  ['backup-key:pc-key.dpapi', 'Old backup key', 'Kept for old backups'], ['recipient:atlas', 'Account backup key on atlas', 'Enrolled'],
+  ['recipient:quarry', 'Account backup key on quarry', 'Old Construct, unchanged'], ['vm:atlas', 'VM atlas', 'Switched over'],
+  ['reprovision:atlas', 'VM atlas on the new version', 'On the new version'],
 ];
 
-/** The items with the first `progress` done and the next one running. */
+/** The items with the first `progress` done and the next one running; a running reprovision shows its job's step. */
 function UPGRADE_ITEMS(progress = 0) {
-  return CONVERT.map(([id, name], i) => ({ id, name, count: '', state: (i < progress ? 'done' : i === progress ? 'running' : 'waiting') as 'done' | 'running' | 'waiting', pct: 0 }));
+  return CONVERT.map(([id, name, said], i) => {
+    const state = (i < progress ? 'done' : i === progress ? 'running' : 'waiting') as 'done' | 'running' | 'waiting';
+    const job = state === 'running' && id.startsWith('reprovision:');
+    return { id, name, count: state === 'done' ? said : job ? 'Installing packages' : '', state, pct: job ? 15 : 0 };
+  });
 }
 
 function newVm(name: string, hostId: string, address: string): Vm {

@@ -30,8 +30,8 @@ export function IconBtn({ icon, title, onClick, lit, disabled }: { icon: IconNam
   return <button type="button" class={`ic ${lit ? 'lit' : ''}`} title={title} aria-label={title} onClick={onClick} disabled={disabled}><Icon n={icon} /></button>;
 }
 
-export function Switch({ on, onChange, label, disabled }: { on: boolean; onChange: (v: boolean) => void; label: string; disabled?: boolean }) {
-  return <button type="button" role="switch" class={`sw ${on ? 'on' : ''}`} aria-checked={on} aria-label={label} disabled={disabled} onClick={() => onChange(!on)} />;
+export function Switch({ on, onChange, label, disabled, title }: { on: boolean; onChange: (v: boolean) => void; label: string; disabled?: boolean; title?: string }) {
+  return <button type="button" role="switch" class={`sw ${on ? 'on' : ''}`} aria-checked={on} aria-label={label} title={title} disabled={disabled} onClick={() => onChange(!on)} />;
 }
 
 export function Seg<T extends string | number>({ opts, value, onChange, label, labels }: { opts: readonly T[]; value: T; onChange: (v: T) => void; label: string; labels?: Partial<Record<string, string>> }) {
