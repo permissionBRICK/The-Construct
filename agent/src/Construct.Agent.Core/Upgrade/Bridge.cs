@@ -44,7 +44,24 @@ public sealed record BridgeState
     /// <summary>Shared hosts that still run the old stack (no <c>GET /engine</c>): this device stays signed in the old way there.</summary>
     public IReadOnlyList<string> OldHosts { get; init; } = [];
 
+    /// <summary>The old entry scripts the last replacement left as they were (R14): they are tried again, and a note names them.</summary>
+    public IReadOnlyList<string> ScriptsLeft { get; init; } = [];
+
     public DateTimeOffset? ConvertedAt { get; init; }
+
+    /// <summary>
+    /// The notes with <paramref name="text"/> in place of those that start with <paramref name="prefix"/>, for
+    /// <paramref name="account"/>; null text removes them. A note that was not there shows the notes again.
+    /// </summary>
+    public BridgeState Noted(string? account, string prefix, string? text)
+    {
+        var mine = NotesAccount == account;
+        if (text is null && !mine) return this;
+        var notes = (mine ? Notes : []).Where(n => !n.StartsWith(prefix, StringComparison.Ordinal)).ToList();
+        if (text is not null) notes.Add(text);
+        var fresh = text is not null && !(mine && Notes.Contains(text));
+        return this with { Notes = notes, NotesAccount = account, NotesRead = NotesRead && !fresh };
+    }
 }
 
 /// <summary>One item of a conversion run: <c>done</c>, <c>skipped</c> (already there), <c>pending</c> (retried later) or <c>failed</c>.</summary>

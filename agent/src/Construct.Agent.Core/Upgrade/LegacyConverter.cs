@@ -86,7 +86,8 @@ public sealed class LegacyConverter(DeviceAgent agent, IDeviceEngines engines, D
         {
             await RemoveLegacyRecipientsAsync(legacy, instances, legacyKeys, start.LocalEngine, ct).ConfigureAwait(false);
             DeleteInstallImages(legacy);
-            OldInstallScripts.Replace(legacy);
+            // One that could not be replaced is named in the notes and tried again (UpgradeService).
+            OldInstallScripts.Protect(legacy, bridge, agent.Account);
         }
 
         if (complete) Progress(100);
@@ -234,16 +235,26 @@ public sealed class LegacyConverter(DeviceAgent agent, IDeviceEngines engines, D
         }
     }
 
+    /// <summary>The start of the note that names a host whose update did not go through.</summary>
+    public static string HostNote(string name) => $"Host {name} not moved: ";
+
     /// <summary>
     /// R5: a shared host of the old stack moves to the new version through its own update, and this device connects there
     /// as at a new host, so the account key reaches its VMs through it and its VMs are reprovisioned at the end. An update
-    /// that did not go through is this row's alone (pending): the move goes on, and Update tries it again.
+    /// that did not go through is this row's alone (pending): the move goes on, a note says so (the converted overview
+    /// shows no rows), and Update tries it again.
     /// </summary>
     private Task HostUpdateAsync(LegacyHost host, string name, OldHostOffer offer, CancellationToken ct) =>
         ItemAsync("host-update:" + host.Slug, $"Host {name} on the new version", async () =>
         {
             var engine = agent.EngineIdFor(host.Url) ?? throw new AgentFailure(404, "no-engine", "The host is not added.");
-            if (await OldHosts!.RunAsync(engine, offer, ct).ConfigureAwait(false) is { } problem) return ("pending", problem);
+            if (await OldHosts!.RunAsync(engine, offer, ct).ConfigureAwait(false) is { } problem)
+            {
+                bridge.Update(b => b.Noted(agent.Account, HostNote(name), HostNote(name) + problem + ". Update tries again."));
+                return ("pending", problem);
+            }
+
+            bridge.Update(b => b.Noted(agent.Account, HostNote(name), null));
             EngineView known;
             try { known = await agent.ConnectEngineAsync(engine, host.VaultMode ?? "locked", ct).ConfigureAwait(false); }
             catch (AgentFailure) { known = agent.Engines().First(e => e.Id == engine); }

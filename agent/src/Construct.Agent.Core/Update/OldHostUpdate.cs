@@ -68,7 +68,9 @@ public sealed class OldHostUpdate(IDeviceEngines engines, Func<string, string, C
 
     /// <summary>
     /// Starts the update (staged with auto-apply, or the staged one applied) and waits until the host answers as the new
-    /// stack (<c>GET /engine</c>); null then, otherwise what went wrong. The host restarts in between: no answer is waited out.
+    /// stack (<c>GET /engine</c>) and is healthy with the offered commit; null then, otherwise what went wrong. The new
+    /// stack answers already while it finishes the update (maintenance) and may still roll back then: that is a failure.
+    /// The host restarts in between: no answer is waited out.
     /// </summary>
     public async Task<string?> RunAsync(string engine, OldHostOffer offer, CancellationToken ct)
     {
@@ -101,11 +103,12 @@ public sealed class OldHostUpdate(IDeviceEngines engines, Func<string, string, C
             try
             {
                 await engines.GetAsync(engine, "engine", ct).ConfigureAwait(false);
-                return null;
+                if (await HealthyAsync(engine, offer.Commit, ct).ConfigureAwait(false)) return null;
+                continue; // still finishing the update
             }
             catch (AgentFailure failure) when (failure.Status == 404 && failure.Code != "no-engine")
             {
-                // Still the old stack: its own status says how the update went.
+                // Still the old stack, or again after a rollback: its own status says how the update went.
             }
             catch (AgentFailure)
             {
@@ -124,6 +127,21 @@ public sealed class OldHostUpdate(IDeviceEngines engines, Func<string, string, C
         }
 
         return "Update did not finish in time";
+    }
+
+    /// <summary>Whether the host answers ok with <paramref name="commit"/>; as <see cref="UpdateEverything"/> checks, the ok of one that does not say its commit is taken.</summary>
+    private async Task<bool> HealthyAsync(string engine, string commit, CancellationToken ct)
+    {
+        try
+        {
+            var health = await engines.GetAsync(engine, "health", ct).ConfigureAwait(false);
+            if (Text(health?["status"]) != "ok") return false;
+            return Text(health?["commit"]) is not { } running || string.Equals(running, commit, StringComparison.OrdinalIgnoreCase);
+        }
+        catch (AgentFailure)
+        {
+            return false;
+        }
     }
 
     private static string? Text(JsonNode? node) => node is JsonValue value && value.TryGetValue<string>(out var text) && text.Length > 0 ? text : null;

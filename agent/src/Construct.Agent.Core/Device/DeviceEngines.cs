@@ -74,11 +74,12 @@ public sealed class AgentEngines(DeviceAgent agent) : IDeviceEngines
 
 /// <summary>
 /// One host reached with its pin and a token, outside the device's engines: the upgrade dialog asks a host of the old
-/// client before the engine step adds it (R1). The token stays in memory.
+/// client before the engine step adds it (R1). The token stays in memory. The address goes through
+/// <see cref="Engines.EngineHttp.ParseAddress"/> (https only, else it throws), so the pin is checked before the token goes out.
 /// </summary>
 internal sealed class PinnedEngine(string url, string pin, string token) : IDeviceEngines, IDisposable
 {
-    private readonly HttpClient _http = Engines.EngineHttp.Client(new Uri(url.TrimEnd('/') + "/"), pin, TimeSpan.FromSeconds(20));
+    private readonly HttpClient _http = Engines.EngineHttp.Client(Engines.EngineHttp.ParseAddress(url), pin, TimeSpan.FromSeconds(20));
 
     public IReadOnlyList<EngineView> List() => [];
 

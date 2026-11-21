@@ -143,6 +143,7 @@ public sealed class AgentHost : IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         await Device.DisposeAsync().ConfigureAwait(false);
+        Upgrade.Dispose();
         EngineSetup.Dispose();
         await App.StopAsync().ConfigureAwait(false);
         await App.DisposeAsync().ConfigureAwait(false);

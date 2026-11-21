@@ -188,7 +188,7 @@ public sealed class UpdateEverythingTests : IAsyncDisposable
         await _device.Everything.Work.WaitAsync(TimeSpan.FromSeconds(10));
 
         var calls = engines.CallsTo("old");
-        Assert.Equal(["GET engine", "GET host/updates/status", "POST host/updates/check", "GET host/config", "POST host/updates/stage", "GET engine", "GET health", "POST me/vms/reprovision"], calls);
+        Assert.Equal(["GET engine", "GET host/updates/status", "POST host/updates/check", "GET host/config", "POST host/updates/stage", "GET engine", "GET health", "GET health", "POST me/vms/reprovision"], calls);
         var stage = engines.Calls.Single(c => c.Call == "POST host/updates/stage").Body!;
         Assert.Equal("host-" + NewCommit, stage["releaseTag"]!.GetValue<string>());
         Assert.True(stage["autoApply"]!.GetValue<bool>());
@@ -229,6 +229,43 @@ public sealed class UpdateEverythingTests : IAsyncDisposable
         var parts = _device.Everything.View().Parts.Where(p => p.Engine == "old").ToArray();
         Assert.Equal(["failed", "skipped"], parts.Select(p => p.State));
         Assert.Contains("rolledBack", parts[0].Detail, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task An_old_host_that_answers_as_the_new_stack_in_maintenance_and_then_rolls_back_has_not_moved()
+    {
+        // Review of R5: the new stack answers GET /engine while it still finishes the update; the update rolled back
+        // after that, and Move over had remembered the host as moved (later runs reprovisioned at the old stack).
+        var polls = 0;
+        var engines = OldHost(NewCommit)
+            .On("old", "GET engine", _ => ++polls <= 2
+                ? JsonNode.Parse("""{"engineId":"e-old","hostPublicKey":"k"}""")
+                : throw new AgentFailure(404, "engine-refused", "The engine answered 404."))
+            .On("old", "GET health", _ => JsonNode.Parse(polls <= 2 ? """{"status":"maintenance"}""" : $$"""{"status":"ok","commit":"{{new string('a', 40)}}"}"""))
+            .On("old", "GET host/updates/status", """{"supportsAutoApply":true,"current":{"updateId":"u2","state":"rolledBack"}}""");
+        var update = new OldHostUpdate(engines, (_, _, _) => Task.FromResult(true), TimeProvider.System) { PollInterval = TimeSpan.FromMilliseconds(1) };
+
+        var problem = await update.RunAsync("old", new OldHostOffer("host-" + NewCommit, NewCommit, null), CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(10));
+
+        Assert.Equal("Update rolledBack; previous version kept", problem);
+    }
+
+    [Fact]
+    public async Task An_old_host_has_moved_only_once_it_is_healthy_with_the_offered_commit()
+    {
+        var health = 0;
+        var engines = OldHost(NewCommit)
+            .On("old", "GET engine", """{"engineId":"e-old","hostPublicKey":"k"}""")
+            .On("old", "GET health", _ => JsonNode.Parse(++health switch
+            {
+                1 => """{"status":"maintenance"}""",
+                2 => $$"""{"status":"ok","commit":"{{new string('a', 40)}}"}""",
+                _ => $$"""{"status":"ok","commit":"{{NewCommit}}"}""",
+            }));
+        var update = new OldHostUpdate(engines, (_, _, _) => Task.FromResult(true), TimeProvider.System) { PollInterval = TimeSpan.FromMilliseconds(1) };
+
+        Assert.Null(await update.RunAsync("old", new OldHostOffer("host-" + NewCommit, NewCommit, null), CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(10)));
+        Assert.Equal(3, health);
     }
 
     public async ValueTask DisposeAsync()

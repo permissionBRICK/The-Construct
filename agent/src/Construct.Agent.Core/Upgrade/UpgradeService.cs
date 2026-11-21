@@ -50,6 +50,8 @@ public sealed class UpgradeService
     private StepProgress? _convertProgress;
     private List<UpgradeItem> _live = [];
     private Task? _probe;
+    private Task? _scripts;
+    private readonly CancellationTokenSource _lifetime = new();
     private readonly Dictionary<string, bool> _staysOld = new(StringComparer.OrdinalIgnoreCase);
 
     /// <param name="setup">Sets up the engine on this PC; the first run uses the same.</param>
@@ -183,6 +185,7 @@ public sealed class UpgradeService
                     {
                         var token = legacy.HostToken(host);
                         if (token is null) continue;
+                        // https only, as for any engine (it throws otherwise): over http:// the pin is never checked and the token would go out in the clear.
                         using var engine = new PinnedEngine(host.Url, host.Pin!, token);
                         bool old;
                         try
@@ -281,8 +284,13 @@ public sealed class UpgradeService
         string? mode = null;
         try
         {
-            if (Legacy() is { } legacy && _agent.Engines().FirstOrDefault(e => e.Id == engineId) is { } engine)
-                mode = legacy.Hosts().FirstOrDefault(h => LegacyState.Slug(h.Url) == LegacyState.Slug(engine.Url))?.VaultMode;
+            if (Legacy() is { } legacy && _agent.Engines().FirstOrDefault(e => e.Id == engineId) is { } engine
+                && legacy.Hosts().FirstOrDefault(h => LegacyState.Slug(h.Url) == LegacyState.Slug(engine.Url)) is { } host)
+            {
+                mode = host.VaultMode;
+                // Moved now: the move's note that it was not goes.
+                Bridge.Update(b => b.Noted(_agent.Account, LegacyConverter.HostNote(new Uri(host.Url).Host), null));
+            }
         }
         catch (Exception ex) when (ex is AgentFailure or IOException or UriFormatException)
         {
@@ -292,24 +300,54 @@ public sealed class UpgradeService
         await MarkOldHostAsync(_agent, Bridge, engineId, ct).ConfigureAwait(false);
     }
 
+    /// <summary>How often old entry scripts that could not be replaced are tried again.</summary>
+    public TimeSpan ScriptsRetry { get; set; } = TimeSpan.FromMinutes(10);
+
     /// <summary>
     /// At the agent's start: an install moved over earlier gets the new entry scripts in its old install folder (R14),
     /// also when the move happened before this version replaced them, or a file was held then.
     /// </summary>
     public void Start()
     {
-        if (Bridge.Read().Stage != BridgeState.Converted) return;
-        _ = Task.Run(() =>
-        {
-            try
-            {
-                if (Legacy() is { } legacy) OldInstallScripts.Replace(legacy);
-            }
-            catch (Exception ex) when (ex is AgentFailure or IOException or UnauthorizedAccessException)
-            {
-            }
-        });
+        if (Bridge.Read().Stage == BridgeState.Converted) ProtectScripts();
     }
+
+    /// <summary>
+    /// Replaces the old entry scripts, and while any is left (a file Windows holds, a link) tries again every
+    /// <see cref="ScriptsRetry"/>; the notes name what is left (<see cref="OldInstallScripts.Protect"/>).
+    /// </summary>
+    private void ProtectScripts()
+    {
+        lock (_gate)
+        {
+            if (_scripts is { IsCompleted: false }) return;
+            _scripts = Task.Run(async () =>
+            {
+                while (!_lifetime.IsCancellationRequested)
+                {
+                    try
+                    {
+                        if (Legacy() is not { } legacy || OldInstallScripts.Protect(legacy, Bridge, _agent.Account)) return;
+                    }
+                    catch (Exception ex) when (ex is AgentFailure or IOException or UnauthorizedAccessException)
+                    {
+                    }
+
+                    try { await Task.Delay(ScriptsRetry, _options.Time, _lifetime.Token).ConfigureAwait(false); }
+                    catch (OperationCanceledException) { return; }
+                }
+            });
+        }
+    }
+
+    /// <summary>The script replacement and its retries, awaitable (tests).</summary>
+    public Task Scripts
+    {
+        get { lock (_gate) return _scripts ?? Task.CompletedTask; }
+    }
+
+    /// <summary>Ends the retries.</summary>
+    public void Dispose() => _lifetime.Cancel();
 
     // ---- step 3: the old writers ----
 
@@ -372,7 +410,9 @@ public sealed class UpgradeService
             BeforeItem = BeforeItem, OldHosts = OldHostUpdate(_engines),
             Overall = p => { lock (_gate) _convertProgress = p; },
         };
-        return await converter.RunAsync(legacy, ct).ConfigureAwait(false);
+        var converted = await converter.RunAsync(legacy, ct).ConfigureAwait(false);
+        if (Bridge.Read() is { Stage: BridgeState.Converted, ScriptsLeft.Count: > 0 }) ProtectScripts();
+        return converted;
     }
 
     private Task ConvertAsync(CancellationToken ct) => ConvertAsync(ct, null);

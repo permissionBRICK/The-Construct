@@ -188,7 +188,10 @@ engines with their pins and sign-ins, connected with the vault mode the Companio
 old stack that the user administers moves to the new version through its own update API when it offers it
 (`Update/OldHostUpdate.cs`: `GET /host/updates/status`, `POST /host/updates/check`, `stage` with `autoApply`, or
 `apply` for one staged; "the new version" is a release whose manifest names the device agent's package, so another
-release of the old stack is never applied), and this device connects there as at a new host; the config
+release of the old stack is never applied); it has moved once it answers `GET /engine` and `GET /health` says `ok`
+with the offered commit (the new stack answers during its update's maintenance and may still roll back), and this
+device connects there as at a new host; an update that does not go through, or rolls back, leaves the host as it is,
+does not hold up `converted`, and is named in the notes (Update tries it again); the config
 repository's `main` profiles through the store engine's `PUT /profiles/{name}`; a VM branch's unmerged
 change as that VM's write with the merge base as its base, so the engine merges per field and opens a
 conflict (branch ours, main theirs); the upstream links into `legacy-upstream.json`; the vault's secrets
@@ -204,7 +207,10 @@ the old client's autoinstall images are deleted; and the old install folders' en
 (`Upgrade/OldInstallScripts.cs`): `Update-T3Code.ps1`, `Get-ConstructT3PairingLink.ps1`, `Update-Construct.ps1`,
 `install.ps1` and `lib/Construct.AgentShim.ps1` as this tree ships them, every other script at the folder's top
 `lib/Construct.MovedScript.ps1`, which only says where things moved. So a T3 Code Desktop or panel of the old stack can
-only act through the agent. The agent does the same at each start of a converted install. The way back reinstalls the
+only act through the agent. Only regular files are written: a script, or a folder on the way from the old client's
+root, that is a link or junction is left alone, as is a file Windows holds; `bridge.json` keeps what is left
+(`scriptsLeft`) and a note names it (do not run them). The agent tries again at each start of a converted install and
+every 10 minutes while any is left. The way back reinstalls the
 last old release, which brings its scripts back. Open vault leases and pending cleanups are not carried over: a VM asks again.
 
 ### Device routes
