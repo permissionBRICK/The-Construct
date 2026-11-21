@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { ApiBackend } from '../../src/backend/api/backend';
 import { SseParser } from '../../src/backend/api/events';
 import { codingAgents, spanText } from '../../src/backend/api/map';
-import { activeJob, repairWhen } from '../../src/model/vm';
+import { activeJob, repairWhen, warnedJob } from '../../src/model/vm';
 import { updateParts } from '../../src/model/update';
 
 /* ApiBackend against hand-written agent and engine responses. The fake fetch routes on method and path,
@@ -192,6 +192,42 @@ describe('ApiBackend', () => {
     expect(j).toMatchObject({ kind: 'reprovision', state: 'running' });
   });
 
+  it('updates a coding agent with a reprovision, which brings every agent to its newest', async () => {
+    const { be, calls, on, settle } = world();
+    on('POST', `/api/engines/${E1}/vms/atlas/jobs`, { status: 202, json: { jobId: 'j7', kind: 'provision', replayed: false } });
+    on('GET', `/api/engines/${E1}/api/v1/jobs/j7`, { json: job('j7', 'atlas', 'running') });
+    await be.start();
+    expect(be.snapshot().na).not.toContain('agent-update');
+    be.updateAgents('atlas');
+    await settle();
+    expect(posts(calls).map(c => [c.path, (c.body as { kind: string }).kind])).toEqual([[`/api/engines/${E1}/vms/atlas/jobs`, 'provision']]);
+    expect(activeJob(be.snapshot(), 'atlas')).toMatchObject({ kind: 'reprovision', state: 'running' });
+  });
+
+  it('shows the engine\'s whole-job percentage with its sub-step, never going back, and a success with warnings', async () => {
+    const { be, on, settle } = world();
+    on('POST', `/api/engines/${E1}/vms/atlas/jobs`, { status: 202, json: { jobId: 'j8', kind: 'provision', replayed: false } });
+    const at = (percent: number, label: string, step = 'provision') =>
+      ({ json: { ...job('j8', 'atlas', 'running', 'provision', [{ at: '', text: 'x', step, state: 'running', percent: null }]), overall: { percent, label } } });
+    on('GET', `/api/engines/${E1}/api/v1/jobs/j8`, at(41, 'Installing T3'));
+    await be.start();
+    be.reprovision('atlas');
+    await settle();
+    expect(activeJob(be.snapshot(), 'atlas')).toMatchObject({ step: 'Installing T3', pct: 41 });
+    // An older engine's read, or one taken before the last, shows no lower percentage.
+    on('GET', `/api/engines/${E1}/api/v1/jobs/j8`, { json: job('j8', 'atlas', 'running', 'provision', [{ at: '', text: 'x', step: 'copy', state: 'running', percent: null }]) });
+    be.onEvent('job.progress', { seq: 1, type: 'job.progress', engine: E1, data: { id: 'j8', vm: 'atlas' } });
+    await settle();
+    expect(activeJob(be.snapshot(), 'atlas')).toMatchObject({ step: 'Copying', pct: 41 });
+    const ended = { ...job('j8', 'atlas', 'succeeded'), warnings: ['Requesting project port forwards'] };
+    on('GET', `/api/engines/${E1}/api/v1/jobs/j8`, { json: ended });
+    on('GET', `/api/engines/${E1}/api/v1/jobs`, { json: [ended] });
+    be.onEvent('job.ended', { seq: 2, type: 'job.ended', engine: E1, data: { id: 'j8', vm: 'atlas' } });
+    await settle();
+    expect(activeJob(be.snapshot(), 'atlas')).toBeNull();
+    expect(warnedJob(be.snapshot(), 'atlas')).toMatchObject({ state: 'done', pct: 100, warnings: ['Requesting project port forwards'] });
+  });
+
   it('shows a reprovision working at once, while the agent still gathers the clone credentials', async () => {
     // Finding 15: about five seconds passed between the click and any feedback.
     const { be, on, settle } = world();
@@ -268,7 +304,8 @@ describe('ApiBackend', () => {
     be.onEvent('job.progress', { seq: 1, type: 'job.progress', engine: E1, data: { id: 'j1', vm: 'atlas' } });
     await settle();
     const j = activeJob(be.snapshot(), 'atlas')!;
-    expect(j).toMatchObject({ state: 'running', step: 'Copying', stepIndex: 1, pct: 30 });
+    // Step 2 of 7, 30 % into it: the bar moves within the step's share.
+    expect(j).toMatchObject({ state: 'running', step: 'Copying', stepIndex: 1, pct: 19 });
     expect(j.log).toEqual(['copying']);
     on('GET', `/api/engines/${E1}/api/v1/jobs/j1`, { json: job('j1', 'atlas', 'succeeded') });
     on('GET', `/api/engines/${E1}/api/v1/jobs`, { json: [job('j1', 'atlas', 'succeeded')] });
@@ -316,7 +353,6 @@ describe('ApiBackend', () => {
     be.saveSettings('atlas', { identity: { historyDays: '90' } });
     be.saveSettings('atlas', { disk: { diskGb: 120 } });
     be.setSharing('atlas', 'vscodeWeb', true);
-    be.updateAgents('atlas');
     be.takeBack('no-such-lease');
     be.closeForward('atlas', 'no-such-forward');
     be.retryHostJob(E1, 'no-such-job');
@@ -1455,7 +1491,7 @@ describe('ApiBackend one-time upgrade', () => {
     expect(be.snapshot().upgrade).toMatchObject({ step: 'convert', running: true, error: null });
     be.onEvent('upgrade', { seq: 3, type: 'upgrade', engine: null, data: { id: 'profiles', label: 'Projects', state: 'done', message: '1 copied' } });
     await settle();
-    expect(be.snapshot().upgrade?.items).toEqual([{ name: 'Projects', state: 'done', count: '1 copied', pct: 0 }]);
+    expect(be.snapshot().upgrade?.items).toEqual([{ id: 'profiles', name: 'Projects', state: 'done', count: '1 copied', pct: 0 }]);
     // Converted: the normal screens load.
     on('GET', '/api/upgrade', { json: view({ engine: 'done', recovery: 'done', close: 'done', convert: 'done' }, { stage: 'converted' }) });
     on('GET', '/api/state', { json: { device: { id: 'd1', name: 'laptop', account: 'acct1', registered: true, storeEngine: E1, protection: 'file', protectionWeak: true }, engines: [{ id: E1, name: 'orchard', url: 'https://orchard.test:8443', pin: 'AB', engineId: 'x', enrolled: true, signedIn: true, store: true }], pairing: null } });

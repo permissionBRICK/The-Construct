@@ -29,7 +29,7 @@ type Loose = Record<string, unknown>;
 /** What this backend cannot serve yet; the screens show these parts as not available. */
 export const API_GAPS: Feature[] = [
   'sharing', 'console', 'vm-password', 'vm-disk', 'vm-boot', 'windows-sign-in', 'export-code', 'code-reveal', 'vm-token',
-  'agent-update', 'notifications', 'log', 'vm-history', 't3-proxy',
+  'notifications', 'log', 'vm-history', 't3-proxy',
 ];
 /** On Windows the agent signs in with the Windows user where an engine offers it. */
 const WINDOWS_GAPS = API_GAPS.filter(f => f !== 'windows-sign-in');
@@ -159,6 +159,8 @@ export class ApiBackend implements Backend {
   private starting = new Map<string, JobKind>();
   /** Jobs this UI started, with the kind it shows them as, the version an update goes from and to, and how a reinstall was asked for. */
   private started = new Map<string, Started>();
+  /** The highest percentage each job showed: its bar never goes back (finding 32). */
+  private jobPct = new Map<string, number>();
   private transit = new Map<string, { power: Vm['power']; until: number }>();
   private approving: { id: string; publicKey: string; name: string } | null = null;
   private refreshing = new Map<string, Promise<void>>();
@@ -656,7 +658,11 @@ export class ApiBackend implements Backend {
           const key = jobKey(engine, newest.id);
           const st = this.started.get(key);
           const job = toJob(key, id, newest, st?.kind);
-          if (job) this.withRepair(sl, r.name, newest, job);
+          if (job) {
+            this.withRepair(sl, r.name, newest, job);
+            job.pct = Math.max(job.pct, this.jobPct.get(key) ?? 0);
+            this.jobPct.set(key, job.pct);
+          }
           if (job && !this.dismissed.has(key)) jobs.push({ ...job, from: st?.from, to: st?.to, at: newest.created });
         }
         // A start asked for here and not answered yet: working at once, after whatever the VM showed.
@@ -1500,7 +1506,10 @@ export class ApiBackend implements Backend {
     await ok(c.PUT('/api/v1/vms/{name}/desired', { ...path, body: next }));
   }
 
-  updateAgents(..._: unknown[]) { this.note(NA); }
+  /** A coding agent's update: the VM's provision installs the newest version of each agent, so it is a reprovision. */
+  updateAgents(vmId: string) {
+    this.reprovision(vmId);
+  }
 
   /** A profile switched on or off for one VM: part of its desired state, applied at the next reprovision. */
   setProjectOn(vmId: string, project: string, on: boolean) {

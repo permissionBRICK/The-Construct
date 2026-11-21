@@ -77,7 +77,13 @@ reports the change and Reprovision shows the dot. Memory and CPU keep their own 
 now or later". Creating a VM is one request with the settings; the engine provisions it in the same job. A failed
 provision or reinstall is retried through `POST /jobs/{id}/retry`; a restore needs its backup's key, which only a
 device opens, so it starts again through the agent's restore route. Update runs the agent's "update everything"
-and shows each part's state; "only this VM" is the engine's VM update route.
+and shows each part's state; "only this VM" is the engine's VM update route. A coding agent's Update is a
+reprovision, which installs the newest version of every agent.
+
+A running job shows one bar: the engine's whole-job percentage and the current sub-step in a few words
+(`overall {percent, label}` on the job) where the engine reports them, else the step's place among the job's
+steps, moved within the step's share by the step's own `percent`; the page never shows a lower percentage than
+it showed before. A job that succeeded with `warnings` (optional steps that failed) shows them until put away.
 
 ## Repair agent
 
@@ -114,8 +120,7 @@ this machine is added only after the user confirmed the certificate fingerprint 
 ## What the API does not offer yet
 
 `State.na` lists the parts `ApiBackend` cannot serve; each screen shows such a part as not available
-and its action sends nothing. They are sharing VS Code web, updating a VM's coding
-agents, the T3 proxy URL and the chat history kept in backups (neither is in the desired state), the disk,
+and its action sends nothing. They are sharing VS Code web, the T3 proxy URL and the chat history kept in backups (neither is in the desired state), the disk,
 checkpoints and start-with-host settings, the VM password, the log and consoles, rotating a VM token (its
 one-time value has no place yet), the notifications switch, and saving or printing the recovery code. Windows
 sign-in is offered only where the agent reports a Windows device.
@@ -124,7 +129,9 @@ sign-in is offered only where the agent reports a Windows device.
 
 In the Windows shell the page runs in WebView2 with `?surf=pop|win|alone`. Closing the pop-out or the lone vault
 card (its buttons, or Escape) posts `{type: 'close'}`, and opening the window posts `{type: 'openWindow', route}`,
-both through `window.chrome.webview.postMessage` when that object exists (`src/ui/shell.ts`). Framed by the
+both through `window.chrome.webview.postMessage` when that object exists (`src/ui/shell.ts`). The pop-out and the
+lone card also post `{type: 'size', height}` with their content's height in CSS pixels whenever it changes (an open
+menu included), and the shell sizes the floating window to it. Framed by the
 VS Code extension's view, the same two messages go to the framing document, and a forward's link goes there as
 `{type: 'openExternal', url}`, because a sandboxed frame cannot open a window; the extension checks each
 message. In a browser the pop-out opens the window by navigating, and close does nothing.

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'preact/hooks';
 import type { FirstRunRequest, HostProbe, Scheme, ThemeMode, UpgradeStep } from '../../backend/types';
-import { updateDue, updateParts } from '../../model/update';
+import { shortVersion, updateDue, updateParts } from '../../model/update';
+import { convertRows } from '../../model/upgrade';
 import { SCHEME_ORDER, SCHEMES } from '../../model/tokens';
 import { AGENTS, agentList, agentSwitches, DEFAULT_AGENTS } from '../../model/settings';
 import { Icon } from '../icons';
@@ -22,14 +23,14 @@ export function Construct() {
       <Head title="Construct" back={surf === 'phone' ? () => go({ page: 'home' }) : undefined} />
       {due && !s.everything?.running && (
         <div class="blk row upd">
-          <div class="bh grow"><b class="m">{s.version} → {to}</b></div>
+          <div class="bh grow"><b class="m">{shortVersion(s.version, s.prefs.channel)} → {to && shortVersion(to, s.prefs.channel)}</b></div>
           <Btn kind="pri" icon="up" onClick={() => be.updateEverything()}>Update</Btn>
         </div>
       )}
       {s.everything && <EverythingBlock e={s.everything} />}
       <Sec>
         <Table cols={[{ h: 'Part' }, { h: 'Version', cls: 'm' }, { h: 'After', cls: 'e m' }]}
-          rows={parts.map(p => [p.name, p.version, p.to ? <span class="warnc">{p.to}</span> : p.note === 'admin' ? <Tag>by its admin</Tag> : p.note === 'channel' ? <Tag>other channel</Tag> : '–'])} />
+          rows={parts.map(p => [p.name, <span title={p.version}>{shortVersion(p.version)}</span>, p.to ? <span class="warnc" title={p.to}>{shortVersion(p.to, s.prefs.channel)}</span> : p.note === 'admin' ? <Tag>by its admin</Tag> : p.note === 'channel' ? <Tag>other channel</Tag> : '–'])} />
       </Sec>
       <Sec title="Preferences">
         <Row l="Channel">{na(s, 'channel') ? <span class="d">Not available yet</span> : s.prefs.channel === 'stable' || s.prefs.channel === 'nightly'
@@ -325,8 +326,8 @@ export function Upgrade() {
     <div class="solo">{top}<h3>Moving over</h3>
       {u.items.length > 0 && (
         <div class="wz">
-          {u.items.map(it => wl(it.state === 'done' || it.state === 'skipped' ? <Icon n="check" /> : it.state === 'running' ? <Icon n="repro" /> : it.state === 'failed' ? <Icon n="x" /> : <i class="ring" />, it.name,
-            <>{it.count && <span class={`rv ${it.state === 'failed' ? 'badc' : ''}`}>{it.count}</span>}{it.state === 'running' && it.pct > 0 && <div class="bar"><i style={{ width: `${it.pct}%` }} /></div>}</>,
+          {convertRows(u.items).map(it => wl(it.state === 'done' || it.state === 'skipped' ? <Icon n="check" /> : it.state === 'running' ? <Icon n="repro" /> : it.state === 'failed' ? <Icon n="x" /> : <i class="ring" />, it.name,
+            <>{it.count && <span class={`rv ${it.state === 'failed' ? 'badc' : ''}`} title={it.count}>{it.count}</span>}{it.state === 'running' && it.pct > 0 && <div class="bar"><i style={{ width: `${it.pct}%` }} /></div>}</>,
             it.state === 'done' || it.state === 'skipped' ? 'ok' : it.state === 'waiting' ? 'wait' : ''))}
         </div>
       )}

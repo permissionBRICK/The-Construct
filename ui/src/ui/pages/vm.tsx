@@ -1,26 +1,46 @@
 import { useState } from 'preact/hooks';
 import type { Agent, Profile, SettingsPatch, Vm, VmSettings } from '../../backend/types';
-import { activeJob, vmDot, vmWord, newer, vmUpdateTarget } from '../../model/vm';
+import { activeJob, vmDot, vmWord, newer, vmUpdateTarget, warnedJob } from '../../model/vm';
 import { AGENTS, groupApplies, hwChange, swapSize } from '../../model/settings';
 import { profileError } from '../../model/profile';
 import { aliasWritten } from '../../backend/api/map';
 import { Icon } from '../icons';
-import { Btn, Confirm, Copyable, Dot, Field, Head, KV, NotYet, Page, Row, Sec, Seg, Switch, Table, Tabs, Tag, UpTag } from '../kit';
+import { Btn, Confirm, Dot, Field, Head, KV, NotYet, Page, Row, Sec, Seg, Switch, Table, Tabs, Tag, UpTag } from '../kit';
 import { copy, na, useApp } from '../ctx';
-import { ActionButtons, JobBlock, PowerBtn, ReinstallConfirm, SignInBlock, SignInCards, VaultCards } from '../blocks';
-import { signedIn } from '../../model/signin';
+import { ActionButtons, JobBlock, PowerBtn, ReinstallConfirm, SignInBlock, SignInCards, VaultCards, WarnedBlock } from '../blocks';
+import { signInState } from '../../model/signin';
+import { shortVersion } from '../../model/update';
 
 /* Pages of one VM: overview, projects (list, one project, its file), connections, backups, settings. */
 
 /** A newer version of a coding agent is out: the engine says so, else the versions are compared. */
 const agentBehind = (a: Agent) => a.newer ?? newer(a.latest, a.version);
 
-/** A chosen agent's sign-in: signed in as the VM reports it, else Sign in (also while the VM has not said). */
+/** A chosen agent's sign-in: signed in as the VM reports it, Sign in when it reports it signed out or has not reported
+    the agent yet (a new VM), unknown when it reports the agent but cannot tell (a guest without the sign-in helper,
+    until its next reprovision; finding 11). */
 export function SignInCell({ vm, agent }: { vm: Vm; agent: (typeof AGENTS)[number] }) {
   const { s, be } = useApp();
-  if (signedIn(vm.agents, agent.tool)) return <span class="okc signed"><Icon n="check" />Signed in</span>;
+  const state = signInState(vm.agents, agent.tool);
+  if (state === 'yes') return <span class="okc signed"><Icon n="check" />Signed in</span>;
+  if (state === 'unknown') return <span class="d" title="This VM cannot report its sign-in until its next reprovision">Unknown</span>;
   const busy = s.signIn?.vmId === vm.id && s.signIn.agent === agent.id && s.signIn.state !== 'failed' && s.signIn.state !== 'stopped';
   return <Btn sm icon="key" disabled={busy} onClick={() => be.signIn(vm.id, agent.id)}>Sign in</Btn>;
+}
+
+/** The overview's coding agents: one click to update an agent that has an update, or to sign in one that is signed out;
+    nothing when neither applies (finding 27). An update is a reprovision, which brings every agent to its newest. */
+function AgentActions({ vm, a, busy }: { vm: Vm; a: Agent; busy: boolean }) {
+  const { s, be } = useApp();
+  const id = AGENTS.find(x => x.tool === a.id);
+  const out = id && vm.settings.agents[id.id] && signInState(vm.agents, a.id) === 'no';
+  const signing = !!id && s.signIn?.vmId === vm.id && s.signIn.agent === id.id && s.signIn.state !== 'failed' && s.signIn.state !== 'stopped';
+  return (
+    <span class="acts one">
+      {agentBehind(a) && <Btn sm kind="amber" icon="up" title={`Update to ${a.latest}`} disabled={busy} onClick={() => be.updateAgents(vm.id)}>Update</Btn>}
+      {out && <Btn sm icon="key" disabled={signing} onClick={() => be.signIn(vm.id, id.id)}>Sign in</Btn>}
+    </span>
+  );
 }
 
 export function useBack() {
@@ -32,9 +52,12 @@ export function Overview({ vm }: { vm: Vm }) {
   const { s, be } = useApp();
   const [wipe, setWipe] = useState(false);
   const job = activeJob(s, vm.id);
+  const warned = warnedJob(s, vm.id);
   const host = s.hosts.find(h => h.id === vm.hostId);
-  const outdated = vm.agents.some(agentBehind);
   const vmUp = vmUpdateTarget(s, vm);
+  const busy = job?.state === 'running';
+  // A lost sign-in's card shows its own sign-in panel; any other one started here shows under the agents.
+  const panel = s.signIn?.vmId === vm.id && !vm.agents.some(a => a.lostAt && AGENTS.find(x => x.tool === a.id)?.id === s.signIn!.agent) ? s.signIn : null;
   const big = (n: number | null) => (n === null ? '–' : String(n));
   const use = [
     { k: 'CPU', big: big(vm.usage.cpuPct), u: '%', p: vm.usage.cpuPct ?? 0 },
@@ -59,20 +82,25 @@ export function Overview({ vm }: { vm: Vm }) {
           <Btn icon="code" onClick={() => be.open(vm.id, 'vscode')} disabled={na(s, 'open')}>VS Code</Btn>
           <Btn icon="term" onClick={() => be.open(vm.id, 'ssh')} disabled={na(s, 'open')}>SSH</Btn>
           <span class="grow" />
-          <ActionButtons vm={vm} busy={job?.state === 'running'} onReinstall={() => setWipe(true)} />
+          <ActionButtons vm={vm} busy={busy} onReinstall={() => setWipe(true)} />
         </div>
       </div>
-      {job ? <JobBlock job={job} vm={vm} /> : wipe && <ReinstallConfirm vm={vm} onCancel={() => setWipe(false)} />}
+      {job ? <JobBlock job={job} vm={vm} /> : wipe ? <ReinstallConfirm vm={vm} onCancel={() => setWipe(false)} /> : warned && <WarnedBlock job={warned} />}
       <div class="strip">
         {use.map(u => (
           <div><span class="sk">{u.k}</span><b>{u.big}<small>{u.u}</small></b><div class="bar"><i style={{ width: `${Math.min(100, u.p)}%` }} /></div></div>
         ))}
-        <div><span class="sk">Construct</span><b>{vm.version}</b>{vmUp && <UpTag v={vmUp} />}</div>
+        <div><span class="sk">Construct</span><b title={vm.version}>{shortVersion(vm.version)}</b>{vmUp && <UpTag v={shortVersion(vmUp, s.prefs.channel)} />}</div>
       </div>
       <div class="g2">
-        <Sec title="Coding agents" right={outdated && !na(s, 'agent-update') && <Btn sm onClick={() => be.updateAgents(vm.id)}>Update all</Btn>}>
+        <Sec title="Coding agents">
           {vm.problems?.agents && <div class="line badc">{vm.problems.agents}</div>}
-          {na(s, 'agents') ? <NotYet /> : <Table cols={[{ h: 'Agent' }, { h: 'Version', cls: 'e m' }]} rows={vm.agents.filter(a => a.installed).map(a => [a.name, <>{a.version}{agentBehind(a) && <> <Tag warn>→ {a.latest}</Tag></>}</>])} />}
+          {na(s, 'agents') ? <NotYet /> : <Table cols={[{ h: 'Agent' }, { h: 'Version', cls: 'm' }, { h: '', cls: 'e' }]}
+            rows={vm.agents.filter(a => a.installed).map(a => [a.name,
+              // The yellow Update names the newer version in its tooltip; without one, the version shows it.
+              <>{a.version}{agentBehind(a) && na(s, 'agent-update') && <> <Tag warn>→ {a.latest}</Tag></>}</>,
+              na(s, 'agent-update') ? '' : <AgentActions vm={vm} a={a} busy={busy} />])} />}
+          {panel && <SignInBlock si={panel} />}
         </Sec>
         <Sec title="Child VMs">
           <Table cols={[{ h: 'Name' }, { h: 'System', cls: 'x' }, { h: 'Left', cls: 'm' }, { h: '', cls: 'e' }]}
@@ -219,7 +247,6 @@ export function Connections({ vm }: { vm: Vm }) {
   const can = s.device.can;
   const off = <span class="d">Not on this device</span>;
   const aliasOn = !!vm.link && aliasWritten(vm.link.sshConfig);
-  const ssh = aliasOn ? `ssh ${vm.link!.alias}` : `ssh ${vm.sshPort && vm.sshPort !== 22 ? `-p ${vm.sshPort} ` : ''}root@${vm.address}`;
   return (
     <Page>
       <Head title="Connections" back={useBack()} />
@@ -231,7 +258,7 @@ export function Connections({ vm }: { vm: Vm }) {
       <Sec title="SSH" right={vm.link && (aliasOn
         ? <Btn sm onClick={() => be.setSshAlias(vm.id, false)}>Remove alias</Btn>
         : <Btn sm onClick={() => be.setSshAlias(vm.id, true)}>Write alias</Btn>)}>
-        <Copyable text={ssh} />
+        <Row l={<>Terminal {vm.link && <span class="d m">{vm.link.alias}</span>}</>}><Btn sm icon="term" onClick={() => be.open(vm.id, 'ssh')} disabled={na(s, 'open')}>Connect</Btn></Row>
         {vm.link?.sshConfig === 'failed' && <div class="line badc">The alias could not be written to the SSH config</div>}
       </Sec>
       <Sec title="Sharing">
@@ -380,8 +407,8 @@ function BlurField({ label, value, onSave }: { label: string; value: string; onS
 }
 
 /** The swap file size, saved on blur or Enter. It shows the stored value unless something was typed, so only a
-    typed value is ever saved, also one equal to the shown `auto` that is only the default; the hint turns red while
-    the typed value is not one the guest takes. */
+    typed value is ever saved, also one equal to the shown `auto` that is only the default; the field turns red while
+    the typed value is not one the guest takes. What it takes is in the field's tooltip (finding 25). */
 function SwapSize({ value, tag, onSave }: { value: string; tag: preact.JSX.Element; onSave: (v: string) => void }) {
   const [typed, setTyped] = useState<string | null>(null);
   const [bad, setBad] = useState(false);
@@ -394,12 +421,10 @@ function SwapSize({ value, tag, onSave }: { value: string; tag: preact.JSX.Eleme
     onSave(n);
   };
   return (
-    <>
-      <Row l={<>Swap file <span class="d">GB</span> {tag}</>}>
-        <input class="in m short" aria-label="Swap file" value={typed ?? value} onInput={e => setTyped(e.currentTarget.value)} onBlur={commit} onKeyDown={e => { if (e.key === 'Enter') commit(); }} />
-      </Row>
-      <div class={`line ${bad ? 'badc' : 'd'}`}>auto: half the RAM, at most 8 GB · 0: none</div>
-    </>
+    <Row l={<>Swap file <span class="d">GB</span> {tag}</>}>
+      <input class={`in m short ${bad ? 'bad' : ''}`} aria-label="Swap file" aria-invalid={bad} title="auto: half the RAM, at most 8 GB · 0: none" value={typed ?? value}
+        onInput={e => setTyped(e.currentTarget.value)} onBlur={commit} onKeyDown={e => { if (e.key === 'Enter') commit(); }} />
+    </Row>
   );
 }
 

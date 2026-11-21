@@ -3,6 +3,7 @@ import { QrSquare, Icon } from '../icons';
 import { Btn, Confirm, Field, Head, NotYet, Page, Row, Sec, Seg, Switch, Table, Tabs, Tag } from '../kit';
 import { copy, na, useApp } from '../ctx';
 import type { Page as P } from '../../model/route';
+import type { Secret } from '../../backend/types';
 
 /* The key vault: secrets, access (leases), devices with pairing and revocation, history. */
 
@@ -57,6 +58,7 @@ function ReplaceValue({ name }: { name: string }) {
 export function Secrets() {
   const { s, be } = useApp();
   const [adding, setAdding] = useState(false);
+  const [open, setOpen] = useState<string | null>(null);
   const [n, setN] = useState(''), [note, setNote] = useState(''), [val, setVal] = useState('');
   const taken = s.secrets.some(x => x.name === n.trim());
   const close = () => { setAdding(false); setN(''); setNote(''); setVal(''); };
@@ -75,12 +77,43 @@ export function Secrets() {
       )}
       {s.problems.secrets && <div class="line badc">{s.problems.secrets}</div>}
       {!na(s, 'vault') && <Sec>
-        <Table cols={[{ h: 'Secret', cls: 'm' }, { h: 'Note', cls: 'x' }, { h: 'In use', cls: 'x' }, { h: 'Last', cls: 'x' }, { h: 'Auto' }, { h: '', cls: 'e' }]}
-          rows={s.secrets.map(x => [x.name, x.note, x.usedBy.join(', ') || '–', x.last,
-            <Switch on={x.auto} onChange={v => be.setAutoApprove(x.name, v)} label={`Auto-approve ${x.name}`} />,
-            <span class="acts"><RevealValue key={`show-${x.name}`} name={x.name} /> <ReplaceValue key={`replace-${x.name}`} name={x.name} /> <Confirm key={`delete-${x.name}`} label="Delete" onYes={() => be.deleteSecret(x.name)} /></span>])} />
+        {s.secrets.length ? (
+          <table class="tb secrets">
+            <thead><tr><th>Secret</th><th class="t">Note</th><th class="x">In use</th><th class="x">Last</th><th>Auto</th><th class="e" /></tr></thead>
+            <tbody>{s.secrets.map(x => <SecretRow key={x.name} x={x} open={open === x.name} onToggle={() => setOpen(open === x.name ? null : x.name)} />)}</tbody>
+          </table>
+        ) : <div class="line">None</div>}
       </Sec>}
     </Page>
+  );
+}
+
+/** One secret on one line, its note cut with an ellipsis (whole on hover); opened, the whole note and what can be done
+    with it (finding 23). */
+function SecretRow({ x, open, onToggle }: { x: Secret; open: boolean; onToggle: () => void }) {
+  const { be } = useApp();
+  const used = x.usedBy.join(', ') || '–';
+  return (
+    <>
+      <tr class={`go ${open ? 'open' : ''}`} tabIndex={0} aria-expanded={open} onClick={onToggle} onKeyDown={(e: KeyboardEvent) => { if (e.key === 'Enter') onToggle(); }}>
+        <td class="m">{x.name}</td>
+        <td class="t" title={x.note}>{x.note}</td>
+        <td class="x u" title={used}>{used}</td>
+        <td class="x">{x.last}</td>
+        <td onClick={e => e.stopPropagation()}><Switch on={x.auto} onChange={v => be.setAutoApprove(x.name, v)} label={`Auto-approve ${x.name}`} /></td>
+        <td class="e"><Icon n="down" /></td>
+      </tr>
+      {open && (
+        <tr class="more-row">
+          <td colSpan={6}>
+            <div class="sx">
+              {x.note && <p class="note sel">{x.note}</p>}
+              <span class="acts"><RevealValue name={x.name} /> <ReplaceValue name={x.name} /> <Confirm label="Delete" onYes={() => be.deleteSecret(x.name)} /></span>
+            </div>
+          </td>
+        </tr>
+      )}
+    </>
   );
 }
 

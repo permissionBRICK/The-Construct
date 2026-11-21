@@ -106,6 +106,12 @@ internal sealed class AgentWindow : Form
 
     public event Action? FocusLost;
 
+    /// <summary>The pop-out's or the lone card's page measured its content, in CSS pixels: the shell sizes the window to it.</summary>
+    public event Action<double>? ContentHeight;
+
+    /// <summary>The page's zoom, for turning CSS pixels into the window's.</summary>
+    public double Zoom => _web.ZoomFactor;
+
     /// <summary>WebView2 did not start in this surface; the shell replaces it at the next open.</summary>
     public bool Broken { get; private set; }
 
@@ -182,6 +188,11 @@ internal sealed class AgentWindow : Form
                     using var message = JsonDocument.Parse(e.WebMessageAsJson);
                     var type = message.RootElement.TryGetProperty("type", out var t) ? t.GetString() : null;
                     if (type == "close") Hide();
+                    else if (type == "size")
+                    {
+                        if (Floating && message.RootElement.TryGetProperty("height", out var h) && h.ValueKind == JsonValueKind.Number && h.TryGetDouble(out var css) && css > 0)
+                            ContentHeight?.Invoke(css);
+                    }
                     else if (type == "openWindow")
                     {
                         if (Floating) Hide();

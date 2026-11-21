@@ -1,13 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import { sampleState } from '../../src/backend/sample';
-import { activeJob, cmpVersion, mainAction, vmDot, vmUpdateTarget, vmWord } from '../../src/model/vm';
-import { updateDue, updateParts, updatePlan } from '../../src/model/update';
+import { activeJob, cmpVersion, mainAction, vmDot, vmUpdateTarget, vmWord, warnedJob } from '../../src/model/vm';
+import { shortVersion, updateDue, updateParts, updatePlan } from '../../src/model/update';
+import { convertRows } from '../../src/model/upgrade';
 import { agentList, agentSwitches, applies, applyPatch, DEFAULT_AGENTS, hwChange, swapSize } from '../../src/model/settings';
 import { formatRoute, parseRoute, section } from '../../src/model/route';
 import { contrast, cssVars, SCHEME_ORDER, SCHEMES } from '../../src/model/tokens';
 import type { Job } from '../../src/backend/types';
 import { profileError } from '../../src/model/profile';
-import { linkParts, lostSignIns, signedIn } from '../../src/model/signin';
+import { linkParts, lostSignIns, signedIn, signInState } from '../../src/model/signin';
 
 const job = (p: Partial<Job>): Job => ({ id: 'j', vmId: 'atlas', kind: 'reprovision', state: 'running', step: 's', stepIndex: 0, stepCount: 3, pct: 0, log: [], error: null, repair: null, ...p });
 
@@ -17,6 +18,33 @@ describe('versions', () => {
     expect(cmpVersion('2.10.0', '2.9.0')).toBe(1);
     expect(cmpVersion('2.4', '2.4.0')).toBe(0);
     expect(cmpVersion('1.0.0', '1.0.1')).toBe(-1);
+  });
+});
+
+describe('short versions', () => {
+  it('cuts a build\'s commit to seven characters and names a channel that is not stable', () => {
+    expect(shortVersion('1.0.0+355ea2f2f0ec5096d4bfe5b0ac620bec9403fb1c', 'nightly')).toBe('1.0.0 nightly · 355ea2f');
+    expect(shortVersion('1.0.0+355ea2f2f0ec5096d4bfe5b0ac620bec9403fb1c', 'stable')).toBe('1.0.0 · 355ea2f');
+    expect(shortVersion('1.0.0+355ea2f2f0ec')).toBe('1.0.0 · 355ea2f');
+    expect(shortVersion('2.5.0', 'nightly')).toBe('2.5.0');
+  });
+});
+
+describe('the convert step', () => {
+  const it_ = (id: string, state: 'done' | 'running' | 'waiting' | 'skipped' | 'failed', count = '') => ({ id, name: id, state, count, pct: 0 });
+  it('shows one row per group with n / total, at its first item, and keeps a failed item\'s own row', () => {
+    const rows = convertRows([
+      it_('channel', 'done'),
+      it_('profile:a', 'done'), it_('profile:b', 'skipped'), it_('profile:c', 'running'), it_('profile:d', 'waiting'),
+      it_('secret:x', 'waiting'), it_('secret:y', 'waiting'),
+      it_('vm:atlas', 'waiting'),
+    ]);
+    expect(rows.map(r => [r.name, r.state, r.count])).toEqual([
+      ['channel', 'done', ''], ['Profiles', 'running', '2 / 4'], ['Secrets', 'waiting', '0 / 2'], ['vm:atlas', 'waiting', ''],
+    ]);
+    const end = convertRows([it_('secret:x', 'done'), it_('secret:y', 'failed', 'refused')]);
+    expect(end.map(r => [r.name, r.state, r.count])).toEqual([['Secrets', 'failed', '2 / 2'], ['secret:y', 'failed', 'refused']]);
+    expect(convertRows([it_('profile:a', 'done'), it_('profile:b', 'done')])[0]).toMatchObject({ state: 'done', count: '2 / 2', pct: 100 });
   });
 });
 
@@ -30,6 +58,15 @@ describe('VM state', () => {
     expect(vmWord(vm, job({ kind: 'reinstall' }))).toBe('Reinstalling');
     expect(vmWord(vm, job({ state: 'failed', repair: { agent: 'a', state: 'working', messages: [], t3Thread: false, at: '14:02', auto: true } }))).toBe('Fixing');
     expect(vmWord(s.vms[1], null)).toBe('Off');
+  });
+
+  it('shows a job that succeeded with warnings until it is put away or another job runs', () => {
+    const s = sampleState();
+    s.jobs = [job({ state: 'done', warnings: ['Requesting project port forwards'] })];
+    expect(activeJob(s, 'atlas')).toBeNull();
+    expect(warnedJob(s, 'atlas')?.warnings).toEqual(['Requesting project port forwards']);
+    s.jobs.push(job({ id: 'j2', state: 'done' }));
+    expect(warnedJob(s, 'atlas')).toBeNull();
   });
 
   it('picks the newest running or failed job, never a finished one', () => {
@@ -194,6 +231,11 @@ describe('sign-in text', () => {
     vms[0].agents.find(a => a.id === 'claude')!.lostAt = '2026-11-20T08:00:00Z';
     vms[0].agents.find(a => a.id === 't3')!.lostAt = '2026-11-20T07:00:00Z';
     expect(lostSignIns(vms).map(l => [l.vm.id, l.id.id])).toEqual([[vms[0].id, 'claude-code'], [vms[1].id, 'codex']]);
+  });
+
+  it('tells an agent the VM cannot report from one it has not reported yet', () => {
+    const agents = [{ id: 'claude', signedIn: true }, { id: 'codex', signedIn: false }, { id: 'opencode', signedIn: null }];
+    expect(['claude', 'codex', 'opencode', 'antigravity'].map(t => signInState(agents, t))).toEqual(['yes', 'no', 'unknown', 'unsaid']);
   });
 
   it('reads an agent\'s sign-in from the VM\'s report by its tool id', () => {

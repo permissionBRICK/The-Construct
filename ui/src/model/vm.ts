@@ -11,6 +11,15 @@ export function activeJob(state: State, vmId: string): Job | null {
   return null;
 }
 
+/** The newest job of the VM when it succeeded with warnings (optional steps that failed) and was not dismissed. */
+export function warnedJob(state: State, vmId: string): Job | null {
+  for (let i = state.jobs.length - 1; i >= 0; i--) {
+    const j = state.jobs[i];
+    if (j.vmId === vmId) return j.state === 'done' && j.warnings?.length ? j : null;
+  }
+  return null;
+}
+
 export function vmDot(vm: Vm, job: Job | null): Dot {
   if (job?.state === 'running') return 'busy';
   if (job?.state === 'failed') return 'bad';
@@ -25,6 +34,16 @@ const JOB_WORD: Record<Job['kind'], string> = {
   restore: 'Restoring',
   create: 'Creating',
 };
+
+const DONE_WORD: Record<Job['kind'], string> = {
+  reprovision: 'Reprovisioned',
+  reinstall: 'Reinstalled',
+  update: 'Updated',
+  restore: 'Restored',
+  create: 'Created',
+};
+
+export const doneWord = (job: Job) => DONE_WORD[job.kind];
 
 export function jobWord(job: Job): string {
   if (job.state === 'failed') return job.repair?.state === 'working' ? 'Fixing' : 'Failed';

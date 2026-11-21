@@ -136,9 +136,11 @@ export interface Job {
   vmId: string;
   kind: JobKind;
   state: JobState;
+  /** What runs now in a few words ("Installing T3"); the bar's label. */
   step: string;
   stepIndex: number;
   stepCount: number;
+  /** The whole job, 0 to 100; it never goes back while the job runs. */
   pct: number;
   log: string[];
   error: string | null;
@@ -151,6 +153,8 @@ export interface Job {
   repair: Repair | null;
   /** A failed job without a running repair: "Let an agent fix it" starts one. */
   canRepair?: boolean;
+  /** A job that succeeded although optional steps failed: their titles. */
+  warnings?: string[];
   /** Asked for here and not yet answered by the engine: shown as working at once, nothing to stop yet. */
   pending?: boolean;
 }
@@ -307,7 +311,7 @@ export interface Upgrade {
   /** Step `close`: the programs that still have the old files open. */
   writers: string[];
   /** Step `convert`: each item the converter copies. */
-  items: { name: string; state: 'done' | 'running' | 'waiting' | 'skipped' | 'failed'; count: string; pct: number }[];
+  items: { id: string; name: string; state: 'done' | 'running' | 'waiting' | 'skipped' | 'failed'; count: string; pct: number }[];
   /** What the old install holds. */
   found: { vms: string[]; profiles: number; vault: boolean } | null;
   /** Step `convert`: shared hosts that still run the old Construct; their admin updates them from the host page. */

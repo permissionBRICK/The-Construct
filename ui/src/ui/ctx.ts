@@ -10,6 +10,8 @@ export interface Shell {
   openWindow(route: Route): void;
   /** Close the pop-out or the lone vault card (desktop shell); a no-op elsewhere. */
   close(): void;
+  /** The pop-out's or the lone card's content is this tall (CSS pixels): the desktop shell sizes its window to it. */
+  fit?(height: number): void;
 }
 
 export interface Ctx {

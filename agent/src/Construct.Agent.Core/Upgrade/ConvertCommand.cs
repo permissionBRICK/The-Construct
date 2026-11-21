@@ -47,7 +47,11 @@ public static class ConvertCommand
         if (from is { Length: > 0 }) upgrade.Bridge.Update(b => b with { From = Path.GetFullPath(from) });
         try
         {
-            var done = await upgrade.ConvertAsync(ct, item => output.WriteLine($"{item.State,-8} {item.Label}  {item.Message}")).ConfigureAwait(false);
+            var done = await upgrade.ConvertAsync(ct, item =>
+            {
+                // The dialog counts a group's waiting items; the console prints each item as it runs and ends.
+                if (item.State != "waiting") output.WriteLine($"{item.State,-8} {item.Label}  {item.Message}");
+            }).ConfigureAwait(false);
             foreach (var note in upgrade.Bridge.Read().Notes) output.WriteLine("note: " + note);
             output.WriteLine(done ? "Converted." : "Not finished: fix what failed and run it again.");
             return done ? 0 : 1;

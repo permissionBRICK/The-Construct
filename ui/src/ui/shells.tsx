@@ -1,12 +1,12 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
 import type { ComponentChildren } from 'preact';
-import { activeJob, vmDot } from '../model/vm';
+import { activeJob, vmDot, warnedJob } from '../model/vm';
 import { updateDue } from '../model/update';
 import { section, VM_PAGES, type Page, type Route } from '../model/route';
 import { Icon, type IconName } from './icons';
 import { Btn, Dot, Pip } from './kit';
 import { na, useApp } from './ctx';
-import { EverythingBlock, JobBlock, PowerBtn, ReinstallConfirm, SignInBlock, SignInCard, SignInCards, Tiles, VaultCard, VaultCards } from './blocks';
+import { EverythingBlock, JobBlock, PowerBtn, ReinstallConfirm, SignInBlock, SignInCard, SignInCards, Tiles, VaultCard, VaultCards, WarnedBlock } from './blocks';
 import { lostSignIns } from '../model/signin';
 import { PageView } from './pages';
 
@@ -42,6 +42,7 @@ export function Stack({ footer }: { footer: boolean }) {
   const [wipe, setWipe] = useState(false);
   if (!vm) return <div class="stack"><VaultCards /><SignInCards /><NoVm /></div>;
   const job = activeJob(s, vm.id);
+  const warned = job ? null : warnedJob(s, vm.id);
   const host = s.hosts.find(h => h.id === vm.hostId);
   return (
     <div class="stack">
@@ -54,6 +55,7 @@ export function Stack({ footer }: { footer: boolean }) {
         <Btn icon="term" onClick={() => be.open(vm.id, 'ssh')} disabled={na(s, 'open')}>SSH</Btn>
       </div>
       {job ? <JobBlock job={job} vm={vm} /> : wipe ? <ReinstallConfirm vm={vm} onCancel={() => setWipe(false)} /> : <Tiles vm={vm} onReinstall={() => setWipe(true)} />}
+      {warned && <WarnedBlock job={warned} />}
       {s.everything && (s.everything.running || s.everything.parts.some(p => p.state === 'failed')) && <EverythingBlock e={s.everything} />}
       {footer && (
         <nav class="sft">
@@ -75,10 +77,40 @@ function NoVm() {
   );
 }
 
+/** The pop-out and the lone card tell the desktop shell how tall their content is, as it changes; the shell sizes the
+    window to it instead of a fixed height (finding 7). A menu open below its button counts too. */
+function useFit() {
+  const { shell } = useApp();
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el || !shell.fit || typeof ResizeObserver === 'undefined') return;
+    let last = 0;
+    let ro: ResizeObserver | null = null;
+    const measure = () => {
+      const top = el.getBoundingClientRect().top;
+      let h = el.getBoundingClientRect().height;
+      for (const m of el.querySelectorAll('details[open] > .vml')) {
+        // An open menu is placed over the page, so the page's own size does not change with it: watched as well.
+        ro?.observe(m);
+        h = Math.max(h, m.getBoundingClientRect().bottom - top + 12);
+      }
+      h = Math.ceil(h);
+      if (h !== last) { last = h; shell.fit!(h); }
+    };
+    ro = new ResizeObserver(measure);
+    ro.observe(el);
+    el.addEventListener('toggle', measure, true);
+    measure();
+    return () => { ro?.disconnect(); el.removeEventListener('toggle', measure, true); };
+  }, [shell]);
+  return ref;
+}
+
 export function PopOut() {
   const { s } = useApp();
-  if (s.firstRun) return <div class="pop"><PageView /></div>;
-  return <div class="pop"><Stack footer /></div>;
+  const fit = useFit();
+  return <div class="pop" ref={fit}>{s.firstRun ? <PageView /> : <Stack footer />}</div>;
 }
 
 /** A card alone, popped from the tray while Construct is closed: the vault's, else a lost sign-in's (S36). The vault
@@ -96,8 +128,9 @@ export function Alone() {
     if (any) shown.current = true;
     else if (shown.current) shell.close();
   }, [any]);
+  const fit = useFit();
   return (
-    <div class="alone">
+    <div class="alone" ref={fit}>
       {r ? <VaultCard key={r.id} r={r} onDone={() => setGone(g => [...g, 'v:' + r.id])} />
         : lost ? <SignInCard key={lost.vm.id + '/' + lost.id.id} vm={lost.vm} agent={lost.id.id} onDone={() => setGone(g => [...g, 'n:' + lost.vm.id + '/' + lost.id.id])} />
         : s.signIn ? <SignInBlock si={s.signIn} /> : null}

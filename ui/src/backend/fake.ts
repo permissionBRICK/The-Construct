@@ -1,5 +1,5 @@
 import type { AgentId, Backend, CreateVmRequest, FirstRun, FirstRunRequest, Host, HostProbe, HostUser, Job, JobKind, Prefs, Profile, ProfileSave, SettingsPatch, SignInInput, State, Upgrade, Vm } from './types';
-import { NEXT_RELEASE, PAIR_WORDS, RECOVERY_CODE, REINSTALL_STEPS, REPROVISION_STEPS, SIGN_IN_BROWSER_TEXT, SIGN_IN_TEXT, sampleState } from './sample';
+import { NEXT_RELEASE, NIGHTLY_RELEASE, PAIR_WORDS, RECOVERY_CODE, REINSTALL_STEPS, REPROVISION_STEPS, SIGN_IN_BROWSER_TEXT, SIGN_IN_TEXT, sampleState } from './sample';
 import { activeJob, newer, vmUpdateTarget } from '../model/vm';
 import { AGENTS, agentSwitches, applies, applyPatch } from '../model/settings';
 import { updateParts } from '../model/update';
@@ -12,12 +12,12 @@ import { spanText } from './api/map';
    own, so a scene stays exactly as it is. */
 
 export type Scene =
-  | 'calm' | 'update' | 'changed' | 'lease' | 'enter' | 'job' | 'failed' | 'failed-reinstall' | 'repair' | 'updating' | 'restart'
+  | 'calm' | 'update' | 'update-nightly' | 'changed' | 'lease' | 'enter' | 'job' | 'failed' | 'failed-reinstall' | 'repair' | 'updating' | 'restart'
   | 'pairing' | 'pair-confirm' | 'revoked' | 'handout' | 'creating' | 'created' | 'sign-in' | 'sign-in-failed' | 'sign-in-browser' | 'sign-in-key' | 'signed-out' | 'signed-out-two'
   | 'upgrade-intro' | 'upgrade-code' | 'upgrade-close' | 'upgrade-convert' | 'upgrade-host' | 'upgrade-done' | 'upgrade-restart'
-  | 'first-run' | 'first-run-restart';
+  | 'first-run' | 'first-run-restart' | 'warned' | 'old-guest';
 
-export const SCENES: Scene[] = ['calm', 'update', 'changed', 'lease', 'enter', 'job', 'failed', 'failed-reinstall', 'repair', 'updating', 'restart', 'pairing', 'pair-confirm', 'revoked', 'handout', 'creating', 'created', 'sign-in', 'sign-in-failed', 'sign-in-browser', 'sign-in-key', 'signed-out', 'signed-out-two', 'upgrade-intro', 'upgrade-code', 'upgrade-close', 'upgrade-convert', 'upgrade-host', 'upgrade-done', 'upgrade-restart', 'first-run', 'first-run-restart'];
+export const SCENES: Scene[] = ['calm', 'update', 'update-nightly', 'changed', 'lease', 'enter', 'job', 'failed', 'failed-reinstall', 'repair', 'updating', 'restart', 'pairing', 'pair-confirm', 'revoked', 'handout', 'creating', 'created', 'sign-in', 'sign-in-failed', 'sign-in-browser', 'sign-in-key', 'signed-out', 'signed-out-two', 'upgrade-intro', 'upgrade-code', 'upgrade-close', 'upgrade-convert', 'upgrade-host', 'upgrade-done', 'upgrade-restart', 'first-run', 'first-run-restart', 'warned', 'old-guest'];
 
 /** Things the preview frame can make happen, beside the user's own actions. */
 export type Demo = 'lease' | 'enter' | 'release' | 'fail-next' | 'change';
@@ -91,6 +91,12 @@ export class FakeBackend implements Backend {
     switch (scene) {
       case 'calm': break;
       case 'update': d.release = NEXT_RELEASE; break;
+      // A nightly build's version carries its whole commit (finding 18).
+      case 'update-nightly': d.prefs.channel = 'nightly'; d.release = NIGHTLY_RELEASE; for (const h of d.hosts) h.channel = 'nightly'; break;
+      // A reprovision that succeeded although an optional step failed (finding 41).
+      case 'warned': d.jobs.push({ ...this.newJob('atlas', 'reprovision', REPROVISION_STEPS.length - 1, 100), state: 'done', warnings: ['Requesting project port forwards'] }); break;
+      // A guest from before the sign-in helper: it reports its agents but not their sign-in (finding 11).
+      case 'old-guest': for (const a of d.vms[0].agents) a.signedIn = null; break;
       case 'changed': this.vm(d, 'atlas').changeWaits = 'webshop'; break;
       case 'lease': d.vaultRequests.push({ id: 'r1', kind: 'lease', secret: 'forge-token', vmId: 'atlas', vmName: 'atlas', hostName: 'This PC', reason: 'Push the release', span: '2 h', ttlSeconds: 7200 }); break;
       case 'enter': d.vaultRequests.push({ id: 'r2', kind: 'enter', secret: 'payments-sandbox', vmId: 'atlas', vmName: 'atlas', hostName: 'This PC', reason: 'API key of the payments sandbox', span: '' }); break;
@@ -168,7 +174,7 @@ export class FakeBackend implements Backend {
       case 'upgrade-intro': d.upgrade = upgrade('engine'); break;
       case 'upgrade-code': d.upgrade = upgrade('recovery', { code: RECOVERY_CODE }); break;
       case 'upgrade-close': d.upgrade = upgrade('close', { writers: ['VS Code'] }); break;
-      case 'upgrade-convert': d.upgrade = upgrade('convert', { running: true, items: UPGRADE_ITEMS(3) }); break;
+      case 'upgrade-convert': d.upgrade = upgrade('convert', { running: true, items: UPGRADE_ITEMS(8) }); break;
       case 'upgrade-host': d.upgrade = upgrade('convert', { oldHosts: ['lab.example'] }); break;
       case 'upgrade-restart': d.upgrade = upgrade('engine', { restart: 'Windows has to restart to turn on Hyper-V.' }); break;
       case 'first-run': d.firstRun = firstRun(); break;
@@ -202,7 +208,7 @@ export class FakeBackend implements Backend {
   private failJob(j: Job) {
     j.state = 'failed';
     j.error = 'apt is locked by another process';
-    j.log.push(`fail ${j.step}: E: Could not get lock /var/lib/dpkg/lock-frontend`);
+    j.log.push(...APT_LOG, `fail ${j.step}: E: Could not get lock /var/lib/dpkg/lock-frontend`);
     // The hosts here start the repair agent by themselves (`repair.auto`); a host with it off offers the button.
     const auto = this.s.hosts.find(h => h.id === this.s.vms.find(v => v.id === j.vmId)?.hostId)?.repairAuto !== false;
     j.repair = auto ? newRepair() : null;
@@ -281,6 +287,7 @@ export class FakeBackend implements Backend {
     v.reprovisioned = 'just now';
     v.changeWaits = null;
     if (j.kind === 'update' && j.to) v.version = j.to;
+    if (j.kind !== 'restore') for (const ag of v.agents) ag.version = ag.latest;
     if (j.kind === 'create') { v.power = 'on'; const hv = d.hosts.find(h => h.id === v.hostId)?.vms.find(x => x.name === v.name); if (hv) hv.power = 'on'; }
     if (d.release && !updateParts(d).some(p => p.to)) d.release = null;
   }
@@ -435,9 +442,8 @@ export class FakeBackend implements Backend {
     if (a === 'restart' && when === 'now') this.restart(vmId);
   }
 
-  updateAgents(vmId: string) {
-    this.set(d => { for (const ag of this.vm(d, vmId).agents) ag.version = ag.latest; }, 'Agents updated');
-  }
+  /** As on the engine: a reprovision brings every coding agent to its newest version. */
+  updateAgents(vmId: string) { this.startJob(vmId, 'reprovision'); }
 
   /* --- signing in to the coding agents: the CLI's text, a code typed, signed in --- */
 
@@ -858,8 +864,8 @@ export class FakeBackend implements Backend {
     if (u.step === 'done') { this.set(d => { d.upgrade = null; }, 'Moved over'); return; }
     if (u.step === 'close') return to('convert');
     to('convert', { running: true, items: UPGRADE_ITEMS(0) });
-    const step = (i: number) => this.after(2, () => {
-      if (i >= 6) { this.set(d => { d.upgrade = null; }, 'Moved over'); return; }
+    const step = (i: number) => this.after(1, () => {
+      if (i > CONVERT.length) { this.set(d => { d.upgrade = null; }, 'Moved over'); return; }
       this.set(d => { d.upgrade!.items = UPGRADE_ITEMS(i); });
       step(i + 1);
     });
@@ -897,6 +903,15 @@ const REPAIR_SCRIPT = [
   'Two ways: wait until the updates finish (a few minutes), or stop them and run the step again now. Which do you want?',
 ];
 
+const APT_LOG = [
+  'Reading package lists...', 'Building dependency tree...', 'Reading state information...',
+  'Waiting for cache lock: Could not get lock /var/lib/dpkg/lock-frontend. It is held by process 2187 (unattended-upgr)',
+  'Waiting for cache lock: Could not get lock /var/lib/dpkg/lock-frontend. It is held by process 2187 (unattended-upgr)',
+  'Waiting for cache lock: Could not get lock /var/lib/dpkg/lock-frontend. It is held by process 2187 (unattended-upgr)',
+  'E: Could not get lock /var/lib/dpkg/lock-frontend - open (11: Resource temporarily unavailable)',
+  'E: Unable to acquire the dpkg frontend lock (/var/lib/dpkg/lock-frontend), is another process using it?',
+];
+
 const ROTATE = [{ secret: 'forge-token', last: '4 d' }, { secret: 'deploy-key', last: '9 d' }, { secret: 'staging-db', last: '12 d' }];
 
 function upgrade(step: Upgrade['step'], extra: Partial<Upgrade> = {}): Upgrade {
@@ -910,9 +925,17 @@ function firstRun(extra: Partial<FirstRun> = {}): FirstRun {
 
 const newRepair = (auto = true): NonNullable<Job['repair']> => ({ agent: 'Claude Code', state: 'working', messages: [{ from: 'agent', text: REPAIR_SCRIPT[0] }], t3Thread: false, outcome: null, at: '14:02', auto });
 
+/** The converter's items as the agent reports them: one per thing it copies, its id naming the group. */
+const CONVERT: [string, string][] = [
+  ['channel', 'Release channel'], ['host:lab', 'Host lab.example'],
+  ...['webshop', 'toolkit', 'flat-plan', 'docs-site'].map((p): [string, string] => ['profile:' + p, 'Profile ' + p]),
+  ...['forge-token', 'staging-db', 'deploy-key', 'npm-publish', 'mail-api'].map((x): [string, string] => ['secret:' + x, 'Secret ' + x]),
+  ['backup-key:pc-key.dpapi', 'Old backup key'], ['vm:atlas', 'VM atlas'], ['reprovision:atlas', 'VM atlas on the new version'],
+];
+
+/** The items with the first `progress` done and the next one running. */
 function UPGRADE_ITEMS(progress = 0) {
-  const names: [string, string][] = [['Channel', ''], ['Hosts', '2'], ['Projects', '4'], ['Key vault', '5'], ['Backup keys', '5'], ['VMs to the new engine', '4']];
-  return names.map(([name, count], i) => ({ name, count, state: (i < progress ? 'done' : i === progress ? 'running' : 'waiting') as 'done' | 'running' | 'waiting', pct: i === progress ? 60 : i < progress ? 100 : 0 }));
+  return CONVERT.map(([id, name], i) => ({ id, name, count: '', state: (i < progress ? 'done' : i === progress ? 'running' : 'waiting') as 'done' | 'running' | 'waiting', pct: 0 }));
 }
 
 function newVm(name: string, hostId: string, address: string): Vm {
