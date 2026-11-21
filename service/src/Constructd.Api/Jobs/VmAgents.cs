@@ -51,7 +51,12 @@ public sealed partial class VmAgents(IHostConfigStore config, ChangeFeed changes
     /// signed in and is signed out now, and is one of <paramref name="chosen"/> (tool ids; null: any), becomes a lost
     /// sign-in; one signed in again, or gone from the VM, clears its own.
     /// </summary>
-    public async Task SaveAsync(Vm vm, IReadOnlyList<VmAgentVersion> agents, DateTimeOffset at, CancellationToken ct, IReadOnlyCollection<string>? chosen = null)
+    /// <param name="busy">
+    /// A job works on the VM (create, reinstall, restore, provision): a rebuilt guest reports its agents signed out until
+    /// the restore brings them back, so a signed-out report changes nothing now and the first report after the job decides.
+    /// </param>
+    public async Task SaveAsync(Vm vm, IReadOnlyList<VmAgentVersion> agents, DateTimeOffset at, CancellationToken ct, IReadOnlyCollection<string>? chosen = null,
+        bool busy = false)
     {
         await _marking.WaitAsync(ct);
         try
@@ -62,10 +67,10 @@ public sealed partial class VmAgents(IHostConfigStore config, ChangeFeed changes
             foreach (var agent in agents)
             {
                 var was = before?.Agents.FirstOrDefault(a => a.Tool == agent.Tool)?.SignedIn;
-                var known = agent with { SignedIn = agent.SignedIn ?? was };
+                var known = agent with { SignedIn = busy && agent.SignedIn == false ? was : agent.SignedIn ?? was };
                 now.Add(known);
                 if (known.SignedIn == true) lost.RemoveAll(l => l.Tool == agent.Tool);
-                else if (known.SignedIn == false && was == true && (chosen is null || chosen.Contains(agent.Tool)) && lost.All(l => l.Tool != agent.Tool))
+                else if (!busy && known.SignedIn == false && was == true && (chosen is null || chosen.Contains(agent.Tool)) && lost.All(l => l.Tool != agent.Tool))
                     lost.Add(new(agent.Tool, at));
             }
 
