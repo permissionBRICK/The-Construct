@@ -279,7 +279,7 @@ export function Upgrade() {
       {problem}
       {u.restart
         ? <RestartLine text={u.restart} />
-        : <div class="wft">{u.adminPrompt && <span class="d"><Icon n="shield" />One admin prompt</span>}{next('Continue')}</div>}
+        : <div class="wft"><span />{next('Continue')}</div>}
     </div>
   );
   if (u.step === 'recovery' && u.code) {

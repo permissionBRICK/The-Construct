@@ -883,7 +883,7 @@ export class ApiBackend implements Backend {
     this.emit({
       upgrade: {
         step, running, error, code: step === 'recovery' ? this.upgradeCode : null, writers: step === 'close' ? v.oldWriters : [],
-        items: live ?? v.items.map(toUpgradeItem), found, adminPrompt: !!v.found?.localVms.length,
+        items: live ?? v.items.map(toUpgradeItem), found,
         oldHosts: step === 'convert' ? v.oldHosts : [], notes: step === 'done' ? v.notes : [], restart,
       },
     });

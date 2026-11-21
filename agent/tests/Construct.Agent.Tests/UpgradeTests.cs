@@ -111,6 +111,28 @@ public sealed class UpgradeTests
     }
 
     [Fact]
+    public async Task The_dialog_reads_the_old_config_repository_once_per_run_and_the_conversion_reads_it_afresh()
+    {
+        // The dialog asks for its view several times per step; on the FatPC (2026-11-21) every view ran some 60 git
+        // processes. The old files do not change while the agent holds the Companion's mutex.
+        await using var rig = await UpgradeRig.CreateAsync(SingleVm);
+        static string[] Profiles(JsonNode view) => view["found"]!["profiles"]!.AsArray().Select(n => n!.GetValue<string>()).ToArray();
+        Assert.Equal(["api", "web"], Profiles(await rig.Agent.GetAsync("api/upgrade")));
+
+        rig.Fixture.Write(Path.Combine("The-Construct", "config", "projects", "late.json"), """{"name":"late","repos":[]}""");
+        Assert.Equal(["api", "web"], Profiles(await rig.Agent.GetAsync("api/upgrade")));
+
+        await rig.EngineStepAsync();
+        await rig.SetupAsync();
+        Assert.Equal("converted", (await rig.ConvertAsync())["stage"]!.GetValue<string>());
+        var engine = rig.Agent.Host.Upgrade.Bridge.Read().LocalEngine!;
+        await rig.Agent.GetAsync($"api/engines/{engine}/api/v1/profiles/late");
+
+        await rig.RestartAsync();
+        Assert.Equal(["api", "late", "web"], Profiles(await rig.Agent.GetAsync("api/upgrade")));
+    }
+
+    [Fact]
     public async Task Several_instances_with_a_remote_host_arrive_and_the_host_keeps_its_pin_and_sign_in()
     {
         using var remote = new EngineHost();

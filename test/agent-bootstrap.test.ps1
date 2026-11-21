@@ -186,6 +186,8 @@ Assert ($run.Calls -contains 'registry remove ConstructCompanion') 'the Companio
 Assert (-not ($run.Calls | Where-Object { $_ -like 'start *ConstructCompanion.exe*' })) 'the Companion is not started again after a success'
 Assert (-not (Test-Path (Join-Path $world 'local/The-Construct/The-Construct-rework'))) 'no install folder per ref'
 Assert ($run.Output -notmatch 'agent-token-value|companion-token') 'no token in the output'
+# The agent starts in the background, the way Windows starts it at sign-in; the installer opens its window.
+Assert ($run.Calls -contains 'rest Post http://127.0.0.1:5555/api/shell/open') "the agent's window is opened after a fresh install: $($run.Calls -join ' | ')"
 
 Assert ($run.Output -match 'VS Code is not installed') "no VS Code is no failure: $($run.Output)"
 

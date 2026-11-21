@@ -82,7 +82,8 @@ public class DefaultUpgradePlatform(string knownHostsFile) : IUpgradePlatform
     {
         var info = new ProcessStartInfo(SshExecutable)
         {
-            RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false,
+            // CreateNoWindow: without it every ssh call of the windowless agent opens a console window on Windows.
+            RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false, CreateNoWindow = true,
         };
         foreach (var arg in new[]
                  {

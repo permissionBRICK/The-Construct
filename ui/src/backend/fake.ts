@@ -898,7 +898,7 @@ const REPAIR_SCRIPT = [
 const ROTATE = [{ secret: 'forge-token', last: '4 d' }, { secret: 'deploy-key', last: '9 d' }, { secret: 'staging-db', last: '12 d' }];
 
 function upgrade(step: Upgrade['step'], extra: Partial<Upgrade> = {}): Upgrade {
-  return { step, running: false, error: null, code: null, writers: [], items: [], found: { vms: ['atlas', 'harbor', 'mesa', 'quarry'], profiles: 4, vault: true }, adminPrompt: true,
+  return { step, running: false, error: null, code: null, writers: [], items: [], found: { vms: ['atlas', 'harbor', 'mesa', 'quarry'], profiles: 4, vault: true },
     oldHosts: [], notes: [], restart: null, ...extra };
 }
 

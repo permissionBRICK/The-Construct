@@ -121,11 +121,32 @@ public sealed class UpgradeService
     private UpgradeFound Found(LegacyState legacy)
     {
         var instances = legacy.Instances();
-        var repo = new LegacyConfigRepo(legacy.ConfigRepository);
+        var repo = RepoSummary(legacy.ConfigRepository, instances.Select(i => i.ConfigBranch).ToArray());
         return new UpgradeFound(legacy.InstallFolder, legacy.OtherInstallFolders, instances.Where(i => i.Local).Select(i => i.Name).ToArray(),
             instances.Where(i => !i.Local).Select(i => i.Name).ToArray(), legacy.Hosts().Select(h => h.Url).ToArray(),
-            repo.Exists ? repo.Profiles().Keys.ToArray() : [], repo.Exists ? repo.UnmergedChanges(instances.Select(i => i.ConfigBranch)).Count : 0, legacy.HasVault,
-            legacy.BackupKeyFiles().Count, repo.Exists && repo.UpstreamFiles().Count > 0, legacy.Channel());
+            repo.Profiles, repo.Unmerged, legacy.HasVault, legacy.BackupKeyFiles().Count, repo.Upstream, legacy.Channel());
+    }
+
+    private sealed record ConfigRepoSummary(string Key, IReadOnlyList<string> Profiles, int Unmerged, bool Upstream);
+
+    private ConfigRepoSummary? _repoSummary;
+
+    /// <summary>
+    /// What the old config repository holds, read with git once per agent run and folder: the dialog asks for
+    /// its view several times per step (the answer, the started and ended events, the reload after), and nothing
+    /// writes the old repository while this agent holds the Companion's mutex. The converter reads it afresh.
+    /// </summary>
+    private ConfigRepoSummary RepoSummary(string folder, IReadOnlyList<string> branches)
+    {
+        var key = folder + "\n" + string.Join("\n", branches);
+        lock (_gate)
+            if (_repoSummary is { } cached && cached.Key == key) return cached;
+        var repo = new LegacyConfigRepo(folder);
+        var summary = repo.Exists
+            ? new ConfigRepoSummary(key, repo.Profiles().Keys.ToArray(), repo.UnmergedChanges(branches).Count, repo.UpstreamFiles().Count > 0)
+            : new ConfigRepoSummary(key, [], 0, false);
+        lock (_gate) _repoSummary = summary;
+        return summary;
     }
 
     // ---- step 1: the engine ----
