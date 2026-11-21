@@ -311,7 +311,7 @@ export interface Upgrade {
   /** Step `close`: the programs that still have the old files open. */
   writers: string[];
   /** Step `convert`: each item the converter copies. */
-  items: { name: string; state: 'done' | 'running' | 'waiting' | 'skipped' | 'failed'; count: string; pct: number }[];
+  items: { id: string; name: string; state: 'done' | 'running' | 'waiting' | 'skipped' | 'failed'; count: string; pct: number }[];
   /** What the old install holds. */
   found: { vms: string[]; profiles: number; vault: boolean } | null;
   /** Step `convert`: shared hosts that still run the old Construct; their admin updates them from the host page. */

@@ -168,7 +168,7 @@ export class FakeBackend implements Backend {
       case 'upgrade-intro': d.upgrade = upgrade('engine'); break;
       case 'upgrade-code': d.upgrade = upgrade('recovery', { code: RECOVERY_CODE }); break;
       case 'upgrade-close': d.upgrade = upgrade('close', { writers: ['VS Code'] }); break;
-      case 'upgrade-convert': d.upgrade = upgrade('convert', { running: true, items: UPGRADE_ITEMS(3) }); break;
+      case 'upgrade-convert': d.upgrade = upgrade('convert', { running: true, items: UPGRADE_ITEMS(8) }); break;
       case 'upgrade-host': d.upgrade = upgrade('convert', { oldHosts: ['lab.example'] }); break;
       case 'upgrade-restart': d.upgrade = upgrade('engine', { restart: 'Windows has to restart to turn on Hyper-V.' }); break;
       case 'first-run': d.firstRun = firstRun(); break;
@@ -858,8 +858,8 @@ export class FakeBackend implements Backend {
     if (u.step === 'done') { this.set(d => { d.upgrade = null; }, 'Moved over'); return; }
     if (u.step === 'close') return to('convert');
     to('convert', { running: true, items: UPGRADE_ITEMS(0) });
-    const step = (i: number) => this.after(2, () => {
-      if (i >= 6) { this.set(d => { d.upgrade = null; }, 'Moved over'); return; }
+    const step = (i: number) => this.after(1, () => {
+      if (i > CONVERT.length) { this.set(d => { d.upgrade = null; }, 'Moved over'); return; }
       this.set(d => { d.upgrade!.items = UPGRADE_ITEMS(i); });
       step(i + 1);
     });
@@ -910,9 +910,17 @@ function firstRun(extra: Partial<FirstRun> = {}): FirstRun {
 
 const newRepair = (auto = true): NonNullable<Job['repair']> => ({ agent: 'Claude Code', state: 'working', messages: [{ from: 'agent', text: REPAIR_SCRIPT[0] }], t3Thread: false, outcome: null, at: '14:02', auto });
 
+/** The converter's items as the agent reports them: one per thing it copies, its id naming the group. */
+const CONVERT: [string, string][] = [
+  ['channel', 'Release channel'], ['host:lab', 'Host lab.example'],
+  ...['webshop', 'toolkit', 'flat-plan', 'docs-site'].map((p): [string, string] => ['profile:' + p, 'Profile ' + p]),
+  ...['forge-token', 'staging-db', 'deploy-key', 'npm-publish', 'mail-api'].map((x): [string, string] => ['secret:' + x, 'Secret ' + x]),
+  ['backup-key:pc-key.dpapi', 'Old backup key'], ['vm:atlas', 'VM atlas'], ['reprovision:atlas', 'VM atlas on the new version'],
+];
+
+/** The items with the first `progress` done and the next one running. */
 function UPGRADE_ITEMS(progress = 0) {
-  const names: [string, string][] = [['Channel', ''], ['Hosts', '2'], ['Projects', '4'], ['Key vault', '5'], ['Backup keys', '5'], ['VMs to the new engine', '4']];
-  return names.map(([name, count], i) => ({ name, count, state: (i < progress ? 'done' : i === progress ? 'running' : 'waiting') as 'done' | 'running' | 'waiting', pct: i === progress ? 60 : i < progress ? 100 : 0 }));
+  return CONVERT.map(([id, name], i) => ({ id, name, count: '', state: (i < progress ? 'done' : i === progress ? 'running' : 'waiting') as 'done' | 'running' | 'waiting', pct: 0 }));
 }
 
 function newVm(name: string, hostId: string, address: string): Vm {

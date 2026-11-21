@@ -523,7 +523,7 @@ export function upgradeStep(v: UpgradeView, codeShown: boolean): Upgrade['step']
 
 export function toUpgradeItem(i: A['schemas']['UpgradeItem']): Upgrade['items'][number] {
   const state = i.state === 'done' || i.state === 'running' || i.state === 'skipped' || i.state === 'failed' ? i.state : 'waiting';
-  return { name: i.label, state, count: i.message ?? '', pct: 0 };
+  return { id: i.id, name: i.label, state, count: i.message ?? '', pct: 0 };
 }
 
 /* --- the key vault --- */
