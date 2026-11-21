@@ -11,8 +11,9 @@ namespace Construct.Agent.Upgrade;
 /// new stack, writing only to the engines, the store and the agent's own files (<c>bridge.json</c>,
 /// <c>device.json</c>, <c>legacy-upstream.json</c>). It changes nothing of the old files. It can be run
 /// again at any point: an item listed as done in <c>bridge.json</c>, or already present where it goes, is
-/// left alone. Its last step switches the local VMs over to the engine (the adopt job); then
-/// <c>{stage: converted}</c> is written, and only after that the old backup key comes off the VMs.
+/// left alone. Its last steps switch the local VMs over to the engine (the adopt job) and reprovision each adopted
+/// VM with the engine's guest payload, so the move leaves it on the new version; then <c>{stage: converted}</c> is
+/// written, and only after that the old backup key comes off the VMs.
 /// </summary>
 public sealed class LegacyConverter(DeviceAgent agent, IDeviceEngines engines, DeviceSettings settings, BridgeFile bridge,
     IUpgradePlatform platform, string dataDirectory, Action<UpgradeItem> progress)
@@ -24,6 +25,9 @@ public sealed class LegacyConverter(DeviceAgent agent, IDeviceEngines engines, D
 
     /// <summary>How long one adoption job may take.</summary>
     public TimeSpan AdoptTimeout { get; init; } = TimeSpan.FromMinutes(15);
+
+    /// <summary>How long the reprovision of one adopted VM may take.</summary>
+    public TimeSpan ReprovisionTimeout { get; init; } = TimeSpan.FromMinutes(60);
 
     private readonly List<UpgradeItem> _items = [];
     private HashSet<string> _done = [];
@@ -46,6 +50,7 @@ public sealed class LegacyConverter(DeviceAgent agent, IDeviceEngines engines, D
         var legacyKeys = await BackupKeysAsync(legacy, ct).ConfigureAwait(false);
         await RecipientsAsync(legacy, instances, start.LocalEngine, ct).ConfigureAwait(false);
         await LocalVmsAsync(legacy, instances, start.LocalEngine, ct).ConfigureAwait(false);
+        await ReprovisionAsync(instances, start.LocalEngine, ct).ConfigureAwait(false);
 
         var complete = _items.All(i => i.State is not "failed");
         if (complete && bridge.Read().Stage != BridgeState.Converted)
@@ -68,7 +73,7 @@ public sealed class LegacyConverter(DeviceAgent agent, IDeviceEngines engines, D
 
     // ---- one item ----
 
-    private async Task ItemAsync(string id, string label, Func<Task<(string State, string? Message)>> work, bool remember = true)
+    private async Task ItemAsync(string id, string label, Func<Task<(string State, string? Message)>> work, bool remember = true, string? running = null)
     {
         if (_done.Contains(id))
         {
@@ -76,7 +81,7 @@ public sealed class LegacyConverter(DeviceAgent agent, IDeviceEngines engines, D
             return;
         }
 
-        Report(new UpgradeItem(id, label, "running"));
+        Report(new UpgradeItem(id, label, "running", running));
         if (BeforeItem is not null) await BeforeItem(id).ConfigureAwait(false);
         UpgradeItem item;
         try
@@ -391,8 +396,9 @@ public sealed class LegacyConverter(DeviceAgent agent, IDeviceEngines engines, D
                     }
                     catch (AgentFailure failure) when (!instance.Local && failure.Status == 404)
                     {
-                        // The host runs no VM of this user under that name: never over SSH around its refusal.
-                        return ("skipped", "The host does not list this VM as yours; its backup recipients are left alone.");
+                        // The host runs no VM of this user under that name, or runs the old stack without the route:
+                        // never over SSH around its refusal.
+                        return ("skipped", await NotHereAsync(engine, ct).ConfigureAwait(false));
                     }
                     catch (AgentFailure)
                     {
@@ -436,7 +442,7 @@ public sealed class LegacyConverter(DeviceAgent agent, IDeviceEngines engines, D
                         }
                         catch (AgentFailure failure) when (!instance.Local && failure.Status == 404)
                         {
-                            return ("skipped", "The host does not list this VM as yours; its backup recipients are left alone.");
+                            return ("skipped", await NotHereAsync(engine, ct).ConfigureAwait(false));
                         }
                         catch (AgentFailure)
                         {
@@ -450,6 +456,12 @@ public sealed class LegacyConverter(DeviceAgent agent, IDeviceEngines engines, D
             }
         }
     }
+
+    /// <summary>Why a shared host answered 404 for a VM's backup recipients: it runs the old Construct, or it does not list the VM as the user's.</summary>
+    private async Task<string> NotHereAsync(string engine, CancellationToken ct) =>
+        await agent.RunsOldStackAsync(engine, ct).ConfigureAwait(false) == true
+            ? "The host runs the old Construct; this VM's backup keys stay as they are until its admin updates it."
+            : "The host does not list this VM as yours; its backup recipients are left alone.";
 
     /// <summary>The engine that runs <paramref name="instance"/> at this device: this PC's for a local VM, its host's for a remote one.</summary>
     private string? EngineOf(LegacyInstance instance, string? localEngine) =>
@@ -485,7 +497,7 @@ public sealed class LegacyConverter(DeviceAgent agent, IDeviceEngines engines, D
                 }
 
                 var job = started?["jobId"]?.GetValue<string>() ?? throw new AgentFailure(502, "adopt-failed", "The engine started no adoption job.");
-                var state = await WaitForJobAsync(localEngine, job, ct).ConfigureAwait(false);
+                var (state, _) = await WaitForJobAsync(localEngine, job, AdoptTimeout, TimeSpan.FromMilliseconds(500), ct).ConfigureAwait(false);
                 if (instance.Settings?["micPassthrough"] is JsonValue mic && mic.TryGetValue<bool>(out var on) && on)
                     settings.Update(s => s.Mic.Contains($"{localEngine}/{instance.Name}") ? s : s with { Mic = [.. s.Mic, $"{localEngine}/{instance.Name}"] });
                 return state == "succeeded" ? ("done", "Switched over to the engine; it kept running.") : ("failed", $"The adoption job ended {state}; see the job's log, then retry.");
@@ -493,15 +505,48 @@ public sealed class LegacyConverter(DeviceAgent agent, IDeviceEngines engines, D
         }
     }
 
-    private async Task<string> WaitForJobAsync(string engine, string job, CancellationToken ct)
+    // ---- last: the adopted VMs on the new version (owner, 2026-11-21: one click) ----
+
+    /// <summary>
+    /// Each VM adopted here is reprovisioned with the engine's guest payload, so Move over leaves it on the new version:
+    /// it keeps running and its services restart once; the Move over click is the confirmation. The job goes through
+    /// the agent's job route, which adds this device's clone credentials. A failure is this row's alone: Move over
+    /// again retries it, as Reprovision on the VM's page would.
+    /// </summary>
+    private async Task ReprovisionAsync(IReadOnlyList<LegacyInstance> instances, string? localEngine, CancellationToken ct)
     {
-        var until = DateTimeOffset.UtcNow + AdoptTimeout;
+        if (localEngine is null) return;
+        foreach (var instance in instances.Where(i => i.Local && _done.Contains("vm:" + i.Name)))
+        {
+            await ItemAsync("reprovision:" + instance.Name, $"VM {instance.Name} on the new version", async () =>
+            {
+                var answer = await agent.StartVmJobAsync(localEngine, instance.Name,
+                    new JsonObject { ["kind"] = "provision", ["requestId"] = Guid.NewGuid().ToString("D") }, ct).ConfigureAwait(false);
+                var body = Parse(answer.Body);
+                if (answer.Status is < 200 or >= 300)
+                    return ("failed", "The engine did not start the reprovision: " + (body?["title"]?.GetValue<string>() ?? $"it answered {answer.Status}") + ".");
+                var job = body?["jobId"]?.GetValue<string>() ?? throw new AgentFailure(502, "provision-failed", "The engine started no reprovision job.");
+                var (state, error) = await WaitForJobAsync(localEngine, job, ReprovisionTimeout, TimeSpan.FromSeconds(2), ct).ConfigureAwait(false);
+                return state == "succeeded"
+                    ? ("done", "Reprovisioned with the new version.")
+                    : ("failed", $"The reprovision ended {state}{(error is { Length: > 0 } ? ": " + error : "")}. Move over again to retry, or Reprovision from the VM's page.");
+            }, running: "Reprovisioning with the new version; the VM keeps running.").ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>Polls a job until it ends or <paramref name="limit"/> passes, at most every <paramref name="poll"/>; its end state and error.</summary>
+    private async Task<(string State, string? Error)> WaitForJobAsync(string engine, string job, TimeSpan limit, TimeSpan poll, CancellationToken ct)
+    {
+        var until = DateTimeOffset.UtcNow + limit;
+        var wait = TimeSpan.FromMilliseconds(Math.Min(250, poll.TotalMilliseconds));
         while (true)
         {
-            var state = (await engines.GetAsync(engine, "jobs/" + job, ct).ConfigureAwait(false))?["state"]?.GetValue<string>() ?? "unknown";
-            if (state is not ("queued" or "running")) return state;
-            if (DateTimeOffset.UtcNow > until) return "still running";
-            await Task.Delay(TimeSpan.FromMilliseconds(500), ct).ConfigureAwait(false);
+            var read = await engines.GetAsync(engine, "jobs/" + job, ct).ConfigureAwait(false);
+            var state = read?["state"]?.GetValue<string>() ?? "unknown";
+            if (state is not ("queued" or "running")) return (state, read?["error"] is JsonValue e && e.TryGetValue<string>(out var text) ? text : null);
+            if (DateTimeOffset.UtcNow > until) return ("still running", null);
+            await Task.Delay(wait, ct).ConfigureAwait(false);
+            wait = TimeSpan.FromMilliseconds(Math.Min(wait.TotalMilliseconds * 2, poll.TotalMilliseconds));
         }
     }
 }

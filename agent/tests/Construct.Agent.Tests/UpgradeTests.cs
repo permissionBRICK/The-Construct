@@ -111,6 +111,36 @@ public sealed class UpgradeTests
     }
 
     [Fact]
+    public async Task Move_over_ends_by_reprovisioning_the_adopted_VM_and_a_failed_reprovision_is_retried_alone()
+    {
+        // One click (owner, 2026-11-21): the move leaves the VM on the new guest payload, its last row.
+        await using var rig = await UpgradeRig.CreateAsync(SingleVm);
+        await rig.EngineStepAsync();
+        await rig.SetupAsync();
+        rig.Guest.FailProvisions = 1;
+
+        var first = await rig.ConvertAsync();
+        var row = first["items"]!.AsArray().Single(i => i!["id"]!.GetValue<string>() == "reprovision:agent-vm")!;
+        Assert.True(row["state"]!.GetValue<string>() == "failed", row.ToJsonString());
+        Assert.NotEqual("converted", first["stage"]!.GetValue<string>());
+        // Only that row failed; the adoption before it is done.
+        Assert.Equal(["reprovision:agent-vm"], first["items"]!.AsArray().Where(i => i!["state"]!.GetValue<string>() == "failed").Select(i => i!["id"]!.GetValue<string>()));
+        Assert.Equal(1, rig.Guest.Provisions);
+
+        var second = await rig.ConvertAsync();
+        row = second["items"]!.AsArray().Single(i => i!["id"]!.GetValue<string>() == "reprovision:agent-vm")!;
+        Assert.True(row["state"]!.GetValue<string>() == "done", row.ToJsonString());
+        Assert.Equal("converted", second["stage"]!.GetValue<string>());
+        Assert.Equal(2, rig.Guest.Provisions);
+        var jobs = await rig.Local.Services.GetRequiredService<IJobQueryStore>().ListAsync(CancellationToken.None);
+        Assert.Equal(2, jobs.Count(j => j.Kind == "provision" && j.VmName == "agent-vm"));
+
+        // A third run starts no job.
+        await rig.ConvertAsync();
+        Assert.Equal(2, rig.Guest.Provisions);
+    }
+
+    [Fact]
     public async Task The_dialog_reads_the_old_config_repository_once_per_run_and_the_conversion_reads_it_afresh()
     {
         // The dialog asks for its view several times per step; on the FatPC (2026-11-21) every view ran some 60 git
@@ -450,6 +480,10 @@ public sealed class UpgradeTests
         await rig.SetupAsync();
         var view = await rig.ConvertAsync();
         Assert.Equal(["127.0.0.1"], view["oldHosts"]!.AsArray().Select(n => n!.GetValue<string>()));
+        // Its VM's backup keys are left alone because the host runs the old Construct, not because it disowns the VM.
+        var far = view["items"]!.AsArray().Single(i => i!["id"]!.GetValue<string>() == "recipient:far")!;
+        Assert.Equal("skipped", far["state"]!.GetValue<string>());
+        Assert.Contains("runs the old Construct", far["message"]!.GetValue<string>(), StringComparison.Ordinal);
         var added = (await rig.Agent.GetAsync("api/state"))["engines"]!.AsArray().Single(e => e!["url"]!.GetValue<string>() == remote.Url)!;
         Assert.False(added["enrolled"]!.GetValue<bool>());
         Assert.True(added["signedIn"]!.GetValue<bool>());
@@ -463,7 +497,13 @@ public sealed class UpgradeTests
         {
             app.Use(call => context =>
             {
-                if (context.Request.Path.StartsWithSegments("/api/v1/engine")) { context.Response.StatusCode = 404; return Task.CompletedTask; }
+                // The old stack has no /engine and no /device/backup-key (checked against a real one, 2026-11-21).
+                if (context.Request.Path.StartsWithSegments("/api/v1/engine") || context.Request.Path.StartsWithSegments("/api/v1/device/backup-key"))
+                {
+                    context.Response.StatusCode = 404;
+                    return Task.CompletedTask;
+                }
+
                 return call(context);
             });
             next(app);
@@ -521,7 +561,7 @@ internal sealed class UpgradeRig : IAsyncDisposable
         build(fixture);
         var guest = new AdoptableGuest();
         if (fixture.BackupFingerprint is { } old) guest.Recipients.Add(old); // the old client enrolled its PC key
-        var local = new EngineHost(services => services.AddSingleton<ISshRunner>(guest));
+        var local = new EngineHost(services => services.AddSingleton<ISshRunner>(guest)).WithSource();
         var driver = local.Services.GetRequiredService<FakeHypervisorDriver>();
         foreach (var vm in vms ?? ["agent-vm"])
         {
