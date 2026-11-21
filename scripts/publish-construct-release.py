@@ -61,6 +61,10 @@ def publish(output, channel='stable', notes_file=None):
     for key, runtime in (('agentWindows', 'win-x64'), ('agentLinux', 'linux-x64')):
         if key + 'Asset' in manifest:
             expected[key] = f'construct-agent-{commit[:7]}-{runtime}.zip'
+    # The Windows setup keeps one name in every release: GitHub's latest release serves it for stable, and the
+    # channel-nightly release carries the newest nightly one beside the channel manifest.
+    if 'setupWindowsAsset' in manifest:
+        expected['setupWindows'] = 'ConstructSetup.exe'
     if manifest.get('releaseTag') != 'host-' + commit or any(manifest.get(key + 'Asset') != name for key, name in expected.items()):
         raise ValueError('Invalid release asset identity')
     if 'companionReleaseTag' in manifest and not re.fullmatch(r'companion-[0-9a-f]{40}', str(manifest['companionReleaseTag'])):
@@ -100,7 +104,7 @@ def publish(output, channel='stable', notes_file=None):
             current = json.loads(text).get('commit')
     promote = should_promote(commit, current, ancestor, branch_head)
     existing = api('/releases/tags/' + tag)
-    channel_manifest = output / 'manifest.json'
+    channel_files = [output / 'manifest.json'] + ([output / expected['setupWindows']] if 'setupWindows' in expected else [])
     if existing and not existing['draft']:
         # Retries never overwrite already-published bits for a commit.
         names = {asset['name'] for asset in existing['assets']}
@@ -108,9 +112,11 @@ def publish(output, channel='stable', notes_file=None):
             raise ValueError('Published release is incomplete; cannot rewrite an immutable release')
         if channel == 'nightly':
             # The channel must point at the hashes that were published, not at this rebuild's.
-            (output / 'published').mkdir(exist_ok=True)
-            channel_manifest = output / 'published' / 'manifest.json'
-            gh('download', tag, '-p', 'manifest.json', '-D', str(output / 'published'), '--clobber')
+            published = output / 'published'
+            published.mkdir(exist_ok=True)
+            channel_files = [published / p.name for p in channel_files]
+            for p in channel_files:
+                gh('download', tag, '-p', p.name, '-D', str(published), '--clobber')
     else:
         if not existing:
             if channel == 'stable':
@@ -128,8 +134,8 @@ def publish(output, channel='stable', notes_file=None):
     elif promote:
         if not channel_release:
             gh('create', CHANNEL_TAG, '--prerelease', '--latest=false', '--target', commit, '--title', 'Nightly channel',
-               '--notes', 'manifest.json here is the newest nightly build. See docs/release-flow.md.')
-        gh('upload', CHANNEL_TAG, '--clobber', str(channel_manifest))
+               '--notes', 'manifest.json and ConstructSetup.exe here are the newest nightly build. See docs/release-flow.md.')
+        gh('upload', CHANNEL_TAG, '--clobber', *map(str, channel_files))
     print(f'Published {tag}; channel={channel}; current={promote}')
 
 

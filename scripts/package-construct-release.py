@@ -56,11 +56,19 @@ def package(root, output, commit, repository, channel='stable', version='1.0.0')
         manifest.update({key + 'Asset': agent.name, key + 'Sha256': agent_hash, key + 'SizeBytes': agent.stat().st_size})
         with (output / 'SHA256SUMS').open('a') as sums:
             sums.write(f'{agent_hash}  {agent.name}\n')
+    # The Windows setup (scripts/package-agent.py), under one fixed name so a link per channel stays valid.
+    setup = output / 'ConstructSetup.exe'
+    if setup.is_file():
+        with setup.open('rb') as stream:
+            setup_hash = hashlib.file_digest(stream, 'sha256').hexdigest()
+        manifest.update(setupWindowsAsset=setup.name, setupWindowsSha256=setup_hash, setupWindowsSizeBytes=setup.stat().st_size)
+        with (output / 'SHA256SUMS').open('a') as sums:
+            sums.write(f'{setup_hash}  {setup.name}\n')
     # The channel manifest (docs/release-flow.md): additive keys old clients ignore. The guest
     # payload a VM receives is the source archive, so its hash identifies the guest payload.
     manifest.update(channel=channel, version=f'{version}+{commit}', guestPayloadHash=source_hash,
                     packages={key: {'asset': manifest[key + 'Asset'], 'sha256': manifest[key + 'Sha256']}
-                              for key in ('payload', 'frameworkDependent', 'linux', 'source', 'agentWindows', 'agentLinux')
+                              for key in ('payload', 'frameworkDependent', 'linux', 'source', 'agentWindows', 'agentLinux', 'setupWindows')
                               if key + 'Asset' in manifest})
     with (output / 'SHA256SUMS').open('a') as sums:
         sums.write(f'{source_hash}  {source.name}\n')
