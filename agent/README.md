@@ -29,6 +29,8 @@ the workspace share of a VM on this PC, start with the OS, and updating itself (
 | `src/construct-agent/` | The console host (Linux) |
 | `src/Construct.Agent.Windows/` | The Windows tray app: tray, WebView2 surfaces, single instance, DPAPI, toasts, WASAPI, `net use`, the Run value |
 | `install/` | Per-user install scripts: `install-construct-agent.sh` (Linux), `Install-ConstructAgent.ps1` (Windows) |
+| `src/Construct.Agent.Setup/` | The Windows setup's install logic: `install.ps1`'s steps (channel manifest, SHA-256, `versions/`, `install.json`, `device.json`, the Run value, the VS Code extension, the old Companion, the hand-over to a running agent) behind a platform seam the tests fake |
+| `src/Construct.Agent.Setup.Windows/` | `ConstructSetup.exe`: that logic as one trimmed self-contained file of about 12 MB, the channel built in (`-p:ConstructChannel=stable\|nightly`) |
 | `openapi/agent.v1.json` | The local API's contract, generated; a test fails on drift |
 | `tests/Construct.Agent.Tests/` | Agents in process against the real engine (fake mode) on a loopback HTTPS port |
 | `src/Construct.Companion.Core/`, `src/Construct.Companion.Windows/`, `tests/Construct.Companion.Fakes/` | The parts of the old Companion the agent builds on, moved here with their namespaces; only what the agent uses is left |
@@ -51,13 +53,20 @@ dotnet run --project agent/src/construct-agent -- open      # starts it if neede
 dotnet run --project agent/src/construct-agent -- repair    # report and restart, no engine needed
 dotnet run --project agent/src/construct-agent -- autostart on|off   # the systemd user unit
 dotnet run --project agent/src/construct-agent -- convert --from-legacy [--from DIR]   # the converter (Windows: construct-agent.exe convert ...)
-python3 scripts/package-agent.py --output DIR --commit SHA --version X.Y.Z   # both packages
+python3 scripts/package-agent.py --output DIR --commit SHA --version X.Y.Z [--channel nightly]   # both packages and ConstructSetup.exe
+dotnet publish agent/src/Construct.Agent.Setup.Windows -c Release -p:ConstructChannel=nightly -o DIR   # ConstructSetup.exe alone
 ```
 
 On Windows the app is `construct-agent.exe` (`agent/src/Construct.Agent.Windows`): no argument opens
 the window, `--background` starts in the tray only (the Run value uses it), a `construct://` link (a
 notification's click) or a second start opens the window of the running one, `repair` and `version`
 print to the console that started them. It builds on Linux with Windows targeting.
+
+`ConstructSetup.exe` is the download that installs it: for the user who starts it, without
+elevation, from the channel built into it (`--channel` overrides it), exactly as `install.ps1` does,
+then it starts the agent, opens its window and ends. Started while an agent runs, it hands over:
+the agent opens its window and updates itself. The administrator prompt comes later, from the
+agent's own engine step, and only for an engine on this PC.
 
 `--data-dir DIR` (or `CONSTRUCT_AGENT_HOME`) moves the agent's directory, by default
 `$XDG_DATA_HOME/construct-agent` or `~/.local/share/construct-agent`. `--ui DIR` (or
