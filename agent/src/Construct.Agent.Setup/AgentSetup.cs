@@ -273,6 +273,11 @@ public sealed class AgentSetup(ISetupPlatform platform, HttpClient web, HttpClie
         var device = Path.Combine(platform.AgentHome, "device.json");
         if (!File.Exists(device)) WriteJson(device, json => json.WriteString("channel", channel));
 
+        // A move whose old install runs a VM on this PC installs the engine here: its package comes now, in this console,
+        // so the window's first step only installs it (the agent's engine step reuses a file with the manifest's hash).
+        if (OldInstallRunsVmHere() && SetupChannel.EnginePackage(manifest, manifestUrl, channel, Repository) is { } engine)
+            await PrefetchEngineAsync(engine, ct).ConfigureAwait(false);
+
         var exe = Path.Combine(target, AgentExecutable);
         platform.SetRunValue(AgentRunValue, $"\"{exe}\" --background");
         // Started the way a user starts it, which opens its window (any agent version), and hands that over to an agent
@@ -281,15 +286,66 @@ public sealed class AgentSetup(ISetupPlatform platform, HttpClient web, HttpClie
         return package.Version;
     }
 
+    /// <summary>Where the agent's engine step looks for the engine package before it downloads one.</summary>
+    public const string EnginePackageFile = "engine-package.zip";
+
+    /// <summary>
+    /// The old client ran a VM on this PC: its registry names a <c>hyperv-local</c> instance, or it has no registry and an
+    /// install folder (the single default VM of older installs). Then the move installs the engine here.
+    /// </summary>
+    public bool OldInstallRunsVmHere()
+    {
+        var root = Path.Combine(platform.LocalAppData, "The-Construct");
+        if (ReadJson(Path.Combine(root, "instances.json")) is { } registry)
+        {
+            if (!registry.TryGetProperty("instances", out var instances) || instances.ValueKind != JsonValueKind.Object) return false;
+            return instances.EnumerateObject().Any(i => i.Value.ValueKind == JsonValueKind.Object && Text(i.Value, "backend") == "hyperv-local");
+        }
+
+        try
+        {
+            return Directory.Exists(root) && Directory.EnumerateDirectories(root).SelectMany(Directory.EnumerateDirectories)
+                .Any(folder => File.Exists(Path.Combine(folder, ".construct-settings.json")));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return false; }
+    }
+
+    /// <summary>The engine package downloaded and checked now; a failure only means the engine step downloads it later.</summary>
+    private async Task PrefetchEngineAsync(SetupPackage engine, CancellationToken ct)
+    {
+        var path = Path.Combine(platform.AgentHome, EnginePackageFile);
+        if (File.Exists(path) && await HashOfAsync(path, ct).ConfigureAwait(false) == engine.Sha256) return;
+        var partial = path + ".partial";
+        output.WriteLine("==> Downloading the engine for this PC ...");
+        try
+        {
+            File.Delete(partial);
+            await DownloadAsync(engine, partial, ct, "engine").ConfigureAwait(false);
+            File.Move(partial, path, overwrite: true);
+        }
+        catch (Exception ex) when (ex is SetupFailure or IOException or UnauthorizedAccessException)
+        {
+            try { File.Delete(partial); }
+            catch (Exception cleanup) when (cleanup is IOException or UnauthorizedAccessException) { /* left for the next run */ }
+            output.WriteLine("    The engine is downloaded when it is installed instead (" + ex.Message.TrimEnd('.') + ").");
+        }
+    }
+
+    private static async Task<string> HashOfAsync(string path, CancellationToken ct)
+    {
+        await using var file = File.OpenRead(path);
+        return Convert.ToHexStringLower(await SHA256.HashDataAsync(file, ct).ConfigureAwait(false));
+    }
+
     /// <summary>Downloads the package and compares its SHA-256 with the manifest's.</summary>
-    private async Task DownloadAsync(SetupPackage package, string path, CancellationToken ct)
+    private async Task DownloadAsync(SetupPackage package, string path, CancellationToken ct, string what = "agent")
     {
         string actual;
         try
         {
             using var limit = Limit(ct, DownloadLimit);
             using var response = await web.GetAsync(package.Url, HttpCompletionOption.ResponseHeadersRead, limit.Token).ConfigureAwait(false);
-            if (!response.IsSuccessStatusCode) throw new SetupFailure($"The agent download answered {(int)response.StatusCode}.");
+            if (!response.IsSuccessStatusCode) throw new SetupFailure($"The {what} download answered {(int)response.StatusCode}.");
             var total = response.Content.Headers.ContentLength;
             await using var source = await response.Content.ReadAsStreamAsync(limit.Token).ConfigureAwait(false);
             await using var file = new FileStream(path, FileMode.CreateNew, FileAccess.Write);
@@ -309,10 +365,10 @@ public sealed class AgentSetup(ISetupPlatform platform, HttpClient web, HttpClie
         }
         catch (Exception ex) when (!ct.IsCancellationRequested && ex is HttpRequestException or OperationCanceledException or IOException)
         {
-            throw new SetupFailure($"The agent package could not be downloaded ({Reason(ex)}). Check the internet connection and try again.");
+            throw new SetupFailure($"The {what} package could not be downloaded ({Reason(ex)}). Check the internet connection and try again.");
         }
 
-        if (actual != package.Sha256) throw new SetupFailure("The agent package does not match the SHA-256 in the channel manifest.");
+        if (actual != package.Sha256) throw new SetupFailure($"The {what} package does not match the SHA-256 in the channel manifest.");
     }
 
     /// <summary>

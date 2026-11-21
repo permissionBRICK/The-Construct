@@ -327,21 +327,29 @@ public sealed class LocalEngineSetup : IDisposable
         var zip = Path.Combine(_options.DataDirectory, "engine-package.zip");
         try
         {
-            Report(0, "Downloading engine");
-            await using (var file = File.Create(zip))
+            // ConstructSetup.exe downloads it for a move (it knows the old install runs a VM here): reused when it is this one.
+            var have = false;
+            if (File.Exists(zip))
+                await using (var kept = File.OpenRead(zip))
+                    have = Convert.ToHexStringLower(await SHA256.HashDataAsync(kept, ct).ConfigureAwait(false)).Equals(sha, StringComparison.OrdinalIgnoreCase);
+            Report(have ? Downloaded : 0, "Downloading engine");
+            if (!have)
             {
-                using var response = await Http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
-                response.EnsureSuccessStatusCode();
-                var total = response.Content.Headers.ContentLength;
-                await using var body = await response.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
-                var buffer = new byte[81920];
-                long copied = 0;
-                int read;
-                while ((read = await body.ReadAsync(buffer, ct).ConfigureAwait(false)) > 0)
+                await using (var file = File.Create(zip))
                 {
-                    await file.WriteAsync(buffer.AsMemory(0, read), ct).ConfigureAwait(false);
-                    copied += read;
-                    if (total is > 0) Report((int)(Downloaded * Math.Min(copied, total.Value) / total.Value), "Downloading engine");
+                    using var response = await Http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
+                    response.EnsureSuccessStatusCode();
+                    var total = response.Content.Headers.ContentLength;
+                    await using var body = await response.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
+                    var buffer = new byte[81920];
+                    long copied = 0;
+                    int read;
+                    while ((read = await body.ReadAsync(buffer, ct).ConfigureAwait(false)) > 0)
+                    {
+                        await file.WriteAsync(buffer.AsMemory(0, read), ct).ConfigureAwait(false);
+                        copied += read;
+                        if (total is > 0) Report((int)(Downloaded * Math.Min(copied, total.Value) / total.Value), "Downloading engine");
+                    }
                 }
             }
 

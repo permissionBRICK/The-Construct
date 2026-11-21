@@ -21,12 +21,16 @@ public sealed class SetupTests : IDisposable
     private const string NightlyManifest = "https://github.com/owner/repo/releases/download/channel-nightly/manifest.json";
     private const string StableManifest = "https://github.com/owner/repo/releases/latest/download/manifest.json";
     private const string PackageUrl = "https://github.com/owner/repo/releases/download/" + Tag + "/" + Asset;
+    private const string EngineAsset = "construct-host-2222222-win-x64.zip";
+    private const string EngineUrl = "https://github.com/owner/repo/releases/download/" + Tag + "/" + EngineAsset;
     private const int AgentPort = 47001;
     private const int CompanionPort = 47002;
     private const int CompanionPid = 4242;
 
     private readonly string _root = Path.Combine(Path.GetTempPath(), "agent-test-setup-" + Guid.NewGuid().ToString("n"));
     private readonly byte[] _package = Package();
+    private readonly byte[] _engine = "the host package"u8.ToArray();
+    private string _engineSha = Convert.ToHexStringLower(SHA256.HashData("the host package"u8.ToArray()));
     private readonly FakeWindows _windows;
     private readonly Channel _web;
     private readonly StringWriter _output = new();
@@ -225,6 +229,56 @@ public sealed class SetupTests : IDisposable
 
         Assert.True(outcome.HandedOver);
         Assert.Contains("checks by itself every six hours", _output.ToString(), StringComparison.Ordinal);
+    }
+
+    // ---- the engine of a move (R18) ----
+
+    private void OldInstall(string registry)
+    {
+        var root = Path.Combine(_windows.LocalAppData, "The-Construct");
+        Directory.CreateDirectory(root);
+        File.WriteAllText(Path.Combine(root, "instances.json"), registry);
+    }
+
+    [Fact]
+    public async Task A_move_from_an_old_install_with_a_local_vm_downloads_the_engine_in_the_console_before_the_agent_starts()
+    {
+        OldInstall("""{"version":1,"instances":{"agent-vm":{"backend":"hyperv-local","vmName":"Agent-VM"},"work":{"backend":"hyperv-remote"}}}""");
+
+        await Setup().RunAsync("nightly");
+
+        Assert.Equal(_engine, File.ReadAllBytes(Path.Combine(AgentHome, AgentSetup.EnginePackageFile)));
+        Assert.False(File.Exists(Path.Combine(AgentHome, AgentSetup.EnginePackageFile + ".partial")));
+        // Before the window opens: the agent is started after it.
+        Assert.Equal([NightlyManifest, PackageUrl, EngineUrl], _web.Requests.Where(r => r.Url.StartsWith("https://", StringComparison.Ordinal)).Select(r => r.Url));
+        Assert.Single(_windows.Started);
+    }
+
+    [Fact]
+    public async Task A_move_of_remote_vms_only_or_a_fresh_install_downloads_no_engine()
+    {
+        await Setup().RunAsync("nightly");
+        Assert.DoesNotContain(_web.Requests, r => r.Url == EngineUrl);
+
+        OldInstall("""{"version":1,"instances":{"work":{"backend":"hyperv-remote"}}}""");
+        await Setup().RunAsync("nightly");
+        Assert.DoesNotContain(_web.Requests, r => r.Url == EngineUrl);
+        Assert.False(File.Exists(Path.Combine(AgentHome, AgentSetup.EnginePackageFile)));
+    }
+
+    [Fact]
+    public async Task An_engine_download_that_fails_its_check_leaves_nothing_and_the_setup_goes_on()
+    {
+        OldInstall("""{"version":1,"instances":{"agent-vm":{"backend":"hyperv-local"}}}""");
+        _engineSha = new string('0', 64);
+
+        var outcome = await Setup().RunAsync("nightly");
+
+        Assert.False(outcome.HandedOver);
+        Assert.False(File.Exists(Path.Combine(AgentHome, AgentSetup.EnginePackageFile)));
+        Assert.False(File.Exists(Path.Combine(AgentHome, AgentSetup.EnginePackageFile + ".partial")));
+        Assert.Contains("downloaded when it is installed", _output.ToString(), StringComparison.Ordinal);
+        Assert.Single(_windows.Started);
     }
 
     // ---- the old Companion ----
@@ -485,13 +539,14 @@ public sealed class SetupTests : IDisposable
             if (url == NightlyManifest || url == StableManifest)
             {
                 return Json(Manifest ?? $$"""
-                    {"channel":"nightly","version":"{{Version}}","releaseTag":"{{Tag}}",
+                    {"channel":"nightly","version":"{{Version}}","releaseTag":"{{Tag}}","payloadAsset":"{{EngineAsset}}","payloadSha256":"{{test._engineSha}}",
                      "packages":{"agentLinux":{"asset":"construct-agent-2222222-linux-x64.zip","sha256":"{{new string('b', 64)}}"},
                                  "agentWindows":{"asset":"{{Asset}}","sha256":"{{test._sha}}"} } }
                     """);
             }
 
             if (url == PackageUrl) return new(HttpStatusCode.OK) { Content = new ByteArrayContent(test._package) };
+            if (url == EngineUrl) return new(HttpStatusCode.OK) { Content = new ByteArrayContent(test._engine) };
             if (url.StartsWith(agent, StringComparison.Ordinal))
             {
                 // The agent answers once it has written its token file (a stale one names nobody).

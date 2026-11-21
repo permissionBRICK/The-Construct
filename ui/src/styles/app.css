@@ -51,6 +51,9 @@ html[data-surf="alone"] body { background: transparent; }
 .app .dot.bad { border-color: var(--bad); background: var(--bad); }
 @keyframes blink { 50% { opacity: .35; } }
 .app .two { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 10px; }
+.app .three { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.app .three > .b { padding: 0 8px; }
+.app .b.big { min-height: 48px; font-size: 15px; font-weight: 600; }
 .app .three { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
 .app .confirm { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
 .app .confirm.col { flex-direction: column; align-items: flex-end; }

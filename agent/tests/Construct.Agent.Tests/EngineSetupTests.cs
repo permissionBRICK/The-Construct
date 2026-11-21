@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.IO.Compression;
 using System.Net;
 using System.Net.Http.Json;
@@ -184,6 +185,31 @@ public sealed class EngineSetupTests : IAsyncDisposable
 
         // A second start takes the engine it holds, without another prompt.
         Assert.Equal(engine, (await SetupAsync())["engine"]!.GetValue<string>());
+        Assert.Single(_platform.ElevatedRuns);
+    }
+
+    [Fact]
+    public async Task A_package_the_setup_already_downloaded_is_installed_without_downloading_it_again()
+    {
+        // ConstructSetup.exe fetches the engine for a move in its console (R18); the step only installs it then.
+        await StartAsync();
+        File.WriteAllBytes(File_("engine-package.zip"), _package);
+        var downloads = 0;
+        _agent.Host.EngineSetup.Http = new HttpClient(new FakeDevice.StaticHandler(request => request.RequestUri!.AbsoluteUri switch
+        {
+            Manifest => new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(new JsonObject
+                {
+                    ["releaseTag"] = "nightly-1", ["payloadAsset"] = "construct-host.zip", ["payloadSha256"] = Convert.ToHexStringLower(SHA256.HashData(_package)),
+                }.ToJsonString()),
+            },
+            _ => new HttpResponseMessage(HttpStatusCode.NotFound) { Content = new StringContent(Interlocked.Increment(ref downloads).ToString(CultureInfo.InvariantCulture)) },
+        }));
+        Installer("done");
+
+        Assert.Equal("done", (await SetupAsync())["state"]!.GetValue<string>());
+        Assert.Equal(0, downloads);
         Assert.Single(_platform.ElevatedRuns);
     }
 
