@@ -136,9 +136,11 @@ export interface Job {
   vmId: string;
   kind: JobKind;
   state: JobState;
+  /** What runs now in a few words ("Installing T3"); the bar's label. */
   step: string;
   stepIndex: number;
   stepCount: number;
+  /** The whole job, 0 to 100; it never goes back while the job runs. */
   pct: number;
   log: string[];
   error: string | null;
@@ -151,6 +153,8 @@ export interface Job {
   repair: Repair | null;
   /** A failed job without a running repair: "Let an agent fix it" starts one. */
   canRepair?: boolean;
+  /** A job that succeeded although optional steps failed: their titles. */
+  warnings?: string[];
   /** Asked for here and not yet answered by the engine: shown as working at once, nothing to stop yet. */
   pending?: boolean;
 }

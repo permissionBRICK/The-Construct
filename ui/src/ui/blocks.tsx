@@ -1,12 +1,13 @@
-import { useEffect, useRef, useState } from 'preact/hooks';
+import { useState } from 'preact/hooks';
 import type { AgentId, Everything, Job, SignIn, VaultRequest, Vm } from '../backend/types';
 import { spanChoices, spanText } from '../backend/api/map';
-import { failedTitle, jobWord, mainAction, repairWhen } from '../model/vm';
+import { doneWord, failedTitle, jobWord, mainAction, repairWhen } from '../model/vm';
+import { shortVersion, versionParts } from '../model/update';
 import { AGENTS } from '../model/settings';
 import { linkParts, lostSignIns } from '../model/signin';
 import { openExternal } from './shell';
 import { Icon } from './icons';
-import { Bar, Btn, Confirm, Field, Pip, Switch, Tag, UpTag } from './kit';
+import { Bar, Btn, Confirm, Field, Pip, Switch, Tag, UpTag, useFollow } from './kit';
 import { copy, na, useApp } from './ctx';
 
 /* The blocks that sit on the stack, in the pop-out, the window's overview and the phone. */
@@ -97,9 +98,10 @@ export function SignInCards() {
 function LogView({ job }: { job: Job }) {
   const { toast } = useApp();
   const text = job.log.join('\n');
+  const follow = useFollow<HTMLPreElement>(job.log.length);
   return (
     <div class="logbox">
-      <pre class="code">{job.log.map(l => <span class="l">{l}</span>)}</pre>
+      <pre class="code" ref={follow.ref} onScroll={follow.onScroll}>{job.log.map(l => <span class="l">{l}</span>)}</pre>
       <div class="bf"><span /><Btn sm icon="copy" onClick={() => { copy(text); toast('Copied'); }}>Copy</Btn></div>
     </div>
   );
@@ -111,8 +113,7 @@ function Repair({ job }: { job: Job }) {
   const { be } = useApp();
   const r = job.repair!;
   const [text, setText] = useState('');
-  const end = useRef<HTMLDivElement>(null);
-  useEffect(() => { end.current?.scrollIntoView?.({ block: 'nearest' }); }, [r.messages.length, r.state]);
+  const follow = useFollow<HTMLDivElement>(`${r.messages.length}/${r.state}`);
   const asking = r.state === 'asking';
   const send = () => { if (asking && text.trim()) { be.replyRepair(job.id, text); setText(''); } };
   return (
@@ -121,11 +122,10 @@ function Repair({ job }: { job: Job }) {
         {r.t3Thread && <Btn sm icon="open" onClick={() => be.open(job.vmId, 't3')}>T3 Code</Btn>}
         {(r.state === 'working' || asking) && <Btn sm onClick={() => be.stopRepair(job.id)}>Stop</Btn>}
       </div>
-      <div class="chat" aria-live="polite">
+      <div class="chat" aria-live="polite" ref={follow.ref} onScroll={follow.onScroll}>
         {r.messages.map(m => <p class={m.from}>{m.text}</p>)}
         {r.state === 'working' && <p class="agent typing" aria-label="working" />}
         {r.outcome && <p class={`end ${r.state === 'done' ? 'okc' : ''}`}>{r.outcome}</p>}
-        <div ref={end} />
       </div>
       {asking && (
         <div class="reply">
@@ -138,14 +138,15 @@ function Repair({ job }: { job: Job }) {
 }
 
 export function JobBlock({ job, vm }: { job: Job; vm: Vm }) {
-  const { be, surf, shell } = useApp();
+  const { be, s, surf, shell } = useApp();
   const [log, setLog] = useState(false);
   if (job.state === 'failed') {
     // The pop-out has no room for the chat: its button opens the window on this VM, where the chat is.
     const pop = surf === 'pop';
     return (
       <div class="blk bad job">
-        <div class="bh"><Icon n="x" /><b>{failedTitle(job)}</b><Btn sm icon="log" onClick={() => setLog(!log)}>Log</Btn></div>
+        <div class="bh"><Icon n="x" /><b>{failedTitle(job)}</b><Btn sm icon="log" onClick={() => setLog(!log)}>Log</Btn>
+          <Btn sm icon="x" title="Dismiss" onClick={() => be.dismissJob(job.id)} /></div>
         <div class="msg">{job.step}: {job.error}</div>
         {(log || !job.repair) && <LogView job={job} />}
         {pop && (job.repair || job.canRepair) && (
@@ -155,26 +156,41 @@ export function JobBlock({ job, vm }: { job: Job; vm: Vm }) {
         )}
         {!pop && job.repair && <Repair job={job} />}
         {!pop && job.canRepair && <Btn icon="fix" onClick={() => be.startRepair(job.id)}>Let an agent fix it</Btn>}
-        <div class="two">
-          {job.kind === 'reinstall' || job.kind === 'restore'
-            ? <Confirm label="Retry" icon="retry" verb={job.kind === 'reinstall' ? 'Reinstall again' : 'Restore again'} sm={false} onYes={() => be.retryJob(job.id)} />
-            : <Btn icon="retry" onClick={() => be.retryJob(job.id)}>Retry</Btn>}
-          <Btn onClick={() => be.dismissJob(job.id)}>Close</Btn>
-        </div>
+        {job.kind === 'reinstall' || job.kind === 'restore'
+          ? <Confirm label="Retry" icon="retry" verb={job.kind === 'reinstall' ? 'Reinstall again' : 'Restore again'} sm={false} onYes={() => be.retryJob(job.id)} />
+          : <Btn icon="retry" onClick={() => be.retryJob(job.id)}>Retry</Btn>}
       </div>
     );
   }
   const word = jobWord(job);
+  const ch = s.prefs.channel;
   return (
     <div class="blk job" aria-label={`${word} ${vm.name}`}>
       <div class="bh">
         <Icon n={job.kind === 'update' ? 'up' : job.kind === 'reinstall' ? 'wipe' : 'repro'} />
         <b>{word}</b>
-        <span class="m">{job.pending ? '' : job.kind === 'update' ? `${job.from} → ${job.to}` : `${job.stepIndex + 1} / ${job.stepCount} · ${job.pct}%`}</span>
+        <span class="m">{job.pending ? '' : job.kind === 'update' && job.from && job.to ? `${shortVersion(job.from, ch)} → ${shortVersion(job.to, ch)}` : `${job.pct}%`}</span>
       </div>
       <Bar pct={job.pct} />
       {job.repair?.state === 'done' && <div class="msg okc">{job.repair.agent}: {job.repair.outcome}</div>}
-      <div class="bf"><span>{job.step}</span>{!job.pending && <><Btn sm onClick={() => setLog(!log)}>Log</Btn><Btn sm onClick={() => be.stopJob(job.id)}>Stop</Btn></>}</div>
+      <div class="bf"><span class="lbl">{job.step}</span>{!job.pending && <><Btn sm onClick={() => setLog(!log)}>Log</Btn><Btn sm onClick={() => be.stopJob(job.id)}>Stop</Btn></>}</div>
+      {log && <LogView job={job} />}
+    </div>
+  );
+}
+
+/** A job that succeeded although optional steps failed (a forward that did not open): what failed, its log, put away
+    with the cross. Calm: nothing to fix before the VM is used. */
+export function WarnedBlock({ job }: { job: Job }) {
+  const { be } = useApp();
+  const [log, setLog] = useState(false);
+  const n = job.warnings?.length ?? 0;
+  return (
+    <div class="blk job" aria-label={`${doneWord(job)} with warnings`}>
+      <div class="bh"><Icon n="check" /><b>{doneWord(job)} · {n === 1 ? '1 warning' : `${n} warnings`}</b>
+        <Btn sm icon="log" onClick={() => setLog(!log)}>Log</Btn>
+        <Btn sm icon="x" title="Dismiss" onClick={() => be.dismissJob(job.id)} /></div>
+      <div class="msg">{job.warnings?.join(' · ')}</div>
       {log && <LogView job={job} />}
     </div>
   );
@@ -209,8 +225,7 @@ function OpenRouterKey({ si }: { si: SignIn }) {
 function SignInTerminal({ si }: { si: SignIn }) {
   const { be } = useApp();
   const [text, setText] = useState('');
-  const term = useRef<HTMLPreElement>(null);
-  useEffect(() => { const t = term.current; if (t) t.scrollTop = t.scrollHeight; }, [si.text]);
+  const term = useFollow<HTMLPreElement>(si.text);
   const name = AGENTS.find(a => a.id === si.agent)?.name ?? si.agent;
   const running = si.state === 'running' || si.state === 'starting';
   const send = () => { be.signInInput({ text }); setText(''); };
@@ -221,7 +236,7 @@ function SignInTerminal({ si }: { si: SignIn }) {
   const open = (url: string) => (e: MouseEvent) => { e.preventDefault(); openExternal(window, url); };
   const terminal = (
     <>
-      <pre class="term" ref={term} aria-live="polite">
+      <pre class="term" ref={term.ref} onScroll={term.onScroll} aria-live="polite">
         {linkParts(si.text).map(p => ('url' in p ? <a href={p.url} target="_blank" rel="noopener noreferrer" onClick={open(p.url)}>{p.url}</a> : p.text))}
         {si.state === 'starting' && <span class="typing" aria-label="starting" />}
       </pre>
@@ -277,12 +292,13 @@ function UpdateMore({ vm }: { vm: Vm }) {
 export function Tiles({ vm, onReinstall }: { vm: Vm; onReinstall: () => void }) {
   const { be, s } = useApp();
   const a = mainAction(s, vm);
+  const v = versionParts(a.kind === 'update' ? a.to : '', s.prefs.channel);
   return (
     <div class="two">
       {a.kind === 'update' ? (
         <div class="tilewrap">
           <button type="button" class="b tile" onClick={() => be.updateEverything()}>
-            <span class="upv"><Icon n="up" />{a.to}</span><span>Update</span>
+            <span class="upv" title={a.to}><Icon n="up" /><span>{v.base}</span></span>{v.build && <span class="upb">{v.build}</span>}<span>Update</span>
           </button>
           <UpdateMore vm={vm} />
         </div>
@@ -304,7 +320,7 @@ export function ActionButtons({ vm, busy, onReinstall }: { vm: Vm; busy: boolean
     <>
       {a.kind === 'update' ? (
         <span class="split">
-          <Btn icon="up" onClick={() => be.updateEverything()} disabled={busy}>Update<UpTag v={a.to} /></Btn>
+          <Btn icon="up" onClick={() => be.updateEverything()} disabled={busy}>Update<UpTag v={shortVersion(a.to, s.prefs.channel)} /></Btn>
           <UpdateMore vm={vm} />
         </span>
       ) : (

@@ -38,7 +38,9 @@ html[data-surf="alone"] body { background: transparent; }
 .app .b > .pip { position: absolute; top: 7px; right: 7px; }
 .app .tg.up { display: inline-flex; align-items: center; gap: 3px; color: var(--warn); border-color: currentColor; font-family: var(--mono); }
 .app .tg.up svg { width: 11px; height: 11px; }
-.app .upv { display: inline-flex; align-items: center; gap: 3px; height: 20px; color: var(--warn); font: 700 14px var(--mono); }
+.app .upv { display: inline-flex; align-items: center; gap: 3px; height: 20px; max-width: 100%; color: var(--warn); font: 700 14px var(--mono); }
+.app .upv > span { overflow: hidden; text-overflow: ellipsis; }
+.app .upb { margin-top: -5px; color: var(--dim); font: 500 11px var(--mono); overflow: hidden; text-overflow: ellipsis; }
 .app .upv svg { width: 15px; height: 15px; stroke-width: 2.5; }
 .app .ic { width: 34px; height: 34px; display: inline-grid; place-items: center; border: 1px solid var(--ln); border-radius: var(--rad); background: var(--pn); padding: 0; flex: none; }
 .app .ic.lit { color: var(--ok); border-color: var(--ok); }
@@ -48,7 +50,7 @@ html[data-surf="alone"] body { background: transparent; }
 .app .dot.busy { border-color: var(--pri); background: transparent; animation: blink 1.2s infinite; }
 .app .dot.bad { border-color: var(--bad); background: var(--bad); }
 @keyframes blink { 50% { opacity: .35; } }
-.app .two { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.app .two { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 10px; }
 .app .three { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
 .app .confirm { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
 .app .confirm.col { flex-direction: column; align-items: flex-end; }
@@ -75,6 +77,7 @@ html[data-surf="alone"] body { background: transparent; }
 .app .bar i { display: block; height: 100%; background: var(--pri); transition: width .4s; }
 .app .bf { display: flex; align-items: center; gap: 8px; color: var(--dim); }
 .app .bf > span:first-child { flex: 1; }
+.app .bf > span.lbl { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .app .bf.pad { padding: 10px 0; }
 .app .bf.check { cursor: pointer; color: var(--fg); }
 .app .bf.check span { flex: 1; }
@@ -236,7 +239,8 @@ html[data-surf="alone"] body { background: transparent; }
 .app .vml .d { margin-left: auto; font-size: 12px; padding-left: 12px; }
 .app .vml .new { border-top: 1px solid var(--ln); border-radius: 0 0 5px 5px; color: var(--dim); }
 .app .host { color: var(--dim); font-size: 12px; }
-.app .tile { flex-direction: column; gap: 7px; min-height: 72px; width: 100%; }
+.app .tile { flex-direction: column; gap: 7px; min-height: 72px; width: 100%; min-width: 0; }
+.app .tile > span { max-width: 100%; }
 .app .tile svg { width: 20px; height: 20px; }
 .app .tilewrap { position: relative; display: flex; }
 .app .more { position: absolute; top: 4px; right: 4px; }
@@ -253,6 +257,9 @@ html[data-surf="alone"] body { background: transparent; }
 .app .sft button { position: relative; display: flex; align-items: center; gap: 8px; border: 0; background: none; color: var(--dim); padding: 6px 8px; border-radius: 6px; }
 .app .sft button:hover { color: var(--fg); background: var(--pn); }
 .app .alone { padding: 12px; }
+/* the pop-out never scrolls sideways (finding 18); the shell sizes it to its content (finding 7) */
+.app.s-pop { overflow-x: hidden; }
+.app .blk > .confirm { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .app.s-alone { background: transparent; }
 
 /* phone */

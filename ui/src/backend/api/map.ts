@@ -218,12 +218,16 @@ export const VM_JOB_KINDS = Object.keys(JOB_KINDS);
 
 /** A job of one of the user's VMs, or null for kinds the VM pages do not show. `as` overrides the kind for a
     job this UI started as an update. */
+/** What newer engines add to a job: the whole job's percentage with the current sub-step in a few words, and the
+    titles of optional steps that failed in a job that succeeded. Read where present; older engines have neither. */
+type JobExtras = { overall?: { percent: number; label: string } | null; warnings?: string[] | null };
+
 export function toJob(key: string, vmId: string, j: JobResponse, as?: JobKind): Job | null {
   const kind = as ?? JOB_KINDS[j.kind];
   if (!kind) return null;
+  const x = j as JobResponse & JobExtras;
   const state: Job['state'] = j.state === 'succeeded' ? 'done' : j.state === 'failed' ? 'failed' : j.state === 'cancelled' ? 'stopped' : 'running';
   const withStep = [...j.progress].reverse().find(p => p.step);
-  const pctLine = [...j.progress].reverse().find(p => p.percent !== null && p.percent !== undefined);
   const failed = state === 'failed' ? failedStepOf(j.result) : null;
   let step: string, stepIndex: number, stepCount: number, pct: number;
   const steps = STEPS[j.kind];
@@ -233,19 +237,27 @@ export function toJob(key: string, vmId: string, j: JobResponse, as?: JobKind): 
     step = steps[at][1];
     stepIndex = at;
     stepCount = steps.length;
-    pct = pctLine?.percent ?? Math.round((at / stepCount) * 100);
+    // A step that counts itself moves the bar within its share.
+    const own = withStep && withStep.step === name && withStep.percent != null ? Math.max(0, Math.min(100, withStep.percent)) / 100 : 0;
+    pct = Math.round(((at + own) / stepCount) * 100);
   } else {
     step = j.phase ?? j.progress.at(-1)?.text ?? '';
     stepIndex = 0;
     stepCount = 1;
-    pct = pctLine?.percent ?? 0;
+    pct = 0;
+  }
+  // The engine's own count of the whole job wins over the step's place in the list.
+  if (x.overall) {
+    pct = x.overall.percent;
+    if (x.overall.label && !failed) step = x.overall.label;
   }
   if (state === 'done') pct = 100;
   return {
-    id: key, vmId, kind, state, step, stepIndex, stepCount, pct,
+    id: key, vmId, kind, state, step, stepIndex, stepCount, pct: Math.max(0, Math.min(100, pct)),
     log: j.progress.map(p => p.text),
     error: j.error ?? null,
     repair: null,
+    ...(x.warnings?.length ? { warnings: x.warnings } : {}),
   };
 }
 

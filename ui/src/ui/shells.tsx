@@ -1,12 +1,12 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
 import type { ComponentChildren } from 'preact';
-import { activeJob, vmDot } from '../model/vm';
+import { activeJob, vmDot, warnedJob } from '../model/vm';
 import { updateDue } from '../model/update';
 import { section, VM_PAGES, type Page, type Route } from '../model/route';
 import { Icon, type IconName } from './icons';
 import { Btn, Dot, Pip } from './kit';
 import { na, useApp } from './ctx';
-import { EverythingBlock, JobBlock, PowerBtn, ReinstallConfirm, SignInBlock, SignInCard, SignInCards, Tiles, VaultCard, VaultCards } from './blocks';
+import { EverythingBlock, JobBlock, PowerBtn, ReinstallConfirm, SignInBlock, SignInCard, SignInCards, Tiles, VaultCard, VaultCards, WarnedBlock } from './blocks';
 import { lostSignIns } from '../model/signin';
 import { PageView } from './pages';
 
@@ -42,6 +42,7 @@ export function Stack({ footer }: { footer: boolean }) {
   const [wipe, setWipe] = useState(false);
   if (!vm) return <div class="stack"><VaultCards /><SignInCards /><NoVm /></div>;
   const job = activeJob(s, vm.id);
+  const warned = job ? null : warnedJob(s, vm.id);
   const host = s.hosts.find(h => h.id === vm.hostId);
   return (
     <div class="stack">
@@ -54,6 +55,7 @@ export function Stack({ footer }: { footer: boolean }) {
         <Btn icon="term" onClick={() => be.open(vm.id, 'ssh')} disabled={na(s, 'open')}>SSH</Btn>
       </div>
       {job ? <JobBlock job={job} vm={vm} /> : wipe ? <ReinstallConfirm vm={vm} onCancel={() => setWipe(false)} /> : <Tiles vm={vm} onReinstall={() => setWipe(true)} />}
+      {warned && <WarnedBlock job={warned} />}
       {s.everything && (s.everything.running || s.everything.parts.some(p => p.state === 'failed')) && <EverythingBlock e={s.everything} />}
       {footer && (
         <nav class="sft">

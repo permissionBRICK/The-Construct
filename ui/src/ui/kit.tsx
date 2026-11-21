@@ -1,5 +1,5 @@
 import type { ComponentChildren, JSX } from 'preact';
-import { useState } from 'preact/hooks';
+import { useLayoutEffect, useRef, useState } from 'preact/hooks';
 import { Icon, type IconName } from './icons';
 import type { Dot as DotKind } from '../model/vm';
 import { copy, useApp } from './ctx';
@@ -141,4 +141,20 @@ export function Copyable({ text }: { text: string }) {
       <Btn sm icon="copy" onClick={() => { copy(text); toast('Copied'); }}>Copy</Btn>
     </div>
   );
+}
+
+/** A scrolling box that follows its end (a log, a chat): at the bottom from the start and as lines arrive, until the
+    user scrolls up; back at the bottom it follows again. Returns the ref and the scroll handler for the box. */
+export function useFollow<T extends HTMLElement>(dep: unknown) {
+  const ref = useRef<T>(null);
+  const stick = useRef(true);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (el && stick.current) el.scrollTop = el.scrollHeight;
+  }, [dep]);
+  const onScroll = () => {
+    const el = ref.current;
+    if (el) stick.current = el.scrollTop + el.clientHeight >= el.scrollHeight - 4;
+  };
+  return { ref, onScroll };
 }
