@@ -15,6 +15,15 @@ public sealed class CoreTests
     public void The_probe_reads_the_opencode_version_of_both_generations(string output, string version) =>
         Assert.Equal(version, Construct.Companion.Core.Probe.ProbeParser.ExtractVersion(output));
 
+    [Theory]
+    [InlineData(300, 96, 1, 300)]
+    [InlineData(300.2, 144, 1, 451)] // 150 %: device pixels, rounded up so nothing scrolls
+    [InlineData(300, 96, 1.25, 375)] // the page's zoom
+    [InlineData(40, 96, 1, 120)] // at least a header's worth
+    [InlineData(40, 192, 1, 240)]
+    public void The_pop_out_takes_the_height_its_page_measured(double css, int dpi, double zoom, int height) =>
+        Assert.Equal(height, Construct.Companion.Core.Desktop.TrayModel.FittedHeight(css, dpi, zoom));
+
     [Fact]
     public async Task An_engine_stream_resumes_after_a_drop_and_ends_each_job_once_across_a_reset()
     {

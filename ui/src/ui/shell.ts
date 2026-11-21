@@ -33,6 +33,10 @@ export function makeShell(w: Win): Shell {
     close() {
       shellHost(w)?.postMessage({ type: 'close' });
     },
+    fit(height: number) {
+      // Only the desktop shell sizes its window; a framing document has no use for it.
+      w.chrome?.webview?.postMessage({ type: 'size', height });
+    },
   };
 }
 

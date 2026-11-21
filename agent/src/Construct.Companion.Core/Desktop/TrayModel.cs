@@ -15,6 +15,13 @@ public static class TrayModel
 {
     public const string InstancePrefix = "instance:";
     public static (int Width, int Height) PopupSize(int dpi) => ((int)(420 * dpi / 96d), (int)(650 * dpi / 96d));
+    /// <summary>
+    /// The height of the pop-out (or the lone card) for content the page measured at <paramref name="cssHeight"/> CSS
+    /// pixels: scaled by the monitor's DPI and the page's zoom, at least a header's worth. The placement keeps it within
+    /// the working area; the page scrolls beyond that.
+    /// </summary>
+    public static int FittedHeight(double cssHeight, int dpi, double zoom = 1) =>
+        Math.Max((int)(120 * dpi / 96d), (int)Math.Ceiling(Math.Clamp(cssHeight, 0, 10_000) * (zoom > 0 ? zoom : 1) * dpi / 96d));
     public static TrayAppearance Appearance(TrayState state)
     {
         var missing = state.Instance is null || !state.ScriptsFound;

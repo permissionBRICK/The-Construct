@@ -75,10 +75,35 @@ function NoVm() {
   );
 }
 
+/** The pop-out and the lone card tell the desktop shell how tall their content is, as it changes; the shell sizes the
+    window to it instead of a fixed height (finding 7). A menu open below its button counts too. */
+function useFit() {
+  const { shell } = useApp();
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el || !shell.fit || typeof ResizeObserver === 'undefined') return;
+    let last = 0;
+    const measure = () => {
+      const top = el.getBoundingClientRect().top;
+      let h = el.getBoundingClientRect().height;
+      for (const m of el.querySelectorAll('details[open] > .vml')) h = Math.max(h, m.getBoundingClientRect().bottom - top + 12);
+      h = Math.ceil(h);
+      if (h !== last) { last = h; shell.fit!(h); }
+    };
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    el.addEventListener('toggle', measure, true);
+    measure();
+    return () => { ro.disconnect(); el.removeEventListener('toggle', measure, true); };
+  }, [shell]);
+  return ref;
+}
+
 export function PopOut() {
   const { s } = useApp();
-  if (s.firstRun) return <div class="pop"><PageView /></div>;
-  return <div class="pop"><Stack footer /></div>;
+  const fit = useFit();
+  return <div class="pop" ref={fit}>{s.firstRun ? <PageView /> : <Stack footer />}</div>;
 }
 
 /** A card alone, popped from the tray while Construct is closed: the vault's, else a lost sign-in's (S36). The vault
@@ -96,8 +121,9 @@ export function Alone() {
     if (any) shown.current = true;
     else if (shown.current) shell.close();
   }, [any]);
+  const fit = useFit();
   return (
-    <div class="alone">
+    <div class="alone" ref={fit}>
       {r ? <VaultCard key={r.id} r={r} onDone={() => setGone(g => [...g, 'v:' + r.id])} />
         : lost ? <SignInCard key={lost.vm.id + '/' + lost.id.id} vm={lost.vm} agent={lost.id.id} onDone={() => setGone(g => [...g, 'n:' + lost.vm.id + '/' + lost.id.id])} />
         : s.signIn ? <SignInBlock si={s.signIn} /> : null}

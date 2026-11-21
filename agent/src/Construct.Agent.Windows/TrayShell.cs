@@ -20,6 +20,8 @@ internal sealed class TrayShell : ApplicationContext, IAgentShell
     private readonly System.Windows.Forms.Timer _vaultTimer = new() { Interval = 10_000 };
     private readonly PopupGesture _gesture = new();
     private readonly Dictionary<string, AgentWindow> _windows = [];
+    // The content height each floating surface last reported (CSS pixels): it opens at that size (finding 7).
+    private readonly Dictionary<string, double> _contentHeight = [];
     private readonly HashSet<string> _seenRequests = [];
     private readonly HashSet<string> _seenNotices = [];
     private readonly DeviceAgent _agent;
@@ -114,19 +116,30 @@ internal sealed class TrayShell : ApplicationContext, IAgentShell
         {
             window = new AgentWindow(surface, _origin, _token, _runtime, Open, _log);
             if (surface == "pop") window.FocusLost += () => _gesture.FocusLost((Control.MouseButtons & MouseButtons.Left) != 0 && _trayHitArea is { } area && area.Contains(Cursor.Position));
+            if (surface is "pop" or "alone") window.ContentHeight += css => Fit(surface, window, css);
             _windows[surface] = window;
         }
 
         if (surface is "pop" or "alone")
         {
+            // Sized to what the page showed last; before the page has measured, the old fixed size.
             var (width, height) = TrayModel.PopupSize(_iconDpi);
-            window.Bounds = PopupBounds(width, surface == "alone" ? Math.Min(height, (int)(320 * _iconDpi / 96d)) : height);
+            if (_contentHeight.TryGetValue(surface, out var css)) height = TrayModel.FittedHeight(css, _iconDpi, window.Zoom);
+            else if (surface == "alone") height = Math.Min(height, (int)(320 * _iconDpi / 96d));
+            window.Bounds = PopupBounds(width, height);
         }
 
         if (surface != "alone") Hide("alone");
         _attention = false;
         DrawIcon();
         window.Present(route);
+    }
+
+    /// <summary>A floating surface's page measured its content: the window takes that height, still at the tray.</summary>
+    private void Fit(string surface, AgentWindow window, double css)
+    {
+        _contentHeight[surface] = css;
+        if (window.Visible) window.Bounds = PopupBounds(window.Width, TrayModel.FittedHeight(css, _iconDpi, window.Zoom));
     }
 
     /// <summary>
