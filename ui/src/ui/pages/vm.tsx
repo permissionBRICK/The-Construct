@@ -270,7 +270,7 @@ export function Backups({ vm }: { vm: Vm }) {
 type Tab = 'res' | 'svc' | 'id' | 'agents';
 
 export function Settings({ vm }: { vm: Vm }) {
-  const { s, be, route, go } = useApp();
+  const { s, be, route, go, toast } = useApp();
   const tab = (route.arg as Tab) || 'res';
   const [hw, setHw] = useState<{ memGb: number; cpus: number } | null>(null);
   const st = vm.settings;
@@ -315,6 +315,10 @@ export function Settings({ vm }: { vm: Vm }) {
     svc: () => na(s, 'vm-services') ? <Sec title="Services"><NotYet /></Sec> : (
       <Sec title="Services" right={tag('services')}>
         <Row l={<>T3 Code web <span class="d m">:5178</span></>}><Switch on={st.services.t3Web} onChange={v => svc('t3Web', v)} label="T3 Code web" /></Row>
+        <Row l="T3 Code on another machine">
+          <Btn sm icon="copy" onClick={() => be.t3Link(vm.id).then(url => { copy(url); toast('Pairing link copied; it works once, for ten minutes'); },
+            (e: unknown) => toast(e instanceof Error ? e.message : 'No pairing link'))}>Copy link</Btn>
+        </Row>
         <Row l={<>VS Code web <span class="d m">:8000</span></>}><Switch on={st.services.vscodeWeb} onChange={v => svc('vscodeWeb', v)} label="VS Code web" /></Row>
         <Row l="VS Code tunnel"><Switch on={st.services.vscodeTunnel} onChange={v => svc('vscodeTunnel', v)} label="VS Code tunnel" /></Row>
         <Row l={<>SMB share <span class="d m">Z:</span></>}><Switch on={st.services.smb} onChange={v => svc('smb', v)} label="SMB share" /></Row>

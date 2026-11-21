@@ -482,7 +482,15 @@ export function toRepair(s: Omit<RepairSession, 'lines'>, lines: RepairLine[], s
     messages: lines.map(repairMessage).filter((m): m is RepairMessage => m !== null),
     t3Thread: false,
     outcome,
+    at: clock(s.started),
+    auto: s.automatic,
   };
+}
+
+/** HH:MM of a time, in this device's time zone. */
+export function clock(iso: string): string {
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? '' : `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
 }
 
 /* --- the one-time upgrade --- */

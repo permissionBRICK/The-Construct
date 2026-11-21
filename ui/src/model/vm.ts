@@ -36,6 +36,11 @@ export function vmWord(vm: Vm, job: Job | null): string {
   return { on: 'Running', off: 'Off', starting: 'Starting', stopping: 'Stopping' }[vm.power];
 }
 
+/** Which run of the repair agent this is: when it started, and whether the host started it by itself. */
+export function repairWhen(r: { at: string; auto: boolean }): string {
+  return `${r.auto ? 'started by itself' : 'started'}${r.at ? ` at ${r.at}` : ''}`;
+}
+
 /** Title of a failed job's block. */
 export function failedTitle(job: Job): string {
   const k = job.kind === 'update' ? 'Update' : job.kind[0].toUpperCase() + job.kind.slice(1);

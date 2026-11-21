@@ -126,6 +126,9 @@ export interface Repair {
   t3Thread: boolean;
   /** After the end: how it ended and what the engine did with the job. */
   outcome?: string | null;
+  /** When this run started (local time, HH:MM), and whether the host started it by itself when the job failed. */
+  at: string;
+  auto: boolean;
 }
 
 export interface Job {
@@ -148,6 +151,8 @@ export interface Job {
   repair: Repair | null;
   /** A failed job without a running repair: "Let an agent fix it" starts one. */
   canRepair?: boolean;
+  /** Asked for here and not yet answered by the engine: shown as working at once, nothing to stop yet. */
+  pending?: boolean;
 }
 
 /** An agent on a VM asks for something only the user can give: a lease of a secret, or a new secret's value. */
@@ -427,7 +432,10 @@ export interface Backend {
   subscribe(fn: () => void): () => void;
 
   /* VM */
+  /** T3 Code opens the patched desktop app where Construct installed one, else the web UI. */
   open(vmId: string, what: Open): void;
+  /** A one-time pairing link for T3 Code on another machine (ten minutes); it is copied, never opened. */
+  t3Link(vmId: string): Promise<string>;
   /** Open a forwarded port in the browser. */
   openForward(vmId: string, port: number): void;
   openChildConsole(vmId: string, child: string): void;

@@ -24,6 +24,8 @@ const SHOTS: [Surf, string, string, string?][] = [
   ['alone', 'signed-out', 'signed-out'],
   ['pop', 'signed-out', 'signed-out'],
   ['win', 'signed-out', 'signed-out'],
+  // A lost sign-in asks on every page of the window, as a vault request does (finding 43).
+  ['win', 'signed-out-vault', 'signed-out', 'vault'],
   ['win', 'overview', 'calm'],
   ['win', 'repair', 'repair'],
   ['win', 'updating', 'updating'],
