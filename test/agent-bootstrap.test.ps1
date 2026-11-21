@@ -33,7 +33,7 @@ function Test-Ps51([string]$Text, [string]$Name) {
     Assert ($Text -notmatch '[^\x00-\x7F]') "$Name is ASCII"
     return $ast
 }
-foreach ($file in @('install.ps1', 'Update-Construct.ps1', 'Update-T3Code.ps1', 'Get-ConstructT3PairingLink.ps1', 'lib/Construct.AgentShim.ps1', 'agent/install/Install-ConstructAgent.ps1')) {
+foreach ($file in @('install.ps1', 'Update-Construct.ps1', 'Update-T3Code.ps1', 'Get-ConstructT3PairingLink.ps1', 'lib/Construct.AgentShim.ps1', 'lib/Construct.MovedScript.ps1', 'agent/install/Install-ConstructAgent.ps1')) {
     $null = Test-Ps51 ([IO.File]::ReadAllText((Join-Path $repo $file))) $file
 }
 $hookFunctions = @{
@@ -355,6 +355,10 @@ Assert ($run.Calls -contains 'rest Post http://127.0.0.1:5555/api/connections/e1
 $run = Invoke-World (New-World 't3-unknown' @{ agentRunning = $true; arguments = @('-InstanceName', 'other') }) (Join-Path $shims 'Get-ConstructT3PairingLink.ps1')
 $line = $run.Output.Trim() | ConvertFrom-Json
 Assert ($run.Code -eq 1 -and -not $line.ok -and $line.error -match 'No VM named other') "an unknown VM gets no link: $($run.Output)"
+
+# ---- an old entry script after the move (R14): whatever its caller passes, it says where things moved and does nothing ----
+$out = & pwsh -NoProfile -File (Join-Path $repo 'lib/Construct.MovedScript.ps1') -InstanceName agent-vm -Mode reprovision 6>&1 2>&1 | Out-String
+Assert ($LASTEXITCODE -eq 1 -and $out -match 'moved to the new Construct') "an old entry script refuses after the move: $out"
 
 Remove-Item -Recurse -Force $dir
 Write-Host "PASS: $script:count agent bootstrap assertions"

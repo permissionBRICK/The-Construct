@@ -3,18 +3,22 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Construct.Agent.Device;
+using Construct.Agent.Update;
 
 namespace Construct.Agent.Upgrade;
 
 /// <summary>
 /// The converter (13.1): it reads the old client's state (<see cref="LegacyState"/>) and copies it into the
 /// new stack, writing only to the engines, the store and the agent's own files (<c>bridge.json</c>,
-/// <c>device.json</c>). It changes nothing of the old files but one: once the move is
-/// complete, the old client's autoinstall images go. It can be run
+/// <c>device.json</c>). It changes nothing of the old files until the move is complete;
+/// then the old client's autoinstall images go and its entry scripts are replaced. It can be run
 /// again at any point: an item listed as done in <c>bridge.json</c>, or already present where it goes, is
-/// left alone. Its last steps switch the local VMs over to the engine (the adopt job) and reprovision each adopted
-/// VM with the engine's guest payload, so the move leaves it on the new version; then <c>{stage: converted}</c> is
-/// written, and only after that the old backup key comes off the VMs and the old client's autoinstall images are deleted.
+/// left alone. A shared host of the old stack that the user administers moves to the new version through its own update
+/// when it offers it (R5). Its last steps switch the local VMs over to the engine (the adopt job) and reprovision each
+/// adopted VM with the engine's guest payload, and each moved host's VMs, so the move leaves them on the new version; then
+/// <c>{stage: converted}</c> is written, and only after that the old backup key comes off the VMs, the old client's
+/// autoinstall images are deleted and its entry scripts become the new Construct's (<see cref="OldInstallScripts"/>).
+/// Messages are a few words (R6).
 /// </summary>
 public sealed class LegacyConverter(DeviceAgent agent, IDeviceEngines engines, DeviceSettings settings, BridgeFile bridge,
     IUpgradePlatform platform, Action<UpgradeItem> progress)
@@ -30,8 +34,16 @@ public sealed class LegacyConverter(DeviceAgent agent, IDeviceEngines engines, D
     /// <summary>How long the reprovision of one adopted VM may take.</summary>
     public TimeSpan ReprovisionTimeout { get; init; } = TimeSpan.FromMinutes(60);
 
+    /// <summary>Moves a shared host of the old stack through its own update (R5); null: none is moved.</summary>
+    public OldHostUpdate? OldHosts { get; init; }
+
+    /// <summary>The whole run's progress for the dialog's one bar (R7).</summary>
+    public Action<StepProgress>? Overall { get; init; }
+
     private readonly List<UpgradeItem> _items = [];
     private HashSet<string> _done = [];
+    private int _percent;
+    private string _label = "Starting";
 
     /// <summary>Runs every item; true when the conversion is complete (<c>converted</c>).</summary>
     public async Task<bool> RunAsync(LegacyState legacy, CancellationToken ct)
@@ -43,15 +55,29 @@ public sealed class LegacyConverter(DeviceAgent agent, IDeviceEngines engines, D
         bridge.Update(b => b with { Stage = b.Stage == BridgeState.Converted ? b.Stage : "converting", From = legacy.InstallFolder, Items = [] });
 
         var instances = legacy.Instances();
-        await ChannelAsync(legacy, ct).ConfigureAwait(false);
-        await HostsAsync(legacy, ct).ConfigureAwait(false);
-        await ProfilesAsync(legacy, store, ct).ConfigureAwait(false);
-        await UpstreamAsync(legacy, store, ct).ConfigureAwait(false);
-        await SecretsAsync(legacy, ct).ConfigureAwait(false);
+        // The bar (R7): the copying is quick; where VMs of this PC move, their switch-over and above all their
+        // reprovision take most of the time.
+        var vms = start.LocalEngine is null ? 0 : instances.Count(i => i.Local);
+        var copy = vms == 0 ? 95.0 : 10.0;
+        Func<Task>[] copying =
+        [
+            () => ChannelAsync(legacy, ct), () => HostsAsync(legacy, ct), () => ProfilesAsync(legacy, store, ct), () => UpstreamAsync(legacy, store, ct),
+            () => SecretsAsync(legacy, ct),
+        ];
+        for (var i = 0; i < copying.Length; i++)
+        {
+            Progress(copy * i / (copying.Length + 2));
+            await copying[i]().ConfigureAwait(false);
+        }
+
+        Progress(copy * copying.Length / (copying.Length + 2));
         var legacyKeys = await BackupKeysAsync(legacy, ct).ConfigureAwait(false);
+        Progress(copy * (copying.Length + 1) / (copying.Length + 2));
         await RecipientsAsync(legacy, instances, start.LocalEngine, ct).ConfigureAwait(false);
-        await LocalVmsAsync(legacy, instances, start.LocalEngine, ct).ConfigureAwait(false);
+        Progress(copy);
+        await LocalVmsAsync(legacy, instances, start.LocalEngine, copy, ct).ConfigureAwait(false);
         await ReprovisionAsync(instances, start.LocalEngine, ct).ConfigureAwait(false);
+        await HostVmsAsync(legacy, ct).ConfigureAwait(false);
 
         var complete = _items.All(i => i.State is not "failed");
         if (complete && bridge.Read().Stage != BridgeState.Converted)
@@ -60,9 +86,20 @@ public sealed class LegacyConverter(DeviceAgent agent, IDeviceEngines engines, D
         {
             await RemoveLegacyRecipientsAsync(legacy, instances, legacyKeys, start.LocalEngine, ct).ConfigureAwait(false);
             DeleteInstallImages(legacy);
+            // One that could not be replaced is named in the notes and tried again (UpgradeService).
+            OldInstallScripts.Protect(legacy, bridge, agent.Account);
         }
+
+        if (complete) Progress(100);
         bridge.Update(b => b with { Items = _items.ToArray() });
         return complete;
+    }
+
+    /// <summary>The bar moves to <paramref name="percent"/>, never back, named by the running row.</summary>
+    private void Progress(double percent)
+    {
+        _percent = Math.Max(_percent, (int)Math.Round(Math.Clamp(percent, 0, 100)));
+        Overall?.Invoke(new StepProgress(_percent, _label));
     }
 
     /// <summary>
@@ -82,7 +119,7 @@ public sealed class LegacyConverter(DeviceAgent agent, IDeviceEngines engines, D
     {
         if (_done.Contains(id))
         {
-            Report(new UpgradeItem(id, label, "skipped", "Copied in an earlier run."));
+            Report(new UpgradeItem(id, label, "skipped", "Done earlier"));
             return;
         }
 
@@ -124,6 +161,12 @@ public sealed class LegacyConverter(DeviceAgent agent, IDeviceEngines engines, D
 
     private void Report(UpgradeItem item)
     {
+        if (item.State == "running")
+        {
+            _label = item.Label;
+            Progress(_percent);
+        }
+
         var at = _items.FindIndex(i => i.Id == item.Id);
         if (at >= 0) _items[at] = item;
         else _items.Add(item);
@@ -137,9 +180,9 @@ public sealed class LegacyConverter(DeviceAgent agent, IDeviceEngines engines, D
     {
         var channel = legacy.Channel();
         var current = settings.Read().Channel;
-        if (current != "stable" || current == channel) return Task.FromResult<(string, string?)>(("done", $"The channel stays {current}."));
+        if (current != "stable" || current == channel) return Task.FromResult<(string, string?)>(("done", $"Stays {current}"));
         settings.Update(s => s with { Channel = channel });
-        return Task.FromResult<(string, string?)>(("done", $"The channel is {channel}."));
+        return Task.FromResult<(string, string?)>(("done", $"Now {channel}"));
     });
 
     // ---- remote hosts ----
@@ -148,9 +191,12 @@ public sealed class LegacyConverter(DeviceAgent agent, IDeviceEngines engines, D
     {
         foreach (var host in legacy.Hosts())
         {
-            await ItemAsync("host:" + host.Slug, "Host " + new Uri(host.Url).Host, async () =>
+            var name = new Uri(host.Url).Host;
+            OldHostOffer? offer = null;
+            var asked = false;
+            await ItemAsync("host:" + host.Slug, "Host " + name, async () =>
             {
-                if (host.Pin is null) return ("failed", "The old client has no pinned certificate for this host; add it by hand in Settings.");
+                if (host.Pin is null) return ("failed", "No pinned certificate; add it in Settings");
                 var known = agent.Engines().FirstOrDefault(e => e.Id == agent.EngineIdFor(host.Url));
                 // The old token is read only when this device has no credential there yet; it goes into the state protected.
                 var token = known is null || !known.Enrolled && !known.SignedIn ? (host.HasToken ? legacy.HostToken(host) : null) : null;
@@ -167,13 +213,65 @@ public sealed class LegacyConverter(DeviceAgent agent, IDeviceEngines engines, D
                     catch (AgentFailure failure) { problem = failure.Message; }
                 }
 
-                await UpgradeService.MarkOldHostAsync(agent, bridge, known.Id, ct).ConfigureAwait(false);
-                if (known.Enrolled) return ("done", host.VaultMode is null ? "Added and enrolled." : $"Added and enrolled; vault mode {host.VaultMode}.");
+                if (await UpgradeService.MarkOldHostAsync(agent, bridge, known.Id, ct).ConfigureAwait(false) == true)
+                {
+                    // The old stack, kept with the old sign-in: it moves next when its user administers it and it offers the new version.
+                    asked = true;
+                    offer = OldHosts is null ? null : await OldHosts.OfferAsync(known.Id, ct).ConfigureAwait(false);
+                    return ("done", offer is null ? "Old Construct, unchanged" : "Old Construct; moves next");
+                }
+
+                if (known.Enrolled) return ("done", host.VaultMode is null ? "Enrolled" : $"Enrolled, vault {host.VaultMode}");
                 // Carried over all the same: the host keeps its pin and the old sign-in, and connecting it again from
                 // Settings enrols this device once the host can. A second run leaves it alone.
-                return ("done", known.SignedIn
-                    ? $"Added with your old sign-in; this device is not enrolled there yet ({problem ?? "the host refused"}). Connect it again from Settings later."
-                    : "Added without a sign-in (a Windows sign-in host has no token to carry over): sign in there in Settings.");
+                return ("done", known.SignedIn ? "Signed in; connect it in Settings" : "Sign in from Settings");
+            }).ConfigureAwait(false);
+
+            // Added in an earlier run and still on the old stack: it may offer the new version by now.
+            if (!asked && OldHosts is not null && !_done.Contains("host-update:" + host.Slug) && agent.EngineIdFor(host.Url) is { } id
+                && await agent.RunsOldStackAsync(id, ct).ConfigureAwait(false) == true)
+                offer = await OldHosts.OfferAsync(id, ct).ConfigureAwait(false);
+            if (offer is not null) await HostUpdateAsync(host, name, offer, ct).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>The start of the note that names a host whose update did not go through.</summary>
+    public static string HostNote(string name) => $"Host {name} not moved: ";
+
+    /// <summary>
+    /// R5: a shared host of the old stack moves to the new version through its own update, and this device connects there
+    /// as at a new host, so the account key reaches its VMs through it and its VMs are reprovisioned at the end. An update
+    /// that did not go through is this row's alone (pending): the move goes on, a note says so (the converted overview
+    /// shows no rows), and Update tries it again.
+    /// </summary>
+    private Task HostUpdateAsync(LegacyHost host, string name, OldHostOffer offer, CancellationToken ct) =>
+        ItemAsync("host-update:" + host.Slug, $"Host {name} on the new version", async () =>
+        {
+            var engine = agent.EngineIdFor(host.Url) ?? throw new AgentFailure(404, "no-engine", "The host is not added.");
+            if (await OldHosts!.RunAsync(engine, offer, ct).ConfigureAwait(false) is { } problem)
+            {
+                bridge.Update(b => b.Noted(agent.Account, HostNote(name), HostNote(name) + problem + ". Update tries again."));
+                return ("pending", problem);
+            }
+
+            bridge.Update(b => b.Noted(agent.Account, HostNote(name), null));
+            EngineView known;
+            try { known = await agent.ConnectEngineAsync(engine, host.VaultMode ?? "locked", ct).ConfigureAwait(false); }
+            catch (AgentFailure) { known = agent.Engines().First(e => e.Id == engine); }
+            await UpgradeService.MarkOldHostAsync(agent, bridge, engine, ct).ConfigureAwait(false);
+            return ("done", known.Enrolled ? "Moved, enrolled" : known.SignedIn ? "Moved, signed in" : "Moved; sign in from Settings");
+        }, running: "Updating");
+
+    /// <summary>R5: the user's VMs on each host moved to the new version (in this run or an earlier one), reprovisioned as Update does.</summary>
+    private async Task HostVmsAsync(LegacyState legacy, CancellationToken ct)
+    {
+        foreach (var host in legacy.Hosts().Where(h => _done.Contains("host-update:" + h.Slug)))
+        {
+            await ItemAsync("host-vms:" + host.Slug, $"VMs on {new Uri(host.Url).Host} on the new version", async () =>
+            {
+                var engine = agent.EngineIdFor(host.Url) ?? throw new AgentFailure(404, "no-engine", "The host is not added.");
+                var count = (await engines.PostAsync(engine, "me/vms/reprovision", null, ct).ConfigureAwait(false))?["vms"] is JsonArray vms ? vms.Count : 0;
+                return ("done", count == 0 ? "None of yours" : $"{count} reprovisioning");
             }).ConfigureAwait(false);
         }
     }
@@ -190,10 +288,10 @@ public sealed class LegacyConverter(DeviceAgent agent, IDeviceEngines engines, D
         {
             await ItemAsync("profile:" + name, "Profile " + name, async () =>
             {
-                if (Parse(text) is not { } profile) return ("skipped", "Not a JSON object; left in the old folder.");
-                if (await ProfileAsync(store, name, ct).ConfigureAwait(false) is not null) return ("skipped", "Already in the store.");
+                if (Parse(text) is not { } profile) return ("skipped", "Not JSON; left as is");
+                if (await ProfileAsync(store, name, ct).ConfigureAwait(false) is not null) return ("skipped", "Already there");
                 try { return ("done", Status(await PutProfileAsync(store, name, profile, null, ct).ConfigureAwait(false))); }
-                catch (AgentFailure failure) when (failure.Status == 400) { return ("skipped", "The engine refused it as no valid profile; left in the old folder."); }
+                catch (AgentFailure failure) when (failure.Status == 400) { return ("skipped", "Invalid; left as is"); }
             }).ConfigureAwait(false);
         }
 
@@ -206,9 +304,9 @@ public sealed class LegacyConverter(DeviceAgent agent, IDeviceEngines engines, D
                 var @base = change.Base is null ? null : Parse(change.Base);
                 var theirs = change.Theirs is null ? null : Parse(change.Theirs);
                 if (change.Ours is not null && ours is null || change.Base is not null && @base is null || change.Theirs is not null && theirs is null)
-                    return ("skipped", "A side is not a JSON object; left in the old folder.");
+                    return ("skipped", "Not JSON; left as is");
                 try { return ("done", await BranchChangeAsync(store, change.Profile, @base, ours, theirs, ct).ConfigureAwait(false)); }
-                catch (AgentFailure failure) when (failure.Status == 400) { return ("skipped", "The engine refused a side as no valid profile; left in the old folder."); }
+                catch (AgentFailure failure) when (failure.Status == 400) { return ("skipped", "Invalid; left as is"); }
             }).ConfigureAwait(false);
         }
     }
@@ -230,7 +328,7 @@ public sealed class LegacyConverter(DeviceAgent agent, IDeviceEngines engines, D
 
         // "Theirs" is what the store holds now: main, plus what an earlier VM branch merged into it.
         if (current is null)
-            return ours is null ? "Nothing to carry over." : Status(await PutProfileAsync(store, name, ours, null, ct).ConfigureAwait(false));
+            return ours is null ? "Nothing to carry over" : Status(await PutProfileAsync(store, name, ours, null, ct).ConfigureAwait(false));
         long? baseRevision = current.Value.Revision;
         if (@base is null)
         {
@@ -272,10 +370,10 @@ public sealed class LegacyConverter(DeviceAgent agent, IDeviceEngines engines, D
 
     private static string Status(JsonNode? answer) => answer?["status"]?.GetValue<string>() switch
     {
-        "written" => "Written.",
-        "conflict" => "A conflict was opened: " + string.Join(", ", (answer?["fields"] as JsonArray ?? []).Select(f => f?.GetValue<string>())) + ".",
-        "queued" => "Queued at the engine.",
-        var other => other ?? "Written.",
+        "written" => "Written",
+        "conflict" => "Conflict: " + string.Join(", ", (answer?["fields"] as JsonArray ?? []).Select(f => f?.GetValue<string>())),
+        "queued" => "Queued",
+        var other => other ?? "Written",
     };
 
     private static JsonObject? Parse(string text)
@@ -288,15 +386,16 @@ public sealed class LegacyConverter(DeviceAgent agent, IDeviceEngines engines, D
 
     /// <summary>
     /// The old client's linked config repos and tracked files become <c>upstream</c> records, and each file's stored base
-    /// its <c>upstream-applied</c> record at the store's engine, so the shared profiles keep receiving upstream changes.
+    /// its <c>upstream-applied</c> record at the store's engine, so the shared profiles keep receiving upstream changes
+    /// (no note: nothing for the user to do, R8).
     /// </summary>
-    private Task UpstreamAsync(LegacyState legacy, string store, CancellationToken ct) => ItemAsync("upstream", "Upstream config repos", async () =>
+    private Task UpstreamAsync(LegacyState legacy, string store, CancellationToken ct) => ItemAsync("upstream", "Upstream links", async () =>
     {
         var files = new LegacyConfigRepo(legacy.ConfigRepository).UpstreamFiles();
-        if (files.Count == 0) return ("skipped", "No upstream links.");
+        if (files.Count == 0) return ("skipped", "None");
         var imported = await new Upstream.UpstreamLinks(agent, engines).ImportLegacyAsync(files, store, ct).ConfigureAwait(false);
-        if (imported.Links == 0) return ("skipped", "No upstream links.");
-        return ("done", $"{imported.Links} repo(s), {imported.Tracked} profile(s) tracked" + (imported.LeftOut > 0 ? $", {imported.LeftOut} left out." : "."));
+        if (imported.Links == 0) return ("skipped", "None");
+        return ("done", $"{imported.Tracked} tracked" + (imported.LeftOut > 0 ? $", {imported.LeftOut} left out" : ""));
     });
 
     // ---- the vault ----
@@ -319,8 +418,8 @@ public sealed class LegacyConverter(DeviceAgent agent, IDeviceEngines engines, D
         {
             if (vault.Key is { } key && !await agent.VaultKeyIsAsync(key, ct).ConfigureAwait(false))
             {
-                Report(new UpgradeItem("vault", "Key vault", "failed",
-                    "The account's vault key is not the old one (the account was set up before the old vault could be read); the secrets were not copied."));
+                // The account was set up before the old vault could be read.
+                Report(new UpgradeItem("vault", "Key vault", "failed", "Other vault key; secrets not copied"));
                 return;
             }
 
@@ -339,7 +438,7 @@ public sealed class LegacyConverter(DeviceAgent agent, IDeviceEngines engines, D
                     }
                     catch (AgentFailure failure) when (failure.Code == "exists")
                     {
-                        return ("skipped", "A secret of this name is in the vault already.");
+                        return ("skipped", "Already there");
                     }
                 }).ConfigureAwait(false);
             }
@@ -366,14 +465,15 @@ public sealed class LegacyConverter(DeviceAgent agent, IDeviceEngines engines, D
                 try
                 {
                     var id = DeviceAgent.LegacyBackupKeyPrefix + fp;
-                    if (await agent.RecordExistsAsync(id, ct).ConfigureAwait(false)) return ("skipped", "Kept already.");
+                    if (await agent.RecordExistsAsync(id, ct).ConfigureAwait(false)) return ("skipped", "Already kept");
                     var context = "legacy-backup-key:" + fp;
                     var (epoch, wrapped) = await agent.WrapUnderRootAsync(pkcs8, context, ct).ConfigureAwait(false);
                     await agent.WriteSettingRecordAsync(id, new JsonObject
                     {
                         ["kind"] = "legacy-backup-key", ["fingerprint"] = fp, ["epoch"] = epoch, ["context"] = context, ["wrapped"] = Convert.ToBase64String(wrapped),
                     }, ct).ConfigureAwait(false);
-                    return ("done", "Kept under the account's root key, so old backups stay restorable.");
+                    // Under the account's root key, so old backups stay restorable.
+                    return ("done", "Kept for old backups");
                 }
                 finally
                 {
@@ -412,7 +512,7 @@ public sealed class LegacyConverter(DeviceAgent agent, IDeviceEngines engines, D
                     {
                         await engines.SendAsync(engine, HttpMethod.Put, "device/backup-key", new JsonObject { ["publicKey"] = pem }, ct).ConfigureAwait(false);
                         await engines.PostAsync(engine, $"vms/{Uri.EscapeDataString(instance.Name)}/backup-recipients", null, ct).ConfigureAwait(false);
-                        return ("done", "Enrolled through the engine.");
+                        return ("done", "Enrolled");
                     }
                     catch (AgentFailure failure) when (!instance.Local && failure.Status == 404)
                     {
@@ -428,7 +528,7 @@ public sealed class LegacyConverter(DeviceAgent agent, IDeviceEngines engines, D
 
                 var result = await platform.RunOnVmAsync(Target(legacy, instance), ["construct", "backup", "recipients", "add", "--label", RecipientLabel],
                     Encoding.ASCII.GetBytes(pem), ct).ConfigureAwait(false);
-                return result.Exit == 0 ? ("done", "Enrolled.") : ("pending", $"The VM was not reached or refused (exit {result.Exit}); a later run retries.");
+                return result.Exit == 0 ? ("done", "Enrolled") : ("pending", $"Not reached (exit {result.Exit}); retried later");
             }).ConfigureAwait(false);
         }
     }
@@ -454,11 +554,12 @@ public sealed class LegacyConverter(DeviceAgent agent, IDeviceEngines engines, D
                             await engines.SendAsync(engine, HttpMethod.Put, "device/backup-key", new JsonObject { ["publicKey"] = pem }, ct).ConfigureAwait(false);
                             await engines.SendAsync(engine, HttpMethod.Delete, $"vms/{Uri.EscapeDataString(instance.Name)}/backup-recipients/{fp}", null, ct)
                                 .ConfigureAwait(false);
-                            return ("done", "Removed through the engine.");
+                            return ("done", "Removed");
                         }
                         catch (AgentFailure failure) when (failure.Status == 409)
                         {
-                            return ("pending", "The engine keeps the old key until the account's key is on the VM; a later run retries.");
+                            // The engine keeps the old key until the account's key is on the VM.
+                            return ("pending", "Retried later");
                         }
                         catch (AgentFailure failure) when (!instance.Local && failure.Status == 404)
                         {
@@ -471,7 +572,7 @@ public sealed class LegacyConverter(DeviceAgent agent, IDeviceEngines engines, D
                     }
 
                     var result = await platform.RunOnVmAsync(Target(legacy, instance), ["construct", "backup", "recipients", "remove", fp], null, ct).ConfigureAwait(false);
-                    return result.Exit == 0 ? ("done", "Removed.") : ("pending", $"The VM was not reached (exit {result.Exit}); a later run retries.");
+                    return result.Exit == 0 ? ("done", "Removed") : ("pending", $"Not reached (exit {result.Exit}); retried later");
                 }).ConfigureAwait(false);
             }
         }
@@ -480,8 +581,8 @@ public sealed class LegacyConverter(DeviceAgent agent, IDeviceEngines engines, D
     /// <summary>Why a shared host answered 404 for a VM's backup recipients: it runs the old Construct, or it does not list the VM as the user's.</summary>
     private async Task<string> NotHereAsync(string engine, CancellationToken ct) =>
         await agent.RunsOldStackAsync(engine, ct).ConfigureAwait(false) == true
-            ? "The host runs the old Construct; this VM's backup keys stay as they are until its admin updates it."
-            : "The host does not list this VM as yours; its backup recipients are left alone.";
+            ? "Old Construct, unchanged"
+            : "Not yours there; left alone";
 
     /// <summary>The engine that runs <paramref name="instance"/> at this device: this PC's for a local VM, its host's for a remote one.</summary>
     private string? EngineOf(LegacyInstance instance, string? localEngine) =>
@@ -491,17 +592,20 @@ public sealed class LegacyConverter(DeviceAgent agent, IDeviceEngines engines, D
 
     // ---- local VMs: the switch-over, last ----
 
-    private async Task LocalVmsAsync(LegacyState legacy, IReadOnlyList<LegacyInstance> instances, string? localEngine, CancellationToken ct)
+    private async Task LocalVmsAsync(LegacyState legacy, IReadOnlyList<LegacyInstance> instances, string? localEngine, double from, CancellationToken ct)
     {
-        foreach (var instance in instances.Where(i => i.Local))
+        var local = instances.Where(i => i.Local).ToArray();
+        for (var i = 0; i < local.Length; i++)
         {
+            var instance = local[i];
+            Progress(from + (ReprovisionFrom - from) * i / local.Length);
             await ItemAsync("vm:" + instance.Name, "VM " + instance.Name, async () =>
             {
-                if (localEngine is null) return ("failed", "No engine on this PC: install it first (the dialog's first step).");
+                if (localEngine is null) return ("failed", "No engine on this PC");
                 // No check for the VM at the engine: a failed adoption leaves it registered with its guest not yet
                 // switched, and the adoption job resumes the same VM. Only an adoption that succeeded is done.
                 var keyFile = legacy.KeyFile(instance);
-                if (!File.Exists(keyFile)) return ("failed", "The old client's SSH key for this VM is missing (~/.ssh).");
+                if (!File.Exists(keyFile)) return ("failed", "SSH key missing in ~/.ssh");
                 var body = new JsonObject
                 {
                     ["settings"] = instance.Settings?.DeepClone(), ["instanceState"] = instance.InstanceState?.DeepClone(), ["sshPrivateKey"] = File.ReadAllText(keyFile),
@@ -520,7 +624,8 @@ public sealed class LegacyConverter(DeviceAgent agent, IDeviceEngines engines, D
                 var (state, _) = await WaitForJobAsync(localEngine, job, AdoptTimeout, TimeSpan.FromMilliseconds(500), ct).ConfigureAwait(false);
                 if (instance.Settings?["micPassthrough"] is JsonValue mic && mic.TryGetValue<bool>(out var on) && on)
                     settings.Update(s => s.Mic.Contains($"{localEngine}/{instance.Name}") ? s : s with { Mic = [.. s.Mic, $"{localEngine}/{instance.Name}"] });
-                return state == "succeeded" ? ("done", "Switched over to the engine; it kept running.") : ("failed", $"The adoption job ended {state}; see the job's log, then retry.");
+                // It kept running.
+                return state == "succeeded" ? ("done", "Switched over") : ("failed", $"Adoption {state}; see its log");
             }).ConfigureAwait(false);
         }
     }
@@ -532,13 +637,9 @@ public sealed class LegacyConverter(DeviceAgent agent, IDeviceEngines engines, D
     /// </summary>
     private static void DeleteInstallImages(LegacyState legacy)
     {
-        // Only folders inside the old client's own root (%LOCALAPPDATA%\The-Construct): an install named with --from
-        // elsewhere (an extracted copy in Downloads) is the user's, and so are its images.
-        var root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(legacy.Root)) + Path.DirectorySeparatorChar;
-        foreach (var folder in new[] { legacy.InstallFolder }.Concat(legacy.OtherInstallFolders))
+        // An install named with --from elsewhere (an extracted copy in Downloads) is the user's, and so are its images.
+        foreach (var folder in legacy.OwnInstallFolders())
         {
-            if (folder is null || !Directory.Exists(folder)) continue;
-            if (!Path.GetFullPath(folder).StartsWith(root, OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal)) continue;
             foreach (var image in Directory.EnumerateFiles(folder, "*-autoinstall.iso", SearchOption.TopDirectoryOnly))
             {
                 try { File.Delete(image); }
@@ -556,37 +657,65 @@ public sealed class LegacyConverter(DeviceAgent agent, IDeviceEngines engines, D
     /// the agent's job route, which adds this device's clone credentials. A failure is this row's alone: Move over
     /// again retries it, as Reprovision on the VM's page would.
     /// </summary>
+    /// <summary>Where the reprovisions start on the bar: everything before them is quick.</summary>
+    private const double ReprovisionFrom = 20;
+
+    private const double ReprovisionTo = 98;
+
     private async Task ReprovisionAsync(IReadOnlyList<LegacyInstance> instances, string? localEngine, CancellationToken ct)
     {
         if (localEngine is null) return;
-        foreach (var instance in instances.Where(i => i.Local && _done.Contains("vm:" + i.Name)))
+        var local = instances.Where(i => i.Local).ToArray();
+        for (var i = 0; i < local.Length; i++)
         {
-            await ItemAsync("reprovision:" + instance.Name, $"VM {instance.Name} on the new version", async () =>
+            var instance = local[i];
+            var at = i;
+            if (!_done.Contains("vm:" + instance.Name)) continue;
+            var id = "reprovision:" + instance.Name;
+            var label = $"VM {instance.Name} on the new version";
+            Progress(ReprovisionFrom + (ReprovisionTo - ReprovisionFrom) * at / local.Length);
+            await ItemAsync(id, label, async () =>
             {
                 var answer = await agent.StartVmJobAsync(localEngine, instance.Name,
                     new JsonObject { ["kind"] = "provision", ["requestId"] = Guid.NewGuid().ToString("D") }, ct).ConfigureAwait(false);
                 var body = Parse(answer.Body);
                 if (answer.Status is < 200 or >= 300)
-                    return ("failed", "The engine did not start the reprovision: " + (body?["title"]?.GetValue<string>() ?? $"it answered {answer.Status}") + ".");
+                    return ("failed", "Not started: " + (body?["title"]?.GetValue<string>() ?? $"the engine answered {answer.Status}"));
                 var job = body?["jobId"]?.GetValue<string>() ?? throw new AgentFailure(502, "provision-failed", "The engine started no reprovision job.");
-                var (state, error) = await WaitForJobAsync(localEngine, job, ReprovisionTimeout, TimeSpan.FromSeconds(2), ct).ConfigureAwait(false);
+                // The row shows the job's own percentage and step (R7); the bar moves with it.
+                (int, string)? shown = null;
+                var (state, error) = await WaitForJobAsync(localEngine, job, ReprovisionTimeout, TimeSpan.FromSeconds(2), ct, read =>
+                {
+                    if (read["overall"] is not JsonObject overall || overall["percent"] is not JsonValue p || !p.TryGetValue<int>(out var percent)) return;
+                    var step = overall["label"] is JsonValue l && l.TryGetValue<string>(out var text) && text.Length > 0 ? text : "Reprovisioning";
+                    if (shown == (percent, step)) return;
+                    shown = (percent, step);
+                    Progress(ReprovisionFrom + (ReprovisionTo - ReprovisionFrom) * (at + Math.Clamp(percent, 0, 100) / 100.0) / local.Length);
+                    Report(new UpgradeItem(id, label, "running", step, Math.Clamp(percent, 0, 100)));
+                }).ConfigureAwait(false);
+                // The VM kept running; Move over again retries a failure, as Reprovision on the VM's page would.
                 return state == "succeeded"
-                    ? ("done", "Reprovisioned with the new version.")
-                    : ("failed", $"The reprovision ended {state}{(error is { Length: > 0 } ? ": " + error : "")}. Move over again to retry, or Reprovision from the VM's page.");
-            }, running: "Reprovisioning with the new version; the VM keeps running.").ConfigureAwait(false);
+                    ? ("done", "On the new version")
+                    : ("failed", $"Reprovision {state}{(error is { Length: > 0 } ? ": " + error : "")}");
+            }, running: "Starting").ConfigureAwait(false);
         }
     }
 
-    /// <summary>Polls a job until it ends or <paramref name="limit"/> passes, at most every <paramref name="poll"/>; its end state and error.</summary>
-    private async Task<(string State, string? Error)> WaitForJobAsync(string engine, string job, TimeSpan limit, TimeSpan poll, CancellationToken ct)
+    /// <summary>
+    /// Polls a job until it ends or <paramref name="limit"/> passes, at most every <paramref name="poll"/>; its end state and error.
+    /// <paramref name="read"/> sees each answer while it runs.
+    /// </summary>
+    private async Task<(string State, string? Error)> WaitForJobAsync(string engine, string job, TimeSpan limit, TimeSpan poll, CancellationToken ct,
+        Action<JsonNode>? read = null)
     {
         var until = DateTimeOffset.UtcNow + limit;
         var wait = TimeSpan.FromMilliseconds(Math.Min(250, poll.TotalMilliseconds));
         while (true)
         {
-            var read = await engines.GetAsync(engine, "jobs/" + job, ct).ConfigureAwait(false);
-            var state = read?["state"]?.GetValue<string>() ?? "unknown";
-            if (state is not ("queued" or "running")) return (state, read?["error"] is JsonValue e && e.TryGetValue<string>(out var text) ? text : null);
+            var answer = await engines.GetAsync(engine, "jobs/" + job, ct).ConfigureAwait(false);
+            var state = answer?["state"]?.GetValue<string>() ?? "unknown";
+            if (state is not ("queued" or "running")) return (state, answer?["error"] is JsonValue e && e.TryGetValue<string>(out var text) ? text : null);
+            if (answer is not null) read?.Invoke(answer);
             if (DateTimeOffset.UtcNow > until) return ("still running", null);
             await Task.Delay(wait, ct).ConfigureAwait(false);
             wait = TimeSpan.FromMilliseconds(Math.Min(wait.TotalMilliseconds * 2, poll.TotalMilliseconds));

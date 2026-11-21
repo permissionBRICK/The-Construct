@@ -6,6 +6,7 @@ using Constructd.Core.Abstractions;
 using Constructd.Core.Domain;
 using Constructd.Fakes;
 using Constructd.Store.Records;
+using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace Construct.Agent.Tests;
@@ -94,7 +95,7 @@ public sealed class UpgradeTests
         Assert.Contains(view["notes"]!.AsArray(), n => n!.GetValue<string>().Contains("leases end", StringComparison.Ordinal));
         // The upstream links work in the new stack: no note about them (R8).
         Assert.DoesNotContain(view["notes"]!.AsArray(), n => n!.GetValue<string>().Contains("upstream", StringComparison.OrdinalIgnoreCase));
-        Assert.Equal("1 repo(s), 1 profile(s) tracked.", view["items"]!.AsArray().Single(i => i!["id"]!.GetValue<string>() == "upstream")!["message"]!.GetValue<string>());
+        Assert.Equal("1 tracked", view["items"]!.AsArray().Single(i => i!["id"]!.GetValue<string>() == "upstream")!["message"]!.GetValue<string>());
         // Before its adoption no engine runs the VM: the account key goes on over the old client's SSH. The adoption
         // enrols it as well; after it the old key comes off through the engine, which checked the account key is there.
         Assert.Equal(["agent-vm:construct backup recipients add --label construct-account"], rig.Platform.VmCalls.Select(c => c.Instance + ":" + c.Command));
@@ -141,6 +142,168 @@ public sealed class UpgradeTests
         // A third run starts no job.
         await rig.ConvertAsync();
         Assert.Equal(2, rig.Guest.Provisions);
+    }
+
+    [Fact]
+    public async Task Move_over_shows_the_reprovision_in_its_row_and_one_bar_for_the_whole_move()
+    {
+        // R7: the row carries the job's own percentage and step; the dialog has one bar for everything.
+        await using var rig = await UpgradeRig.CreateAsync(SingleVm);
+        await rig.EngineStepAsync();
+        await rig.SetupAsync();
+        var hold = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        rig.Guest.HoldProvision = hold;
+
+        await rig.Agent.PostAsync("api/upgrade/convert", null, HttpStatusCode.Accepted);
+        JsonNode? row = null, progress = null, view = null;
+        var until = DateTime.UtcNow + TimeSpan.FromSeconds(20);
+        while (row?["percent"] is null)
+        {
+            if (DateTime.UtcNow > until)
+            {
+                var jobs = await rig.Local.Services.GetRequiredService<IJobQueryStore>().ListAsync(CancellationToken.None);
+                Assert.Fail("the reprovision row never showed the job's progress: " + view?.ToJsonString() + "\n" + string.Join("\n", jobs.Select(j => j.Kind + " " + j.State + " " + string.Join(" | ", j.Progress.Select(p => p.Text + "/" + p.Overall + "/" + p.Label)))));
+            }
+
+            await Task.Delay(50);
+            view = await rig.Agent.GetAsync("api/upgrade");
+            row = view["items"]!.AsArray().SingleOrDefault(i => i!["id"]!.GetValue<string>() == "reprovision:agent-vm");
+            progress = view["progress"];
+        }
+
+        Assert.Equal("running", row!["state"]!.GetValue<string>());
+        Assert.False(string.IsNullOrEmpty(row["message"]?.GetValue<string>()));
+        Assert.InRange(row["percent"]!.GetValue<int>(), 0, 100);
+        Assert.NotNull(progress);
+        Assert.InRange(progress!["percent"]!.GetValue<int>(), 20, 99);
+
+        hold.SetResult();
+        await rig.Agent.Host.Upgrade.Work;
+        var done = await rig.Agent.GetAsync("api/upgrade");
+        Assert.Equal("converted", done["stage"]!.GetValue<string>());
+        Assert.True(done["progress"] is null, "the bar goes with the running step");
+        row = done["items"]!.AsArray().Single(i => i!["id"]!.GetValue<string>() == "reprovision:agent-vm")!;
+        Assert.Equal(("done", "On the new version"), (row["state"]!.GetValue<string>(), row["message"]!.GetValue<string>()));
+    }
+
+    [Fact]
+    public async Task After_the_move_the_old_install_folders_scripts_act_only_through_the_agent()
+    {
+        // R14: an old T3 Code Desktop or panel must not run the old client's reprovision against a moved VM.
+        await using var rig = await UpgradeRig.CreateAsync(SingleVm);
+        var folder = rig.Fixture.InstallFolder;
+        string[] old = ["Provision-AgentVM.ps1", "Create-AgentVM.ps1", "Update-T3Code.ps1", "Get-ConstructT3PairingLink.ps1", "Update-Construct.ps1", "install.ps1"];
+        foreach (var name in old) await File.WriteAllTextAsync(Path.Combine(folder, name), "# the old client's " + name);
+        await rig.EngineStepAsync();
+        await rig.SetupAsync();
+
+        // Not before the move is complete.
+        rig.Guest.FailProvisions = 1;
+        Assert.NotEqual("converted", (await rig.ConvertAsync())["stage"]!.GetValue<string>());
+        Assert.Equal("# the old client's Provision-AgentVM.ps1", await File.ReadAllTextAsync(Path.Combine(folder, "Provision-AgentVM.ps1")));
+
+        Assert.Equal("converted", (await rig.ConvertAsync())["stage"]!.GetValue<string>());
+        var repo = RepoRoot();
+        foreach (var name in OldInstallScripts.Shims)
+            Assert.Equal(await File.ReadAllBytesAsync(Path.Combine(repo, name)), await File.ReadAllBytesAsync(Path.Combine(folder, name)));
+        Assert.Equal(await File.ReadAllBytesAsync(Path.Combine(repo, "lib", "Construct.AgentShim.ps1")), await File.ReadAllBytesAsync(Path.Combine(folder, "lib", "Construct.AgentShim.ps1")));
+        foreach (var name in new[] { "Provision-AgentVM.ps1", "Create-AgentVM.ps1" })
+        {
+            var text = await File.ReadAllTextAsync(Path.Combine(folder, name));
+            Assert.Contains("moved to the new Construct", text, StringComparison.Ordinal);
+            Assert.Contains("exit 1", text, StringComparison.Ordinal);
+            Assert.DoesNotContain(text, c => c > 127);
+        }
+
+        // An install moved before this version, or a script Windows held then: the agent's start puts them in place.
+        await File.WriteAllTextAsync(Path.Combine(folder, "Provision-AgentVM.ps1"), "# the old client's again");
+        await rig.RestartAsync();
+        await FakeDevice.WaitAsync(() => File.ReadAllText(Path.Combine(folder, "Provision-AgentVM.ps1")).Contains("moved to the new Construct", StringComparison.Ordinal),
+            "the old script replaced at start");
+    }
+
+    [Fact]
+    public async Task An_old_script_that_cannot_be_replaced_is_named_in_the_notes_and_replaced_once_it_can_be()
+    {
+        // Review of R14: a held (or read-only) Provision-AgentVM.ps1 stayed runnable against the moved VM, and nothing said so.
+        await using var rig = await UpgradeRig.CreateAsync(SingleVm);
+        var provision = Path.Combine(rig.Fixture.InstallFolder, "Provision-AgentVM.ps1");
+        await File.WriteAllTextAsync(provision, "# the old client's Provision-AgentVM.ps1");
+        await rig.EngineStepAsync();
+        await rig.SetupAsync();
+        rig.Agent.Host.Upgrade.ScriptsRetry = TimeSpan.FromMilliseconds(50);
+        bool Moved() => File.ReadAllText(provision).Contains("moved to the new Construct", StringComparison.Ordinal);
+        async Task<string[]> NotesAsync() => (await rig.Agent.GetAsync("api/upgrade"))["notes"]!.AsArray().Select(n => n!.GetValue<string>()).ToArray();
+
+        // Held by another program (Windows refuses the write; .NET's own lock does the same here).
+        using (new FileStream(provision, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+        {
+            Assert.Equal("converted", (await rig.ConvertAsync())["stage"]!.GetValue<string>());
+            var note = Assert.Single(await NotesAsync(), n => n.StartsWith(OldInstallScripts.LeftNote, StringComparison.Ordinal));
+            Assert.Contains(provision, note, StringComparison.Ordinal);
+            Assert.Equal([provision], rig.Agent.Host.Upgrade.Bridge.Read().ScriptsLeft);
+        }
+
+        // Let go: the retry replaces it, and the note goes.
+        await FakeDevice.WaitAsync(Moved, "the held script replaced by the retry");
+        await rig.Agent.Host.Upgrade.Scripts.WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.Empty(rig.Agent.Host.Upgrade.Bridge.Read().ScriptsLeft);
+        Assert.DoesNotContain(await NotesAsync(), n => n.StartsWith(OldInstallScripts.LeftNote, StringComparison.Ordinal));
+
+        // Held at the agent's start: named again, and the next start replaces it.
+        await File.WriteAllTextAsync(provision, "# the old client's again");
+        using (new FileStream(provision, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+        {
+            await rig.RestartAsync();
+            await FakeDevice.WaitAsync(() => rig.Agent.Host.Upgrade.Bridge.Read().ScriptsLeft.Count == 1, "the held script named at start");
+            Assert.Contains(await NotesAsync(), n => n.StartsWith(OldInstallScripts.LeftNote, StringComparison.Ordinal));
+        }
+
+        await rig.RestartAsync();
+        await rig.Agent.Host.Upgrade.Scripts.WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.True(Moved());
+        Assert.DoesNotContain(await NotesAsync(), n => n.StartsWith(OldInstallScripts.LeftNote, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task A_linked_old_script_or_a_linked_folder_is_not_written_through()
+    {
+        // Review of R14: the replacement followed links, so a file outside the old install was overwritten.
+        await using var rig = await UpgradeRig.CreateAsync(SingleVm);
+        var folder = rig.Fixture.InstallFolder;
+        var outside = Path.Combine(rig.Fixture.Home, "elsewhere");
+        Directory.CreateDirectory(outside);
+        var mine = Path.Combine(outside, "mine.ps1");
+        var update = Path.Combine(outside, "update.ps1");
+        await File.WriteAllTextAsync(mine, "# not Construct's");
+        await File.WriteAllTextAsync(update, "# not Construct's either");
+        File.CreateSymbolicLink(Path.Combine(folder, "Provision-AgentVM.ps1"), mine);
+        File.CreateSymbolicLink(Path.Combine(folder, "Update-T3Code.ps1"), update);
+        // A folder on the way linked elsewhere: the shim library would land there.
+        if (Directory.Exists(Path.Combine(folder, "lib"))) Directory.Delete(Path.Combine(folder, "lib"), true);
+        Directory.CreateSymbolicLink(Path.Combine(folder, "lib"), outside);
+        await File.WriteAllTextAsync(Path.Combine(folder, "Create-AgentVM.ps1"), "# the old client's Create-AgentVM.ps1");
+        await rig.EngineStepAsync();
+        await rig.SetupAsync();
+
+        Assert.Equal("converted", (await rig.ConvertAsync())["stage"]!.GetValue<string>());
+
+        Assert.Equal("# not Construct's", await File.ReadAllTextAsync(mine));
+        Assert.Equal("# not Construct's either", await File.ReadAllTextAsync(update));
+        Assert.Equal(["mine.ps1", "update.ps1"], Directory.EnumerateFiles(outside).Select(f => Path.GetFileName(f)).Order(StringComparer.Ordinal).ToArray());
+        // A regular script beside them is replaced as before; the linked ones are named.
+        Assert.Contains("moved to the new Construct", await File.ReadAllTextAsync(Path.Combine(folder, "Create-AgentVM.ps1")), StringComparison.Ordinal);
+        var left = rig.Agent.Host.Upgrade.Bridge.Read().ScriptsLeft;
+        Assert.Equal(new[] { "Provision-AgentVM.ps1", "Update-T3Code.ps1", Path.Combine("lib", "Construct.AgentShim.ps1") }.Select(n => Path.Combine(folder, n)).Order(StringComparer.Ordinal).ToArray(),
+            left.Order(StringComparer.Ordinal).ToArray());
+    }
+
+    /// <summary>The checkout this test runs from: the shims ship from its root.</summary>
+    private static string RepoRoot()
+    {
+        for (var dir = new DirectoryInfo(AppContext.BaseDirectory); dir is not null; dir = dir.Parent)
+            if (File.Exists(Path.Combine(dir.FullName, "Update-T3Code.ps1")) && Directory.Exists(Path.Combine(dir.FullName, "agent"))) return dir.FullName;
+        throw new InvalidOperationException("No checkout above the test.");
     }
 
     [Fact]
@@ -238,6 +401,9 @@ public sealed class UpgradeTests
         }, vms: ["agent-vm", "work"]);
         var before = rig.Fixture.Digests();
 
+        await rig.Agent.GetAsync("api/upgrade");
+        await rig.Agent.Host.Upgrade.Probe;
+        Assert.Empty((await rig.Agent.GetAsync("api/upgrade"))["found"]!["stayOld"]!.AsArray());
         await rig.EngineStepAsync();
         // The shared host was added for sign-in with the old pin and token.
         var remoteView = (await rig.Agent.GetAsync("api/state"))["engines"]!.AsArray().Single(e => e!["url"]!.GetValue<string>() == remote.Url)!;
@@ -316,7 +482,7 @@ public sealed class UpgradeTests
         Assert.NotEqual("converted", view["stage"]!.GetValue<string>());
         var failed = view["items"]!.AsArray().Single(i => i!["id"]!.GetValue<string>() == "vault")!;
         Assert.Equal("failed", failed["state"]!.GetValue<string>());
-        Assert.Contains("not the old one", failed["message"]!.GetValue<string>(), StringComparison.Ordinal);
+        Assert.Equal("Other vault key; secrets not copied", failed["message"]!.GetValue<string>());
         Assert.Empty((await rig.Agent.GetAsync("api/vault/secrets")).AsArray());
     }
 
@@ -521,19 +687,242 @@ public sealed class UpgradeTests
             f.RemoteHost(remote.Url, remote.Pin, remoteToken);
         });
 
+        // Before the engine step the dialog asks the host with the old pin and token: its VM stays on the old Construct (R1).
+        await rig.Agent.GetAsync("api/upgrade");
+        await rig.Agent.Host.Upgrade.Probe;
+        Assert.Equal(["far"], (await rig.Agent.GetAsync("api/upgrade"))["found"]!["stayOld"]!.AsArray().Select(n => n!.GetValue<string>()));
+
         await rig.EngineStepAsync();
         Assert.Equal(["127.0.0.1"], (await rig.Agent.GetAsync("api/upgrade"))["oldHosts"]!.AsArray().Select(n => n!.GetValue<string>()));
         await rig.SetupAsync();
         var view = await rig.ConvertAsync();
         Assert.Equal(["127.0.0.1"], view["oldHosts"]!.AsArray().Select(n => n!.GetValue<string>()));
-        // Its VM's backup keys are left alone because the host runs the old Construct, not because it disowns the VM.
+        // A few words (R6): the host and its VM's backup keys are left alone because the host runs the old Construct, not
+        // because it disowns the VM.
+        var host = view["items"]!.AsArray().Single(i => i!["id"]!.GetValue<string>().StartsWith("host:", StringComparison.Ordinal))!;
+        Assert.Equal("Old Construct, unchanged", host["message"]!.GetValue<string>());
         var far = view["items"]!.AsArray().Single(i => i!["id"]!.GetValue<string>() == "recipient:far")!;
         Assert.Equal("skipped", far["state"]!.GetValue<string>());
-        Assert.Contains("runs the old Construct", far["message"]!.GetValue<string>(), StringComparison.Ordinal);
+        Assert.Equal("Old Construct, unchanged", far["message"]!.GetValue<string>());
         var added = (await rig.Agent.GetAsync("api/state"))["engines"]!.AsArray().Single(e => e!["url"]!.GetValue<string>() == remote.Url)!;
         Assert.False(added["enrolled"]!.GetValue<bool>());
         Assert.True(added["signedIn"]!.GetValue<bool>());
         rig.AssertNoSecretInAgentFiles(remoteToken);
+    }
+
+    [Fact]
+    public async Task A_shared_host_on_the_old_stack_that_its_user_administers_moves_with_the_PC_when_it_offers_the_new_version()
+    {
+        // R5 (owner, 2026-11-21): Move over brings every Construct over; the old host through its own update API.
+        var old = new OldUntilStaged();
+        using var remote = new EngineHost(services => services.AddSingleton<Microsoft.AspNetCore.Hosting.IStartupFilter>(old));
+        var remoteToken = await remote.AddUserAsync("alice", Role.Admin);
+        await using var rig = await UpgradeRig.CreateAsync(f =>
+        {
+            SingleVm(f);
+            f.SshKey("construct_far_ed25519");
+            f.Instances(new JsonObject
+            {
+                ["version"] = 1, ["defaultInstance"] = "agent-vm",
+                ["instances"] = new JsonObject
+                {
+                    ["far"] = new JsonObject
+                    {
+                        ["backend"] = "hyperv-remote", ["sshHost"] = "127.0.0.1", ["sshPort"] = 2201,
+                        ["service"] = new JsonObject { ["url"] = remote.Url, ["auth"] = "token" },
+                    },
+                },
+            });
+            f.RemoteHost(remote.Url, remote.Pin, remoteToken);
+        });
+        rig.Agent.Host.Upgrade.ShipsAgent = (_, tag, _) => Task.FromResult(tag == "host-" + OldUntilStaged.NewCommit);
+        rig.Agent.Host.Upgrade.OldHostPoll = TimeSpan.FromMilliseconds(50);
+
+        // It moves, so its VM does not stay on the old Construct (R1).
+        await rig.Agent.GetAsync("api/upgrade");
+        await rig.Agent.Host.Upgrade.Probe;
+        Assert.Empty((await rig.Agent.GetAsync("api/upgrade"))["found"]!["stayOld"]!.AsArray());
+        Assert.False(old.Staged, "asking stages nothing");
+
+        await rig.EngineStepAsync();
+        await rig.SetupAsync();
+        var view = await rig.ConvertAsync();
+        Assert.Equal("converted", view["stage"]!.GetValue<string>());
+        Assert.True(old.Staged);
+        string Message(string prefix) => view["items"]!.AsArray().Single(i => i!["id"]!.GetValue<string>().StartsWith(prefix, StringComparison.Ordinal))!["message"]!.GetValue<string>();
+        Assert.Equal("Old Construct; moves next", Message("host:"));
+        // Enrolled where the host can enrol this device; a second engine cannot while the store is this PC's (E12): signed in.
+        Assert.Contains(Message("host-update:"), new[] { "Moved, enrolled", "Moved, signed in" });
+        Assert.Equal("None of yours", Message("host-vms:"));
+        Assert.Empty(view["oldHosts"]!.AsArray());
+        var added = (await rig.Agent.GetAsync("api/state"))["engines"]!.AsArray().Single(e => e!["url"]!.GetValue<string>() == remote.Url)!;
+        Assert.True(added["enrolled"]!.GetValue<bool>() || added["signedIn"]!.GetValue<bool>());
+        // It answers as the new stack now: the agent learned its identity when it connected there.
+        Assert.False(string.IsNullOrEmpty(added["engineId"]?.GetValue<string>()), added.ToJsonString());
+
+        // A second run moves nothing again and starts no reprovision there.
+        var again = await rig.ConvertAsync();
+        Assert.DoesNotContain(again["items"]!.AsArray(), i => i!["id"]!.GetValue<string>().StartsWith("host-update:", StringComparison.Ordinal));
+        Assert.Equal("skipped", again["items"]!.AsArray().Single(i => i!["id"]!.GetValue<string>().StartsWith("host-vms:", StringComparison.Ordinal))!["state"]!.GetValue<string>());
+        Assert.Equal(1, old.Stages);
+    }
+
+    [Fact]
+    public async Task A_shared_host_whose_update_does_not_go_through_is_named_in_the_notes_until_it_moves()
+    {
+        // Review of R5: the row was pending, the move ended as "Moved over", and the converted overview shows no rows.
+        var old = new OldUntilStaged { Refusals = 1 };
+        using var remote = new EngineHost(services => services.AddSingleton<Microsoft.AspNetCore.Hosting.IStartupFilter>(old));
+        var remoteToken = await remote.AddUserAsync("alice", Role.Admin);
+        await using var rig = await UpgradeRig.CreateAsync(f =>
+        {
+            SingleVm(f);
+            f.SshKey("construct_far_ed25519");
+            f.Instances(new JsonObject
+            {
+                ["version"] = 1, ["defaultInstance"] = "agent-vm",
+                ["instances"] = new JsonObject
+                {
+                    ["far"] = new JsonObject
+                    {
+                        ["backend"] = "hyperv-remote", ["sshHost"] = "127.0.0.1", ["sshPort"] = 2201,
+                        ["service"] = new JsonObject { ["url"] = remote.Url, ["auth"] = "token" },
+                    },
+                },
+            });
+            f.RemoteHost(remote.Url, remote.Pin, remoteToken);
+        });
+        rig.Agent.Host.Upgrade.ShipsAgent = (_, tag, _) => Task.FromResult(tag == "host-" + OldUntilStaged.NewCommit);
+        rig.Agent.Host.Upgrade.OldHostPoll = TimeSpan.FromMilliseconds(50);
+        await rig.EngineStepAsync();
+        await rig.SetupAsync();
+
+        var view = await rig.ConvertAsync();
+        Assert.Equal("converted", view["stage"]!.GetValue<string>());
+        var row = view["items"]!.AsArray().Single(i => i!["id"]!.GetValue<string>().StartsWith("host-update:", StringComparison.Ordinal))!;
+        Assert.Equal("pending", row["state"]!.GetValue<string>());
+        Assert.Contains("Host 127.0.0.1 not moved: Update not started (409). Update tries again.", view["notes"]!.AsArray().Select(n => n!.GetValue<string>()));
+
+        // Move over again: it moves now, and the note goes.
+        var again = await rig.ConvertAsync();
+        Assert.Equal("done", again["items"]!.AsArray().Single(i => i!["id"]!.GetValue<string>().StartsWith("host-update:", StringComparison.Ordinal))!["state"]!.GetValue<string>());
+        Assert.DoesNotContain(again["notes"]!.AsArray(), n => n!.GetValue<string>().StartsWith(LegacyConverter.HostNote("127.0.0.1"), StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task The_dialog_never_asks_an_old_host_over_plain_http()
+    {
+        // Review of R1: over http:// the pin is never checked, so the probe sent the old token in the clear.
+        var listener = new System.Net.Sockets.TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        var url = $"http://127.0.0.1:{((IPEndPoint)listener.LocalEndpoint).Port}";
+        var received = new System.Text.StringBuilder();
+        var serve = Task.Run(async () =>
+        {
+            try
+            {
+                while (true)
+                {
+                    using var client = await listener.AcceptTcpClientAsync();
+                    var stream = client.GetStream();
+                    var buffer = new byte[8192];
+                    var read = await stream.ReadAsync(buffer);
+                    lock (received) received.Append(System.Text.Encoding.ASCII.GetString(buffer, 0, read));
+                    await stream.WriteAsync("HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"u8.ToArray());
+                }
+            }
+            catch (Exception ex) when (ex is System.Net.Sockets.SocketException or ObjectDisposedException or IOException)
+            {
+            }
+        });
+        try
+        {
+            await using var rig = await UpgradeRig.CreateAsync(f =>
+            {
+                SingleVm(f);
+                f.SshKey("construct_far_ed25519");
+                f.Instances(new JsonObject
+                {
+                    ["version"] = 1, ["defaultInstance"] = "agent-vm",
+                    ["instances"] = new JsonObject
+                    {
+                        ["far"] = new JsonObject
+                        {
+                            ["backend"] = "hyperv-remote", ["sshHost"] = "127.0.0.1", ["sshPort"] = 2201,
+                            ["service"] = new JsonObject { ["url"] = url, ["auth"] = "token" },
+                        },
+                    },
+                });
+                f.RemoteHost(url, new string('A', 64), "old-host-token");
+            });
+
+            await rig.Agent.GetAsync("api/upgrade");
+            await rig.Agent.Host.Upgrade.Probe;
+            lock (received) Assert.Equal("", received.ToString());
+            Assert.Empty((await rig.Agent.GetAsync("api/upgrade"))["found"]!["stayOld"]!.AsArray());
+        }
+        finally
+        {
+            listener.Stop();
+            await serve;
+        }
+    }
+
+    /// <summary>
+    /// A host of the old stack (no <c>/engine</c>, no <c>/device/backup-key</c>) whose own update API offers the new version;
+    /// staging it with auto-apply turns it into the new stack (the real engine behind).
+    /// </summary>
+    private sealed class OldUntilStaged : Microsoft.AspNetCore.Hosting.IStartupFilter
+    {
+        public const string NewCommit = "b62124e768e638e339c21fa7c93fb88e5d522843";
+
+        public bool Staged => Stages > 0;
+
+        public int Stages { get; private set; }
+
+        /// <summary>How many stage requests it refuses first (409).</summary>
+        public int Refusals { get; set; }
+
+        public Action<Microsoft.AspNetCore.Builder.IApplicationBuilder> Configure(Action<Microsoft.AspNetCore.Builder.IApplicationBuilder> next) => app =>
+        {
+            app.Use(call => context =>
+            {
+                if (Staged) return call(context);
+                var path = context.Request.Path;
+                if (path.StartsWithSegments("/api/v1/engine") || path.StartsWithSegments("/api/v1/device/backup-key"))
+                {
+                    context.Response.StatusCode = 404;
+                    return Task.CompletedTask;
+                }
+
+                if (path == "/api/v1/host/updates/status")
+                    return context.Response.WriteAsync("""{"supportsAutoApply":true,"current":null}""");
+                if (path == "/api/v1/host/updates/check")
+                    return context.Response.WriteAsync(new JsonObject
+                    {
+                        ["installed"] = new JsonObject { ["commit"] = new string('a', 40) },
+                        ["latest"] = new JsonObject { ["commit"] = NewCommit, ["releaseTag"] = "host-" + NewCommit, ["compatible"] = true },
+                    }.ToJsonString());
+                if (path == "/api/v1/host/updates/stage")
+                {
+                    if (Refusals > 0)
+                    {
+                        Refusals--;
+                        context.Response.StatusCode = 409;
+                        return context.Response.WriteAsync("""{"code":"update-busy"}""");
+                    }
+
+                    Stages++;
+                    // The update installs the offered release: the host answers healthy with its commit.
+                    ((FakeReleaseInfo)context.RequestServices.GetRequiredService<IReleaseInfo>()).Installed = new InstalledRelease(NewCommit, "1.0.0-test", null, "test");
+                    context.Response.StatusCode = 202;
+                    return context.Response.WriteAsync("""{"updateId":"u1","state":"staged"}""");
+                }
+
+                return call(context);
+            });
+            next(app);
+        };
     }
 
     /// <summary>An engine without the new stack's identity route, as a host of the old stack answers.</summary>

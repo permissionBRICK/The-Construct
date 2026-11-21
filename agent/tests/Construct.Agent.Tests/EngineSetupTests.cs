@@ -95,6 +95,39 @@ public sealed class EngineSetupTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task The_setup_shows_one_percentage_and_a_few_words_while_it_downloads_installs_and_starts()
+    {
+        // R2 (owner, 2026-11-21): "Working" for a minute and a half was too little.
+        await StartAsync();
+        var seen = new List<Construct.Agent.Upgrade.StepProgress>();
+        _agent.Host.EngineSetup.Progressed = p => { lock (seen) seen.Add(p); };
+        Installer("done");
+        var installer = _platform.Elevated!;
+        Construct.Agent.Upgrade.StepProgress? during = null;
+        _platform.Elevated = (program, arguments) =>
+        {
+            during = _agent.Host.EngineSetup.View().Progress;
+            return installer(program, arguments);
+        };
+
+        var view = await SetupAsync();
+
+        Assert.Equal("done", view["state"]!.GetValue<string>());
+        Assert.True(view["progress"] is null, "the bar goes with the run");
+        Assert.Equal(new Construct.Agent.Upgrade.StepProgress(55, "Installing"), during);
+        Assert.Equal(["Downloading engine", "Installing", "Starting"], seen.Select(p => p.Label).Distinct());
+        Assert.Equal(seen.Select(p => p.Percent).Order(), seen.Select(p => p.Percent));
+    }
+
+    [Fact]
+    public void The_install_part_of_the_bar_follows_the_installers_steps_in_its_log()
+    {
+        Assert.Equal(55, LocalEngineSetup.InstallPercent(""));
+        Assert.Equal(55 + 35 * 3 / 12, LocalEngineSetup.InstallPercent("\n==> Checking the inputs\n    ok\n==> Preparing the data directory\n==> TLS certificate\n"));
+        Assert.Equal(90, LocalEngineSetup.InstallPercent(string.Concat(Enumerable.Repeat("==> step\n", 20))));
+    }
+
+    [Fact]
     public async Task The_engine_updates_on_the_devices_channel_from_its_install_on()
     {
         await StartAsync();

@@ -12,7 +12,8 @@ namespace Construct.Agent.Engines;
 /// <summary>Where setting up this PC's engine stands.</summary>
 /// <param name="State"><c>idle</c>, <c>running</c>, <c>done</c>, <c>failed</c> (the installer's reason in <paramref name="Message"/>) or <c>restart</c> (Windows must restart to turn on Hyper-V).</param>
 /// <param name="Engine">The engine set up, once <c>done</c>.</param>
-public sealed record EngineSetupView(bool Available, string State, string? Message, string? Engine);
+/// <param name="Progress">While it runs: one percentage and a few words (R2): downloading, installing, starting.</param>
+public sealed record EngineSetupView(bool Available, string State, string? Message, string? Engine, StepProgress? Progress = null);
 
 /// <summary>
 /// The engine on this PC (5.3), set up the same way for a first run and for the one-time upgrade's engine step:
@@ -39,6 +40,7 @@ public sealed class LocalEngineSetup : IDisposable
     private string _state = "idle";
     private string? _message;
     private string? _engine;
+    private StepProgress? _progress;
 
     public LocalEngineSetup(DeviceAgent agent, AgentOptions options, IUpgradePlatform platform, DeviceSettings settings)
     {
@@ -54,6 +56,12 @@ public sealed class LocalEngineSetup : IDisposable
 
     /// <summary>Replaces download and installer with a function that leaves the token file and returns its path; the upgrade's tests use it.</summary>
     public Func<CancellationToken, Task<string>>? Installer { get; set; }
+
+    /// <summary>Sees each change of the progress; tests record it.</summary>
+    public Action<StepProgress>? Progressed { get; set; }
+
+    /// <summary>How often the installer's log is read for its steps while it runs.</summary>
+    public TimeSpan LogPoll { get; set; } = TimeSpan.FromSeconds(1);
 
     /// <summary>Whether this device can host an engine at all (Windows).</summary>
     public bool Available => _platform.CanHostEngine;
@@ -72,7 +80,7 @@ public sealed class LocalEngineSetup : IDisposable
 
     public EngineSetupView View()
     {
-        lock (_gate) return new EngineSetupView(Available, _running ? "running" : _state, _running ? null : _message, _engine);
+        lock (_gate) return new EngineSetupView(Available, _running ? "running" : _state, _running ? null : _message, _engine, _running ? _progress : null);
     }
 
     /// <summary>
@@ -147,7 +155,7 @@ public sealed class LocalEngineSetup : IDisposable
 
     private async Task<string> RunLockedAsync(string? bootstrapKey, CancellationToken ct)
     {
-        lock (_gate) { _state = "running"; _message = null; _engine = null; }
+        lock (_gate) { _state = "running"; _message = null; _engine = null; _progress = null; }
         _agent.Events.Publish("engine-setup");
         try
         {
@@ -158,6 +166,8 @@ public sealed class LocalEngineSetup : IDisposable
                 if (Installer is not null) tokenFile = await Installer(ct).ConfigureAwait(false);
                 else await InstallAsync(bootstrapKey, ct).ConfigureAwait(false);
             }
+
+            Report(Starting, "Starting");
 
             if (!File.Exists(tokenFile)) throw new AgentFailure(502, "engine-install-failed", "The engine installer wrote no token; see engine-install.log in the agent's folder, then retry.");
             string url, pin;
@@ -197,6 +207,58 @@ public sealed class LocalEngineSetup : IDisposable
         {
             Finish("failed", Reason(ex), null);
             throw;
+        }
+    }
+
+    private const int Downloaded = 55;
+    private const int Installed = 90;
+    private const int Starting = 92;
+
+    /// <summary>The installer's steps (<c>==&gt; </c> lines) a solo install prints, for the bar while it runs.</summary>
+    private const int InstallerSteps = 12;
+
+    /// <summary>A new percentage or words: kept for the view and told to the UI (only on a change).</summary>
+    private void Report(int percent, string label)
+    {
+        var next = new StepProgress(Math.Clamp(percent, 0, 100), label);
+        lock (_gate)
+        {
+            if (_progress == next) return;
+            _progress = next;
+        }
+
+        Progressed?.Invoke(next);
+        _agent.Events.Publish("engine-setup");
+    }
+
+    /// <summary>Where the elevated install is, from its log: each step it began moves the bar from downloaded to installed.</summary>
+    public static int InstallPercent(string log)
+    {
+        var steps = 0;
+        for (var at = log.IndexOf("==> ", StringComparison.Ordinal); at >= 0; at = log.IndexOf("==> ", at + 4, StringComparison.Ordinal)) steps++;
+        return Downloaded + (Installed - Downloaded) * Math.Min(steps, InstallerSteps) / InstallerSteps;
+    }
+
+    /// <summary>Reads the installer's log while the elevated part runs; a log the installer holds is read the next time.</summary>
+    private async Task FollowLogAsync(CancellationToken ct)
+    {
+        while (!ct.IsCancellationRequested)
+        {
+            try
+            {
+                await Task.Delay(LogPoll, ct).ConfigureAwait(false);
+                if (!File.Exists(LogFile)) continue;
+                await using var stream = new FileStream(LogFile, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+                using var reader = new StreamReader(stream);
+                Report(InstallPercent(await reader.ReadToEndAsync(ct).ConfigureAwait(false)), "Installing");
+            }
+            catch (OperationCanceledException)
+            {
+                return;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+            }
         }
     }
 
@@ -265,9 +327,24 @@ public sealed class LocalEngineSetup : IDisposable
         var zip = Path.Combine(_options.DataDirectory, "engine-package.zip");
         try
         {
+            Report(0, "Downloading engine");
             await using (var file = File.Create(zip))
-            await using (var body = await Http.GetStreamAsync(url, ct).ConfigureAwait(false))
-                await body.CopyToAsync(file, ct).ConfigureAwait(false);
+            {
+                using var response = await Http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
+                response.EnsureSuccessStatusCode();
+                var total = response.Content.Headers.ContentLength;
+                await using var body = await response.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
+                var buffer = new byte[81920];
+                long copied = 0;
+                int read;
+                while ((read = await body.ReadAsync(buffer, ct).ConfigureAwait(false)) > 0)
+                {
+                    await file.WriteAsync(buffer.AsMemory(0, read), ct).ConfigureAwait(false);
+                    copied += read;
+                    if (total is > 0) Report((int)(Downloaded * Math.Min(copied, total.Value) / total.Value), "Downloading engine");
+                }
+            }
+
             await using (var check = File.OpenRead(zip))
                 if (!Convert.ToHexStringLower(await SHA256.HashDataAsync(check, ct).ConfigureAwait(false)).Equals(sha, StringComparison.OrdinalIgnoreCase))
                     throw new AgentFailure(502, "package-mismatch", "The host package does not match the SHA-256 in the channel manifest.");
@@ -275,6 +352,7 @@ public sealed class LocalEngineSetup : IDisposable
                 if (archive.GetEntry("scripts/service/host/Install-ConstructHost.ps1") is null) throw new AgentFailure(502, "package-invalid", "The host package has no installer.");
 
             File.Delete(ResultFile);
+            File.Delete(LogFile);
             var payload = new JsonObject
             {
                 ["zip"] = zip, ["sha256"] = sha.ToLowerInvariant(), ["tokenFile"] = TokenFile, ["resultFile"] = ResultFile, ["log"] = LogFile,
@@ -282,8 +360,24 @@ public sealed class LocalEngineSetup : IDisposable
                 // The engine updates on the device's channel (F17).
                 ["channel"] = channel,
             };
-            var exit = await _platform.RunElevatedAsync("powershell.exe", ElevatedArguments(payload), ct).ConfigureAwait(false);
+            Report(Downloaded, "Installing");
+            int exit;
+            using (var follow = CancellationTokenSource.CreateLinkedTokenSource(ct))
+            {
+                var log = FollowLogAsync(follow.Token);
+                try
+                {
+                    exit = await _platform.RunElevatedAsync("powershell.exe", ElevatedArguments(payload), ct).ConfigureAwait(false);
+                }
+                finally
+                {
+                    await follow.CancelAsync().ConfigureAwait(false);
+                    await log.ConfigureAwait(false);
+                }
+            }
+
             ReadResult(exit);
+            Report(Installed, "Installing");
         }
         finally
         {

@@ -14,10 +14,12 @@ public sealed record EverythingView(bool Running, IReadOnlyList<UpdatePart> Part
 /// (<c>POST /host/updates/run</c>, only when it offers one), each engine reprovisions the user's own
 /// VMs (<c>POST /me/vms/reprovision</c>, which an engine scopes to its caller), and then this device
 /// updates itself. A host the user does not administer is not asked to update; nobody else's VM is
-/// named. A host that still runs the old Construct (no <c>GET /engine</c>) is left out with a note:
-/// it is updated from its own host page. After a host update the VM part waits until the restarted
-/// engine answers healthy. The parts and their state live in memory only: there is no stored plan,
-/// and a run cut short is started again by hand.
+/// named. A host that still runs the old Construct (no <c>GET /engine</c>) is updated through its own
+/// old update API when the user administers it and it offers the new version (<see cref="OldHostUpdate"/>,
+/// R5); then this device connects there as at a new host and its VMs are reprovisioned. Otherwise it is
+/// left out with a note. After a host update the VM part waits until the restarted engine answers
+/// healthy. The parts and their state live in memory only: there is no stored plan, and a run cut
+/// short is started again by hand.
 /// </summary>
 public sealed class UpdateEverything(IDeviceEngines engines, AgentUpdater self, Action changed, TimeProvider time)
 {
@@ -33,7 +35,10 @@ public sealed class UpdateEverything(IDeviceEngines engines, AgentUpdater self, 
     /// <summary>How long the VM part waits for an engine to answer healthy and to take the reprovision (it restarted, or is busy starting).</summary>
     public TimeSpan ReadyLimit { get; init; } = TimeSpan.FromMinutes(5);
 
-    public const string OldStackNote = "Runs the old Construct; update it from its host page.";
+    public const string OldStackNote = "Old Construct, unchanged.";
+
+    /// <summary>Connects this device at a host that just moved to the new stack (enrols it, as at a new host); set by the agent's host.</summary>
+    public Func<string, CancellationToken, Task>? Connect { get; set; }
 
     public bool Running
     {
@@ -97,18 +102,40 @@ public sealed class UpdateEverything(IDeviceEngines engines, AgentUpdater self, 
     private async Task RunAsync(IReadOnlyList<EngineView> list)
     {
         await Task.Yield();
+        var oldHosts = new OldHostUpdate(engines, self.ShipsAgentAsync, time) { Limit = HostUpdateLimit, PollInterval = PollInterval };
         foreach (var engine in list)
         {
+            HostResult host;
+            string? expected;
             if (engine.EngineId is null && await OldStackAsync(engine.Id).ConfigureAwait(false))
             {
-                // Not an update target: one line for the host, and its VMs are not named.
-                Set("engine", engine.Id, "skipped", OldStackNote);
-                lock (_gate) _parts = [.. _parts.Where(p => !(p.Part == "vms" && p.Engine == engine.Id))];
-                changed();
-                continue;
+                Set("engine", engine.Id, "running");
+                if (await oldHosts.OfferAsync(engine.Id, CancellationToken.None).ConfigureAwait(false) is not { } offer)
+                {
+                    // Not an update target: one line for the host, and its VMs are not named.
+                    Set("engine", engine.Id, "skipped", OldStackNote);
+                    lock (_gate) _parts = [.. _parts.Where(p => !(p.Part == "vms" && p.Engine == engine.Id))];
+                    changed();
+                    continue;
+                }
+
+                Set("engine", engine.Id, "running", "Updating to the new Construct");
+                if (await oldHosts.RunAsync(engine.Id, offer, CancellationToken.None).ConfigureAwait(false) is { } problem)
+                {
+                    Set("engine", engine.Id, "failed", problem);
+                    (host, expected) = (HostResult.Failed, null);
+                }
+                else
+                {
+                    Set("engine", engine.Id, "done", "On the new Construct.");
+                    (host, expected) = (HostResult.Updated, offer.Commit);
+                }
+            }
+            else
+            {
+                (host, expected) = await HostAsync(engine).ConfigureAwait(false);
             }
 
-            var (host, expected) = await HostAsync(engine).ConfigureAwait(false);
             if (host == HostResult.Failed)
             {
                 Set("vms", engine.Id, "skipped", "The host update did not finish.");
@@ -123,6 +150,14 @@ public sealed class UpdateEverything(IDeviceEngines engines, AgentUpdater self, 
                     Set("engine", engine.Id, "failed", problem);
                     Set("vms", engine.Id, "skipped", "The host update did not take effect; the VMs stay as they are.");
                     continue;
+                }
+
+                // A host that moved to the new stack: this device connects there as at a new host. A refusal leaves the
+                // old sign-in, which still reprovisions the VMs; Settings connects it again.
+                if (host == HostResult.Updated && engine.EngineId is null && Connect is { } connect)
+                {
+                    try { await connect(engine.Id, CancellationToken.None).ConfigureAwait(false); }
+                    catch (AgentFailure) { }
                 }
 
                 Set("vms", engine.Id, "running");

@@ -90,6 +90,19 @@ export function SignInCard({ vm, agent, onDone }: { vm: Vm; agent: AgentId; onDo
   );
 }
 
+/** What the move to the new Construct left to know (open vault leases ended, a VM not reached), after it: a calm card
+    until put away, never a gate (R9). */
+export function MovedNotes() {
+  const { s, be } = useApp();
+  if (!s.movedNotes?.length) return null;
+  return (
+    <div class="blk ok" role="status" aria-label="Moved over">
+      <div class="bh"><Icon n="check" /><b>Moved over</b><Btn sm icon="x" title="Dismiss" onClick={() => be.readMovedNotes()} /></div>
+      {s.movedNotes.map(n => <div class="msg">{n}</div>)}
+    </div>
+  );
+}
+
 export function SignInCards() {
   const { s } = useApp();
   return <>{lostSignIns(s.vms).map(l => <SignInCard key={l.vm.id + '/' + l.id.id} vm={l.vm} agent={l.id.id} />)}</>;

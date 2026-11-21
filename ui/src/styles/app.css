@@ -224,8 +224,11 @@ html[data-surf="alone"] body { background: transparent; }
 .app .wz > .r:last-child, .app .wz > .wl:last-child { border-bottom: 0; }
 .app .wl { display: flex; align-items: center; gap: 12px; min-height: 42px; border-bottom: 1px solid var(--ln); }
 .app .wl > svg { color: var(--pri); }
-.app .wl .rv { margin-left: auto; font-family: var(--mono); color: var(--dim); }
-.app .wl .bar { width: 90px; margin-left: 10px; }
+.app .wl > span:first-of-type { flex: none; }
+.app .wl .rv { margin-left: auto; color: var(--dim); min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.app .wl .rv.m { font-family: var(--mono); }
+.app .wl .bar { width: 90px; flex: none; margin-left: 10px; }
+.app .wprog { display: flex; flex-direction: column; gap: 6px; }
 .app .wl.ok > svg { color: var(--ok); }
 .app .wl.wait { color: var(--dim); }
 .app .wl .ring { width: 16px; display: grid; place-items: center; flex: none; }

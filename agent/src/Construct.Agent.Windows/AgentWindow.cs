@@ -82,9 +82,12 @@ internal sealed class AgentWindow : Form
         }
         else
         {
-            Size = new(1200, 820);
+            // In the screen's DPI: a fixed size in device pixels was too small at 125 % for the upgrade's list (R6).
+            var work = Screen.FromPoint(Cursor.Position).WorkingArea;
+            var bounds = Construct.Companion.Core.Desktop.WindowPlacement.Main(new(work.X, work.Y, work.Width, work.Height), DeviceDpi);
+            StartPosition = FormStartPosition.Manual;
+            Bounds = new Rectangle(bounds.X, bounds.Y, bounds.Width, bounds.Height);
             MinimumSize = new(480, 360);
-            StartPosition = FormStartPosition.CenterScreen;
         }
 
         Controls.Add(_web);

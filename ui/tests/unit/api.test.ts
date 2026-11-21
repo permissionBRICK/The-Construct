@@ -1412,7 +1412,7 @@ describe('ApiBackend one-time upgrade', () => {
   const view = (st: Partial<Steps>, o: Record<string, unknown> = {}) => ({
     legacy: true, stage: 'new',
     steps: (['engine', 'recovery', 'close', 'convert'] as const).map(id => ({ id, state: st[id] ?? 'todo', message: null })),
-    found: { installFolder: 'C:\\old', otherInstallFolders: [], localVms: ['atlas'], remoteVms: ['harbor'], hosts: [], profiles: ['webshop'], unmergedChanges: 0, vault: true, backupKeys: 1, upstream: false, channel: 'stable' },
+    found: { installFolder: 'C:\\old', otherInstallFolders: [], localVms: ['atlas'], remoteVms: ['harbor'], hosts: [], profiles: ['webshop'], unmergedChanges: 0, vault: true, backupKeys: 1, upstream: false, channel: 'stable', stayOld: [] },
     storeEngine: E1, localEngine: E1, items: [], notes: [], oldWriters: [], running: false, error: null, oldHosts: [], ...o,
   });
 
@@ -1563,23 +1563,73 @@ describe('ApiBackend one-time upgrade', () => {
     expect(posts(calls)).toEqual([]);
   });
 
-  it('shows the conversion\'s notes once after it, with one button on to the normal screens', async () => {
+  it('shows the normal screens at once after the conversion, its notes as a card until put away (R9)', async () => {
     const { be, calls, on, settle } = world();
     const done = { engine: 'done', recovery: 'done', close: 'done', convert: 'done' };
     on('GET', '/api/upgrade', { json: view(done, { stage: 'converted', notes: ['The VM far was not reached; it is moved on the next run.'], oldHosts: ['old.example'] }) });
     await be.start();
-    expect(be.snapshot().upgrade).toMatchObject({ step: 'done', notes: ['The VM far was not reached; it is moved on the next run.'], oldHosts: [] });
-    expect(calls.some(c => c.path.startsWith('/api/engines/'))).toBe(false);
+    // No gate: the pop-out and the window show the VMs at once.
+    expect(be.snapshot().upgrade).toBeNull();
+    expect(be.snapshot().vms.map(v => v.name)).toContain('atlas');
+    expect(be.snapshot().movedNotes).toEqual(['The VM far was not reached; it is moved on the next run.']);
     on('POST', '/api/upgrade/notes/read', () => {
       on('GET', '/api/upgrade', { json: view(done, { stage: 'converted' }) });
       return { json: view(done, { stage: 'converted' }) };
     });
-    be.upgradeNext();
-    await settle();
+    be.readMovedNotes();
     await settle();
     expect(posts(calls).map(c => c.path)).toEqual(['/api/upgrade/notes/read']);
+    expect(be.snapshot().movedNotes).toEqual([]);
+    // The agent's event after it (another surface put them away) changes nothing more.
+    be.onEvent('upgrade', null);
+    await settle();
+    expect(be.snapshot().movedNotes).toEqual([]);
     expect(be.snapshot().upgrade).toBeNull();
+  });
+
+  it('leaves the dialog for the normal screens the moment the conversion ends, without a notes page', async () => {
+    const { be, on, settle } = world();
+    const done = { engine: 'done', recovery: 'done', close: 'done', convert: 'done' };
+    on('GET', '/api/upgrade', { json: view({ ...done, convert: 'running' }, { running: true, stage: 'converting' }) });
+    await be.start();
+    expect(be.snapshot().upgrade).toMatchObject({ step: 'convert', running: true });
+    on('GET', '/api/upgrade', { json: view(done, { stage: 'converted', notes: ['Open vault leases end with the upgrade: a VM that needs a secret again asks for it again.'] }) });
+    be.onEvent('upgrade', null);
+    await settle();
+    await settle();
+    expect(be.snapshot().upgrade).toBeNull();
+    expect(be.snapshot().movedNotes).toHaveLength(1);
     expect(be.snapshot().vms.map(v => v.name)).toContain('atlas');
+  });
+
+  it('shows a running step\'s one bar and a reprovision row\'s own percentage (R2, R7)', async () => {
+    const { be, on, settle } = world({ registered: false });
+    on('GET', '/api/upgrade', { json: view({ engine: 'running' }, { running: true, progress: { percent: 34, label: 'Downloading engine' } }) });
+    await be.start();
+    expect(be.snapshot().upgrade).toMatchObject({ step: 'engine', running: true, progress: { pct: 34, label: 'Downloading engine' } });
+    // The setup's progress arrives as engine-setup events while the step runs.
+    on('GET', '/api/upgrade', { json: view({ engine: 'running' }, { running: true, progress: { percent: 60, label: 'Installing' } }) });
+    be.onEvent('engine-setup', null);
+    await settle();
+    expect(be.snapshot().upgrade?.progress).toEqual({ pct: 60, label: 'Installing' });
+
+    const items = [{ id: 'vm:atlas', label: 'VM atlas', state: 'done', message: 'Switched over' },
+      { id: 'reprovision:atlas', label: 'VM atlas on the new version', state: 'running', message: 'Installing packages', percent: 15 }];
+    on('GET', '/api/upgrade', { json: view({ engine: 'done', recovery: 'done', close: 'done', convert: 'running' },
+      { running: true, stage: 'converting', items, progress: { percent: 33, label: 'VM atlas on the new version' } }) });
+    be.onEvent('upgrade', null);
+    await settle();
+    const u = be.snapshot().upgrade!;
+    expect(u.progress).toEqual({ pct: 33, label: 'VM atlas on the new version' });
+    expect(u.items.find(i => i.id === 'reprovision:atlas')).toMatchObject({ state: 'running', count: 'Installing packages', pct: 15 });
+  });
+
+  it('names the VMs that stay on their host\'s old Construct (R1)', async () => {
+    const { be, on } = world({ registered: false });
+    on('GET', '/api/upgrade', { json: view({}, { found: { installFolder: 'C:\\old', otherInstallFolders: [], localVms: ['atlas'], remoteVms: ['harbor'], hosts: [], profiles: [],
+      unmergedChanges: 0, vault: false, backupKeys: 0, upstream: false, channel: 'stable', stayOld: ['harbor'] } }) });
+    await be.start();
+    expect(be.snapshot().upgrade?.found).toMatchObject({ vms: ['atlas', 'harbor'], stayOld: ['harbor'] });
   });
 
   it('resumes at the step the agent reports after a reload, and runs nothing while a step runs', async () => {
@@ -1618,7 +1668,7 @@ describe('ApiBackend engine on this PC', () => {
     w.on('GET', '/api/engines/local', { status: 204 });
     w.on('GET', '/api/engines/local/setup', setupView('idle'));
     w.on('POST', '/api/engines/local/setup', () => {
-      w.on('GET', '/api/engines/local/setup', setupView('running'));
+      w.on('GET', '/api/engines/local/setup', setupView('running', { progress: { percent: 20, label: 'Downloading engine' } }));
       return { status: 202, ...setupView('running') };
     });
     w.on('POST', '/api/device/setup', { json: { recoveryCode: 'ABCD-EFGH', issue: 1 } });
@@ -1626,16 +1676,16 @@ describe('ApiBackend engine on this PC', () => {
     expect(w.be.snapshot().firstRun).toMatchObject({ step: 'start', thisPc: 'setup', restart: null, localAddress: null });
     w.be.firstRunStart({ how: 'setup', where: 'this-pc', address: 'ignored', deviceName: ' laptop ', token: 'ignored' });
     await w.settle();
-    // While it runs nothing else is sent; its event ends the wait.
+    // While it runs nothing else is sent; its event ends the wait. Its bar shows meanwhile (R2).
     expect(posts(w.calls).map(c => c.path)).toEqual(['/api/engines/local/setup']);
-    expect(w.be.snapshot().firstRun?.busy).toBe(true);
+    expect(w.be.snapshot().firstRun).toMatchObject({ busy: true, progress: { pct: 20, label: 'Downloading engine' } });
     w.on('GET', '/api/state', { json: { device: { id: 'd1', name: '', account: null, registered: false, storeEngine: null, protection: 'file', protectionWeak: true }, engines: [pc], pairing: null } });
     w.on('GET', '/api/engines/local/setup', setupView('done', { engine: E9 }));
     w.be.onEvent('engine-setup', { seq: 1, type: 'engine-setup', engine: null, data: null });
     await w.settle();
     await w.settle();
     expect(posts(w.calls).map(c => [c.path, c.body])).toEqual([['/api/engines/local/setup', undefined], ['/api/device/setup', { engine: E9, deviceName: 'laptop' }]]);
-    expect(w.be.snapshot().firstRun).toMatchObject({ step: 'code', code: ['ABCD', 'EFGH'], busy: false });
+    expect(w.be.snapshot().firstRun).toMatchObject({ step: 'code', code: ['ABCD', 'EFGH'], busy: false, progress: null });
     expect(posts(w.calls).some(c => c.path === '/api/engines' || c.path === '/api/engines/probe')).toBe(false);
   });
 

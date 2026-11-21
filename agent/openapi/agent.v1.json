@@ -3665,6 +3665,16 @@
               "null",
               "string"
             ]
+          },
+          "progress": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/StepProgress"
+              }
+            ]
           }
         }
       },
@@ -4444,6 +4454,22 @@
           }
         }
       },
+      "StepProgress": {
+        "required": [
+          "percent",
+          "label"
+        ],
+        "type": "object",
+        "properties": {
+          "percent": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "label": {
+            "type": "string"
+          }
+        }
+      },
       "SwitchRequest": {
         "required": [
           "on"
@@ -4587,7 +4613,8 @@
           "vault",
           "backupKeys",
           "upstream",
-          "channel"
+          "channel",
+          "stayOld"
         ],
         "type": "object",
         "properties": {
@@ -4643,6 +4670,12 @@
           },
           "channel": {
             "type": "string"
+          },
+          "stayOld": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           }
         }
       },
@@ -4668,6 +4701,13 @@
               "null",
               "string"
             ]
+          },
+          "percent": {
+            "type": [
+              "null",
+              "integer"
+            ],
+            "format": "int32"
           }
         }
       },
@@ -4775,6 +4815,16 @@
             "items": {
               "type": "string"
             }
+          },
+          "progress": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/StepProgress"
+              }
+            ]
           }
         }
       },

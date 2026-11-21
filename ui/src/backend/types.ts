@@ -297,8 +297,8 @@ export interface Prefs {
 }
 
 /** The one-time upgrade's steps in their order: the engine on this PC, the recovery code, the old programs
-    closed, the conversion. */
-export type UpgradeStep = 'engine' | 'recovery' | 'close' | 'convert' | 'done';
+    closed, the conversion. Once it is converted the normal screens show at once (R9). */
+export type UpgradeStep = 'engine' | 'recovery' | 'close' | 'convert';
 export interface Upgrade {
   /** The step the dialog is at, as the agent reports it: the first one not done. */
   step: UpgradeStep;
@@ -310,16 +310,16 @@ export interface Upgrade {
   code: string[] | null;
   /** Step `close`: the programs that still have the old files open. */
   writers: string[];
-  /** Step `convert`: each item the converter copies. */
+  /** Step `convert`: each item the converter copies; `count` is its few words, `pct` how far a long one is (a VM's reprovision). */
   items: { id: string; name: string; state: 'done' | 'running' | 'waiting' | 'skipped' | 'failed'; count: string; pct: number }[];
-  /** What the old install holds. */
-  found: { vms: string[]; profiles: number; vault: boolean } | null;
+  /** What the old install holds; `stayOld` are the VMs whose host runs the old Construct and does not move along (R1). */
+  found: { vms: string[]; stayOld: string[]; profiles: number; vault: boolean } | null;
   /** Step `convert`: shared hosts that still run the old Construct; their admin updates them from the host page. */
   oldHosts: string[];
-  /** Step `done`: what the conversion could not finish, shown once; the step is there only when there are any. */
-  notes: string[];
   /** Step `engine`: Windows must restart to turn on Hyper-V (the line to show), until the user chose later. */
   restart: string | null;
+  /** While the engine or the conversion step runs: its one bar, a percentage and a few words (R2, R7). */
+  progress: { pct: number; label: string } | null;
 }
 
 /** Parts of the product the backend cannot serve yet. The screens show such a part as not available. */
@@ -348,6 +348,8 @@ export interface FirstRun {
   account?: string | null;
   /** Step `pairing`: the code the approving device enters, and the words both show. */
   pairing: { code: string; words: string[]; expiresAt: string } | null;
+  /** While this PC's engine is set up: its one bar (R2). */
+  progress?: { pct: number; label: string } | null;
 }
 
 export interface FirstRunRequest {
@@ -391,6 +393,8 @@ export interface State {
   handout: NewUserHandout | null;
   prefs: Prefs;
   upgrade: Upgrade | null;
+  /** After the move: what it says the user should know, a card until put away (R9); never a gate. */
+  movedNotes?: string[];
   /** A short message from the last action, shown as a toast. Each new one has a new id. */
   notice: { id: number; text: string } | null;
   /** Why the last create did not start, shown on the create page where it was asked; null once another starts. */
@@ -580,6 +584,8 @@ export interface Backend {
   /** The one-time upgrade: runs the current step again or goes on from it; the backend decides which step that is.
       `deviceName` names this device at the recovery step. */
   upgradeNext(input?: { deviceName?: string }): void;
+  /** Puts the move's notes away; they are not shown again. */
+  readMovedNotes(): void;
   /** First run: set up, pair or recover. */
   firstRunStart(req: FirstRunRequest): void;
   /** First run: the recovery code is stored, or the pairing is cancelled; go on. */
