@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Text;
 
 namespace Construct.Agent.Git;
@@ -73,21 +72,7 @@ public sealed class GitCloneCredentials(string? searchPath = null, TimeSpan? tim
         return hosts;
     }
 
-    private string? FindGit()
-    {
-        var name = OperatingSystem.IsWindows() ? "git.exe" : "git";
-        foreach (var directory in (searchPath ?? Environment.GetEnvironmentVariable("PATH") ?? "").Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries))
-        {
-            try
-            {
-                var candidate = Path.Combine(directory.Trim('"'), name);
-                if (File.Exists(candidate)) return candidate;
-            }
-            catch (ArgumentException) { }
-        }
-
-        return null;
-    }
+    private string? FindGit() => GitProcess.Find(searchPath);
 
     /// <summary><c>git credential fill</c> for the repo, as a clone of it would ask; null when the helper has nothing.</summary>
     private async Task<(string User, string Token)?> FillAsync(string git, Uri repo, CancellationToken ct)
@@ -115,61 +100,7 @@ public sealed class GitCloneCredentials(string? searchPath = null, TimeSpan? tim
         return result is { Exit: 0 };
     }
 
-    /// <summary>Runs git with prompts off; null when it could not start or ran out of time (it is killed then).</summary>
-    private async Task<(int Exit, string Output)?> RunAsync(string git, string[] arguments, string? input, Dictionary<string, string>? secrets, CancellationToken ct)
-    {
-        var start = new ProcessStartInfo(git)
-        {
-            UseShellExecute = false, CreateNoWindow = true,
-            RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true,
-            WorkingDirectory = Path.GetTempPath(),
-        };
-        foreach (var argument in arguments) start.ArgumentList.Add(argument);
-        // Nothing from this process may inject config, trace output or a prompt into the child.
-        foreach (var key in start.Environment.Keys.ToArray())
-        {
-            if (key.StartsWith("GIT_TRACE", StringComparison.OrdinalIgnoreCase) || key.StartsWith("GIT_CONFIG_", StringComparison.OrdinalIgnoreCase)
-                || key.StartsWith("GCM_", StringComparison.OrdinalIgnoreCase) || key.StartsWith("CONSTRUCT_GIT_", StringComparison.OrdinalIgnoreCase)
-                || key is "GIT_ASKPASS" or "SSH_ASKPASS" or "SSH_ASKPASS_REQUIRE" or "GIT_CONFIG_PARAMETERS")
-                start.Environment.Remove(key);
-        }
-
-        start.Environment["GIT_TERMINAL_PROMPT"] = "0";
-        start.Environment["GCM_INTERACTIVE"] = "never";
-        start.Environment["GIT_ASKPASS"] = "";
-        foreach (var (key, value) in secrets ?? []) start.Environment[key] = value;
-
-        Process process;
-        try { process = Process.Start(start) ?? throw new InvalidOperationException(); }
-        catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException or IOException) { return null; }
-
-        using (process)
-        {
-            using var limit = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            limit.CancelAfter(_timeout);
-            try
-            {
-                var output = process.StandardOutput.ReadToEndAsync(limit.Token);
-                var error = process.StandardError.ReadToEndAsync(limit.Token);
-                try
-                {
-                    if (input is not null) await process.StandardInput.WriteAsync(input.AsMemory(), limit.Token).ConfigureAwait(false);
-                    process.StandardInput.Close();
-                }
-                catch (IOException) { /* git ended without reading its input */ }
-
-                await process.WaitForExitAsync(limit.Token).ConfigureAwait(false);
-                var text = await output.ConfigureAwait(false);
-                _ = await error.ConfigureAwait(false);
-                return (process.ExitCode, text);
-            }
-            catch (OperationCanceledException)
-            {
-                try { process.Kill(entireProcessTree: true); }
-                catch (InvalidOperationException) { }
-                ct.ThrowIfCancellationRequested();
-                return null;
-            }
-        }
-    }
+    /// <summary>Runs git with prompts off; null when it could not start or ran out of time.</summary>
+    private async Task<(int Exit, string Output)?> RunAsync(string git, string[] arguments, string? input, Dictionary<string, string>? secrets, CancellationToken ct) =>
+        await GitProcess.RunAsync(git, arguments, input, secrets, _timeout, ct).ConfigureAwait(false) is { } r ? (r.Exit, r.Output) : null;
 }
