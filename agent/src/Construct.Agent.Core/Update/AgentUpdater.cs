@@ -334,6 +334,26 @@ public sealed class AgentUpdater : IAsyncDisposable
     }
 
     /// <summary>
+    /// Whether a host release of <paramref name="repository"/> is the new Construct: its manifest names this build's
+    /// package, which no release of the old stack has (R5: an old host is updated only to the new version).
+    /// </summary>
+    public async Task<bool> ShipsAgentAsync(string repository, string releaseTag, CancellationToken ct)
+    {
+        if (!System.Text.RegularExpressions.Regex.IsMatch(repository, @"\A[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\z")
+            || !System.Text.RegularExpressions.Regex.IsMatch(releaseTag, @"\Ahost-[0-9a-f]{40}\z")) return false;
+        try
+        {
+            using var response = await _http.GetAsync(new Uri($"https://github.com/{repository}/releases/download/{releaseTag}/manifest.json"), ct).ConfigureAwait(false);
+            if (!response.IsSuccessStatusCode) return false;
+            return JsonNode.Parse(await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false))?["packages"]?[_packageKey] is JsonObject;
+        }
+        catch (Exception ex) when (ex is HttpRequestException or JsonException || ex is TaskCanceledException && !ct.IsCancellationRequested)
+        {
+            throw new AgentFailure(502, "manifest-unavailable", "The release manifest could not be read.");
+        }
+    }
+
+    /// <summary>
     /// The package <paramref name="key"/> of a manifest: <c>version</c> (<c>X.Y.Z+sha</c>), and in <c>packages</c>
     /// its <c>asset</c> and <c>sha256</c>. A GitHub channel's assets are on the release the manifest names
     /// (<c>releaseTag</c>); a URL channel's beside the manifest (as the engine reads its own, ChannelReleases).

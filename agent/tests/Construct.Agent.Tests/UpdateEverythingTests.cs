@@ -135,10 +135,100 @@ public sealed class UpdateEverythingTests : IAsyncDisposable
         _device.Everything.Start();
         await _device.Everything.Work.WaitAsync(TimeSpan.FromSeconds(10));
 
-        Assert.Equal(["GET engine"], engines.CallsTo("old"));
+        // Not its admin (the old host refuses its update status): nothing else is asked.
+        Assert.Equal(["GET engine", "GET host/updates/status"], engines.CallsTo("old"));
         var parts = _device.Everything.View().Parts.Select(p => (p.Part, p.Engine, p.State, p.Detail)).ToArray();
         Assert.Equal([("engine", "old", "skipped", UpdateEverything.OldStackNote), ("engine", "mine", "skipped", "Its admin updates this host."),
             ("vms", "mine", "done", "No VMs of yours here."), ("device", null, "skipped", "This agent does not run from an installed package.")], parts);
+    }
+
+    private const string NewCommit = "b62124e768e638e339c21fa7c93fb88e5d522843";
+
+    /// <summary>An old host of the stack before the rework: no <c>GET /engine</c> until its update moved it to the new stack.</summary>
+    private static FakeEngines OldHost(string latestCommit, Action? applied = null)
+    {
+        var moved = false;
+        var engines = new FakeEngines().Add("old", known: false);
+        return engines
+            .On("old", "GET engine", _ => moved ? JsonNode.Parse("""{"engineId":"e-old","hostPublicKey":"k"}""") : throw new AgentFailure(404, "engine-refused", "The engine answered 404."))
+            .On("old", "GET host/updates/status", _ => JsonNode.Parse("""{"supportsAutoApply":true,"installed":{"commit":"aaaa"},"current":{"updateId":"u1","state":"applying"}}"""))
+            .On("old", "POST host/updates/check", _ => new JsonObject
+            {
+                ["installed"] = new JsonObject { ["commit"] = new string('a', 40) },
+                ["latest"] = new JsonObject { ["commit"] = latestCommit, ["releaseTag"] = "host-" + latestCommit, ["compatible"] = true, ["reasons"] = new JsonArray() },
+            })
+            .On("old", "GET host/config", """{"updates":{"repository":"example/construct","channel":"stable"}}""")
+            .On("old", "POST host/updates/stage", _ =>
+            {
+                moved = true;
+                applied?.Invoke();
+                return JsonNode.Parse("""{"updateId":"u2","state":"staged"}""");
+            })
+            .On("old", "GET health", $$"""{"status":"ok","commit":"{{latestCommit}}"}""")
+            .On("old", "POST me/vms/reprovision", """{"vms":["far"]}""");
+    }
+
+    /// <summary>A release channel where <paramref name="commit"/>'s host release ships the device agent (the new Construct).</summary>
+    private static FakeDevice.StaticHandler Releases(string commit) => new(request =>
+        request.RequestUri!.AbsoluteUri == $"https://github.com/example/construct/releases/download/host-{commit}/manifest.json"
+            ? new HttpResponseMessage(System.Net.HttpStatusCode.OK) { Content = new StringContent("""{"version":"1.0.0+x","packages":{"agentLinux":{"asset":"a.zip","sha256":"00"}}}""") }
+            : new HttpResponseMessage(System.Net.HttpStatusCode.NotFound));
+
+    [Fact]
+    public async Task An_old_host_the_user_administers_that_offers_the_new_version_moves_through_its_own_update_and_its_vms_follow()
+    {
+        // R5 (owner, 2026-11-21): Update brings every Construct of this device over, an old shared host included.
+        var engines = OldHost(NewCommit)
+            .On("old", "GET host/updates/status", """{"supportsAutoApply":true,"current":{"updateId":"u1","state":"succeeded"}}""");
+        _device = new FakeDevice(_directory, engines, channel: Releases(NewCommit));
+        var connected = new List<string>();
+        _device.Everything.Connect = (id, _) => { connected.Add(id); return Task.CompletedTask; };
+
+        _device.Everything.Start();
+        await _device.Everything.Work.WaitAsync(TimeSpan.FromSeconds(10));
+
+        var calls = engines.CallsTo("old");
+        Assert.Equal(["GET engine", "GET host/updates/status", "POST host/updates/check", "GET host/config", "POST host/updates/stage", "GET engine", "GET health", "POST me/vms/reprovision"], calls);
+        var stage = engines.Calls.Single(c => c.Call == "POST host/updates/stage").Body!;
+        Assert.Equal("host-" + NewCommit, stage["releaseTag"]!.GetValue<string>());
+        Assert.True(stage["autoApply"]!.GetValue<bool>());
+        Assert.Equal(["old"], connected);
+        var parts = _device.Everything.View().Parts.Where(p => p.Engine == "old").Select(p => (p.Part, p.State)).ToArray();
+        Assert.Equal([("engine", "done"), ("vms", "done")], parts);
+    }
+
+    [Fact]
+    public async Task An_old_host_that_offers_another_release_of_the_old_stack_stays_as_it_is()
+    {
+        // Before the merge to main an old host following main offers old-stack releases only: nothing is staged.
+        var engines = OldHost("c0ffee" + new string('1', 34))
+            .On("old", "GET host/updates/status", """{"supportsAutoApply":true,"current":null}""");
+        _device = new FakeDevice(_directory, engines, channel: Releases(NewCommit));
+
+        _device.Everything.Start();
+        await _device.Everything.Work.WaitAsync(TimeSpan.FromSeconds(10));
+
+        Assert.DoesNotContain("POST host/updates/stage", engines.CallsTo("old"));
+        Assert.DoesNotContain("POST me/vms/reprovision", engines.CallsTo("old"));
+        Assert.Equal([("engine", "skipped", UpdateEverything.OldStackNote)],
+            _device.Everything.View().Parts.Where(p => p.Engine == "old").Select(p => (p.Part, p.State, p.Detail)));
+    }
+
+    [Fact]
+    public async Task An_old_host_whose_update_rolls_back_keeps_its_vms_as_they_are()
+    {
+        var engines = OldHost(NewCommit)
+            .On("old", "GET engine", _ => throw new AgentFailure(404, "engine-refused", "The engine answered 404."))
+            .On("old", "GET host/updates/status", """{"supportsAutoApply":true,"current":{"updateId":"u2","state":"rolledBack"}}""");
+        _device = new FakeDevice(_directory, engines, channel: Releases(NewCommit));
+
+        _device.Everything.Start();
+        await _device.Everything.Work.WaitAsync(TimeSpan.FromSeconds(10));
+
+        Assert.DoesNotContain("POST me/vms/reprovision", engines.CallsTo("old"));
+        var parts = _device.Everything.View().Parts.Where(p => p.Engine == "old").ToArray();
+        Assert.Equal(["failed", "skipped"], parts.Select(p => p.State));
+        Assert.Contains("rolledBack", parts[0].Detail, StringComparison.Ordinal);
     }
 
     public async ValueTask DisposeAsync()
