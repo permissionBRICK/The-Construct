@@ -23,6 +23,8 @@ internal sealed class WindowsSetupPlatform : ISetupPlatform
 
     public string LocalAppData { get; }
 
+    public string Home { get; } = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+
     public void SetRunValue(string name, string? command)
     {
         if (command is null)

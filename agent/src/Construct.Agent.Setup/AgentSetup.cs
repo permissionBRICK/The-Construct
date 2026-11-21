@@ -4,6 +4,7 @@ using System.Net.Http.Headers;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 
 namespace Construct.Agent.Setup;
 
@@ -290,16 +291,21 @@ public sealed class AgentSetup(ISetupPlatform platform, HttpClient web, HttpClie
     public const string EnginePackageFile = "engine-package.zip";
 
     /// <summary>
-    /// The old client ran a VM on this PC: its registry names a <c>hyperv-local</c> instance, or it has no registry and an
-    /// install folder (the single default VM of older installs). Then the move installs the engine here.
+    /// The old client ran a VM on this PC, by the converter's rule (<c>LegacyState.Instances()</c>): a registry without
+    /// instances is the single default VM; in a registry, an entry whose backend is <c>hyperv-local</c> or missing, or the
+    /// default VM the old client adds itself while its key is in <c>~/.ssh</c> and no entry (a null one included) names it.
+    /// Without a registry, an install folder means the default VM of older installs. Then the move installs the engine here.
     /// </summary>
     public bool OldInstallRunsVmHere()
     {
         var root = Path.Combine(platform.LocalAppData, "The-Construct");
         if (ReadJson(Path.Combine(root, "instances.json")) is { } registry)
         {
-            if (!registry.TryGetProperty("instances", out var instances) || instances.ValueKind != JsonValueKind.Object) return false;
-            return instances.EnumerateObject().Any(i => i.Value.ValueKind == JsonValueKind.Object && Text(i.Value, "backend") == "hyperv-local");
+            if (!registry.TryGetProperty("instances", out var instances) || instances.ValueKind != JsonValueKind.Object) return true;
+            if (!instances.TryGetProperty(DefaultInstance, out _) && File.Exists(Path.Combine(platform.Home, ".ssh", "agent_vm_ed25519"))) return true;
+            return instances.EnumerateObject().Any(i => i.Value.ValueKind == JsonValueKind.Object && InstanceName.IsMatch(i.Name)
+                && !i.Name.StartsWith("construct-", StringComparison.OrdinalIgnoreCase)
+                && (Text(i.Value, "backend")?.ToLowerInvariant() ?? "hyperv-local") == "hyperv-local");
         }
 
         try
@@ -310,15 +316,19 @@ public sealed class AgentSetup(ISetupPlatform platform, HttpClient web, HttpClie
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return false; }
     }
 
+    private const string DefaultInstance = "agent-vm";
+
+    private static readonly Regex InstanceName = new(@"\A[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\z", RegexOptions.CultureInvariant);
+
     /// <summary>The engine package downloaded and checked now; a failure only means the engine step downloads it later.</summary>
     private async Task PrefetchEngineAsync(SetupPackage engine, CancellationToken ct)
     {
         var path = Path.Combine(platform.AgentHome, EnginePackageFile);
-        if (File.Exists(path) && await HashOfAsync(path, ct).ConfigureAwait(false) == engine.Sha256) return;
         var partial = path + ".partial";
-        output.WriteLine("==> Downloading the engine for this PC ...");
         try
         {
+            if (File.Exists(path) && await HashOfAsync(path, ct).ConfigureAwait(false) == engine.Sha256) return;
+            output.WriteLine("==> Downloading the engine for this PC ...");
             File.Delete(partial);
             await DownloadAsync(engine, partial, ct, "engine").ConfigureAwait(false);
             File.Move(partial, path, overwrite: true);

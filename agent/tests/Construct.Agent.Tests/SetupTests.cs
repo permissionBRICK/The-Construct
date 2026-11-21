@@ -281,6 +281,45 @@ public sealed class SetupTests : IDisposable
         Assert.Single(_windows.Started);
     }
 
+    [Fact]
+    public void Whether_the_old_install_runs_a_vm_here_follows_the_converters_defaults()
+    {
+        var key = Path.Combine(_windows.Home, ".ssh", "agent_vm_ed25519");
+        bool RunsVm(string registry, bool defaultKey = false)
+        {
+            OldInstall(registry);
+            if (defaultKey) { Directory.CreateDirectory(Path.GetDirectoryName(key)!); File.WriteAllText(key, "key"); }
+            else if (File.Exists(key)) File.Delete(key);
+            return Setup().OldInstallRunsVmHere();
+        }
+
+        const string Remote = "\"work\":{\"backend\":\"hyperv-remote\",\"service\":{\"url\":\"https://host.example\"}}";
+        Assert.True(RunsVm("""{"version":1,"instances":{"agent-vm":{}}}"""));          // backend omitted: local
+        Assert.True(RunsVm("""{"version":1,"instances":{"box":{"backend":"HyperV-Local"}}}"""));
+        Assert.True(RunsVm("""{"version":1}"""));                                       // no instances: the default VM
+        Assert.False(RunsVm("{\"version\":1,\"instances\":{" + Remote + "}}"));
+        Assert.True(RunsVm("{\"version\":1,\"instances\":{" + Remote + "}}", defaultKey: true)); // implicit default VM
+        Assert.False(RunsVm("{\"version\":1,\"instances\":{\"agent-vm\":null," + Remote + "}}", defaultKey: true)); // removed
+        Assert.False(RunsVm("""{"version":1,"instances":{"construct-box":{"backend":"hyperv-local"},"Box":{}}}"""));
+    }
+
+    [Fact]
+    public async Task A_cached_engine_package_that_cannot_be_read_does_not_stop_the_setup()
+    {
+        OldInstall("""{"version":1,"instances":{"agent-vm":{}}}""");
+        Directory.CreateDirectory(AgentHome);
+        var cached = Path.Combine(AgentHome, AgentSetup.EnginePackageFile);
+        File.WriteAllText(cached, "an older package");
+
+        SetupOutcome outcome;
+        using (new FileStream(cached, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+            outcome = await Setup().RunAsync("nightly");
+
+        Assert.False(outcome.HandedOver);
+        Assert.Contains("downloaded when it is installed", _output.ToString(), StringComparison.Ordinal);
+        Assert.Single(_windows.Started);
+    }
+
     // ---- the old Companion ----
 
     [Fact]
@@ -460,6 +499,8 @@ public sealed class SetupTests : IDisposable
         public string AgentHome { get; } = Path.Combine(localAppData, "Construct", "agent");
 
         public string LocalAppData { get; } = localAppData;
+
+        public string Home { get; } = Path.Combine(Path.GetDirectoryName(localAppData)!, "Home");
 
         public Dictionary<string, string> RunValues { get; } = [];
 
