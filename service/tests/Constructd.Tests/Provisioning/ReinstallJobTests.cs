@@ -512,6 +512,8 @@ public sealed class ReinstallJobTests : IAsyncDisposable
         Assert.DoesNotContain(guest.Commands, c => c.Contains("PROVISION_PHASE", StringComparison.Ordinal));
 
         // A wrong key is the guest's decryption failure; the VM was not touched, so it may be run again.
+        // A failed restore starts the repair agent by itself, which holds the VM while it sets up; not this test's subject.
+        await h.App.Service<IHostConfigStore>().SetAsync("repair", new RepairConfig(Auto: false), "test", default);
         var wrong = await RestoreAsync(h, "restore-2", id, "AGE-SECRET-KEY-1WRONG");
         Assert.Equal("restore-failed", Result<RestoreJobResult>(wrong).Code);
         Assert.True((await RestoreAsync(h, "restore-3", id, guest.Made[id].Key)).State == JobState.Succeeded);
