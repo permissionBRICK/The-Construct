@@ -42,7 +42,16 @@ public sealed class UpdateEverything(IDeviceEngines engines, AgentUpdater self, 
 
     public EverythingView View()
     {
-        lock (_gate) return new(!_run.IsCompleted, [.. _parts.Select(Live)]);
+        UpdatePart[] parts;
+        bool running;
+        lock (_gate)
+        {
+            parts = [.. _parts];
+            running = !_run.IsCompleted;
+        }
+
+        // The device's own updater is asked outside this lock: it asks Running in turn.
+        return new(running, [.. parts.Select(Live)]);
     }
 
     /// <summary>The device part while it runs says what the device's own update does now (12.1, finding 21).</summary>
