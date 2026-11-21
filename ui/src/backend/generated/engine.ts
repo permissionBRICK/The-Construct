@@ -5066,6 +5066,7 @@ export interface components {
             initiator?: null | string;
             operationKey?: null | string;
             phase?: null | string;
+            warnings?: null | string[];
         };
         JobRetryRequest: {
             secrets?: null | components["schemas"]["ProvisionSecretsRequest"];

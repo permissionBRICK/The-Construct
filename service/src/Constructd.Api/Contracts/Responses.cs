@@ -3,6 +3,7 @@ using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using Constructd.Core.Domain;
 using Constructd.Core.Logic;
+using Constructd.Api.Jobs;
 
 // Endpoint also exists in Microsoft.AspNetCore.Http (routing); the domain record is the one meant here.
 using DomainEndpoint = Constructd.Core.Domain.Endpoint;
@@ -227,7 +228,8 @@ public sealed record JobResponse(
     DateTimeOffset? Finished,
     IReadOnlyList<JobProgressResponse> Progress,
     object? Result,
-    string? Error, string? Initiator = null, string? OperationKey = null, string? Phase = null)
+    string? Error, string? Initiator = null, string? OperationKey = null, string? Phase = null,
+    IReadOnlyList<string>? Warnings = null)
 {
     /// <param name="vmToken">
     /// The consumed one-time secret, if this projection is the one that got it. It is merged into the
@@ -243,7 +245,8 @@ public sealed record JobResponse(
             job.Finished,
             [.. job.Progress.Select(JobProgressResponse.From)],
             ProjectResult(job, vmToken),
-            job.Error, job.Initiator, job.OperationKey, job.Phase);
+            job.Error, job.Initiator, job.OperationKey, job.Phase, JobWarnings.Of(job));
+
 
     /// <summary>
     /// Projects the stored (secret-free) result for the wire. For a creation job the VM token is

@@ -12537,6 +12537,15 @@
               "null",
               "string"
             ]
+          },
+          "warnings": {
+            "type": [
+              "null",
+              "array"
+            ],
+            "items": {
+              "type": "string"
+            }
           }
         }
       },

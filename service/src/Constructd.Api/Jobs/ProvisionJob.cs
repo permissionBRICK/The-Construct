@@ -68,6 +68,8 @@ public sealed class ProvisionJob(ISshRunner ssh, ISourceCache sources, IVmApplie
         // A provision (also of a reinstalled guest) may start from a fresh disk: device keys are written again.
         deviceKeys.Forget(run.Vm);
         var errors = new List<ProvisionStepError>();
+        // A failure that is no optional guest step's (the deferred phase broke off): the job fails after the run.
+        var phaseBroken = false;
         string? payloadHash = null;
         string? tarPath = null;
         try
@@ -132,11 +134,14 @@ public sealed class ProvisionJob(ISshRunner ssh, ISourceCache sources, IVmApplie
                 var phase = await GuestScriptAsync(context, "project-commands", ProvisionScript.ProvisionCommand(phaseVars), phaseVars,
                     [ProvisionScript.CloneCredentialsVariable]);
                 var phaseResult = ProvisionScript.ParseResult(phase.Lines);
-                // Invoke-DeferredProjectCommands: an unreadable result or a hard exit counts as one failure.
-                errors.AddRange(!phaseResult.IsValid || phase.ExitCode is not (0 or 3)
+                // Invoke-DeferredProjectCommands: an unreadable result or a hard exit counts as one failure, and it is
+                // no optional step's: the run goes on (applied state, keys, reboot) and the job fails at its end.
+                phaseBroken = !phaseResult.IsValid || phase.ExitCode is not (0 or 3);
+                errors.AddRange(phaseBroken
                     ? [new ProvisionStepError(ProvisionScript.ProjectCommandsTitle, phase.ExitCode, "")]
                     : phaseResult.Errors.Select(Redacted));
-                context.Done("project provisioning commands finished");
+                if (phaseBroken) context.Report("project-commands", "failed", $"the project commands phase broke off (exit {phase.ExitCode})");
+                else context.Done("project provisioning commands finished");
             }
             else
             {
@@ -155,9 +160,11 @@ public sealed class ProvisionJob(ISshRunner ssh, ISourceCache sources, IVmApplie
             var rebooted = await FinishAsync(context, run, seedUser);
             context.Done(rebooted ? "the VM reboots in a few seconds" : "the VM keeps running");
 
-            var outcome = Result(run, payloadHash, errors, null, null, rebooted, appliedState);
-            if (errors.Count > 0)
-                throw new JobFailureException($"provision-steps-failed: {errors.Count} guest step(s) failed.", outcome);
+            // Optional guest steps that failed are warnings: the job is done (F41). A broken phase is a failure.
+            var outcome = Result(run, payloadHash, errors, phaseBroken ? "project-commands" : null, phaseBroken ? "project-commands-failed" : null,
+                rebooted, appliedState);
+            if (phaseBroken)
+                throw new JobFailureException("project-commands-failed: the project commands phase broke off.", outcome);
             return new JobOutcome(outcome);
         }
         catch (ProvisionStepException ex)
@@ -327,8 +334,9 @@ public sealed class ProvisionJob(ISshRunner ssh, ISourceCache sources, IVmApplie
         string? failedStep, string? code, bool rebooted, VmAppliedState? appliedState)
     {
         var failed = errors.ToArray();
-        return new(run.Commit, payloadHash ?? "", run.Desired.Hash, run.Channel, failed.Length == 0 && failedStep is null,
-            failedStep, code ?? (failed.Length > 0 ? "provision-steps-failed" : null), failed, ProvisionScript.FixPrompt(failed), rebooted, appliedState);
+        // Failed optional steps alone leave it succeeded: they are the job's warnings (JobWarnings).
+        return new(run.Commit, payloadHash ?? "", run.Desired.Hash, run.Channel, failedStep is null,
+            failedStep, code, failed, ProvisionScript.FixPrompt(failed), rebooted, appliedState);
     }
 
     private async Task BeginAsync(Context context, string step, CancellationToken cancel)

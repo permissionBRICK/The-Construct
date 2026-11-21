@@ -130,8 +130,9 @@ public sealed record VmAppliedState(
 public sealed record ProvisionStepError(string Title, int ExitCode, string LogPath);
 
 /// <summary>
-/// The durable result of a <see cref="JobKinds.Provision"/> job. On failure it carries the failed
-/// guest steps and the fix prompt for the repair agent (the PowerShell's autofix prompt). No secret.
+/// The durable result of a <see cref="JobKinds.Provision"/> job. It carries the failed guest steps and the fix prompt for
+/// the repair agent (the PowerShell's autofix prompt). Failed optional guest steps alone leave it <paramref name="Succeeded"/>
+/// (the job's warnings); <paramref name="FailedStep"/> and <paramref name="Code"/> name a step that failed the job. No secret.
 /// </summary>
 public sealed record ProvisionJobResult(
     string Commit,
