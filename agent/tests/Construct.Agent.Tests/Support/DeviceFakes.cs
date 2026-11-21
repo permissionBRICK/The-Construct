@@ -180,7 +180,7 @@ public sealed class FakeDevice : IAsyncDisposable
             // A try of the device key on a VM whose alias names another one; it logs in when the test says so.
             if (key == ssh.DeviceKeyPath && ssh.KeyFor(target.Alias) != key)
             {
-                transport.ScriptHandler = (_, _) => Task.FromResult(new ProcessResult(DeviceKeyWorks ? 0 : 255));
+                transport.ScriptHandler = (script, _) => { ProbeScripts.Enqueue(script); return Task.FromResult(new ProcessResult(DeviceKeyWorks ? 0 : 255)); };
                 KeyProbes.Enqueue(target.Vm);
                 return transport;
             }
@@ -194,7 +194,7 @@ public sealed class FakeDevice : IAsyncDisposable
         Updater = new AgentUpdater(Options, Install, Settings, new HttpClient(channel ?? new StaticHandler()), "agentLinux",
             () => Busy ?? (everything?.Running == true ? "the update of hosts and VMs" : null), Platform, () => Stopped++, () => { })
             { Running = running, IdlePoll = TimeSpan.FromMilliseconds(50), IdleLimit = TimeSpan.FromSeconds(2) };
-        Everything = new UpdateEverything(Engines, Updater, () => { }, TimeProvider.System) { PollInterval = TimeSpan.FromMilliseconds(20), HostUpdateLimit = TimeSpan.FromSeconds(5) };
+        Everything = new UpdateEverything(Engines, Updater, () => { }, TimeProvider.System) { PollInterval = TimeSpan.FromMilliseconds(20), HostUpdateLimit = TimeSpan.FromSeconds(5), ReadyLimit = TimeSpan.FromSeconds(1) };
         everything = Everything;
         Services = new DeviceServices(Platform, Settings, ssh, Links, Updater, Everything, Engines);
     }
@@ -216,6 +216,9 @@ public sealed class FakeDevice : IAsyncDisposable
 
     /// <summary>The VMs the device key was tried on.</summary>
     public ConcurrentQueue<string> KeyProbes { get; } = new();
+
+    /// <summary>What the device-key probes ran on the VMs.</summary>
+    public ConcurrentQueue<string> ProbeScripts { get; } = new();
 
     /// <summary>Whether the device key logs in on the VMs.</summary>
     public bool DeviceKeyWorks { get; set; }

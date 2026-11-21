@@ -250,13 +250,28 @@ public sealed class VmLinks : IAsyncDisposable
 
         try
         {
-            var probe = await _sshFor(target, _ssh.DeviceKeyPath).RunRemoteScriptAsync("true", TimeSpan.FromSeconds(20), ct).ConfigureAwait(false);
+            // A login alone proves nothing (a shared connection or another configured key may have made it): the
+            // device key itself must be one the VM accepts.
+            if (DeviceKeyBlob() is not { } blob) return;
+            var probe = await _sshFor(target, _ssh.DeviceKeyPath)
+                .RunRemoteScriptAsync($"grep -qsF -- '{blob}' \"$HOME/.ssh/authorized_keys\"", TimeSpan.FromSeconds(20), ct).ConfigureAwait(false);
             if (probe.Code == 0) _ssh.WriteAlias(target.Alias, address.Host, address.Port, target.Ipv4, _ssh.DeviceKeyPath);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or AgentFailure)
         {
             // Tried again later.
         }
+    }
+
+    /// <summary>The base64 part of the device's public key, or null when it cannot be read as one.</summary>
+    private string? DeviceKeyBlob()
+    {
+        try
+        {
+            var fields = File.ReadAllText(_ssh.DeviceKeyPath + ".pub").Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
+            return fields.Length >= 2 && fields[1].Length >= 16 && fields[1].All(c => char.IsAsciiLetterOrDigit(c) || c is '+' or '/' or '=') ? fields[1] : null;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return null; }
     }
 
     /// <summary>Writes the VM's SSH alias and VS Code's platform entry for it.</summary>

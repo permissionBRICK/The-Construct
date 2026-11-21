@@ -99,6 +99,8 @@ public sealed class DeviceLinkTests : IAsyncDisposable
         Assert.NotSame(second, _device.Transports["e1/work"]);
     }
 
+    private const string DeviceKeyBlob = "AAAAC3NzaC1lZDI1NTE5AAAAIDeviceKeyForTheProbeTest0000000000000000";
+
     [Fact]
     public async Task An_alias_with_the_old_clients_key_switches_to_the_device_key_once_that_key_logs_in()
     {
@@ -108,6 +110,7 @@ public sealed class DeviceLinkTests : IAsyncDisposable
         var old = Path.Combine(ssh, "agent_vm_ed25519");
         File.WriteAllText(old, "old");
         File.WriteAllText(Path.Combine(ssh, "construct_ed25519"), "device");
+        File.WriteAllText(Path.Combine(ssh, "construct_ed25519.pub"), $"ssh-ed25519 {DeviceKeyBlob} construct-agent\n");
         File.WriteAllText(Path.Combine(ssh, "config"), $"Host work\n    HostName host.example\n    User root\n    IdentityFile {old}\n    IdentitiesOnly yes\n    Port 2201\n");
 
         // Not on the VM yet: the link dials with the old key, and the device key is not tried again at once.
@@ -128,6 +131,9 @@ public sealed class DeviceLinkTests : IAsyncDisposable
         Assert.Contains("IdentityFile " + device, config, StringComparison.Ordinal);
         Assert.DoesNotContain(old, config, StringComparison.Ordinal);
         Assert.Equal(["work", "work"], _device.KeyProbes);
+        // The probe asks whether the VM accepts the device key itself, not just whether some login worked (a shared
+        // connection or another configured key could make that one).
+        Assert.All(_device.ProbeScripts, script => Assert.Contains($"grep -qsF -- '{DeviceKeyBlob}'", script, StringComparison.Ordinal));
         // From now on nothing is tried: the alias names the device key.
         await _device.Links.RefreshAsync(CancellationToken.None);
         Assert.Equal(2, _device.KeyProbes.Count);
@@ -141,6 +147,7 @@ public sealed class DeviceLinkTests : IAsyncDisposable
         var old = Path.Combine(ssh, "agent_vm_ed25519");
         File.WriteAllText(old, "old");
         File.WriteAllText(Path.Combine(ssh, "construct_ed25519"), "device");
+        File.WriteAllText(Path.Combine(ssh, "construct_ed25519.pub"), $"ssh-ed25519 {DeviceKeyBlob} construct-agent\n");
         File.WriteAllText(Path.Combine(ssh, "config"), $"Host work\n    HostName host.example\n    User root\n    IdentityFile {old}\n    IdentitiesOnly yes\n    Port 2201\n");
         await _device.Links.RefreshAsync(CancellationToken.None);
         Assert.Single(_device.KeyProbes);

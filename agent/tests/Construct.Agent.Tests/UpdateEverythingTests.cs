@@ -42,6 +42,27 @@ public sealed class UpdateEverythingTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task A_host_update_that_rolled_back_after_its_handover_leaves_the_vms_alone()
+    {
+        // The job reported success at the handover, then the install rolled back: the engine answers ok, but with the old commit.
+        var engines = new FakeEngines().Add("mine")
+            .On("mine", "GET whoami", """{"name":"alice","role":"admin"}""")
+            .On("mine", "GET host/updates/status", """{"available":{"version":"1.2.0","commit":"abc123"}}""")
+            .On("mine", "POST host/updates/run", """{"state":"running","jobId":"job-1"}""")
+            .On("mine", "GET jobs/job-1", """{"state":"succeeded"}""")
+            .On("mine", "GET health", """{"status":"ok","commit":"old999"}""");
+        _device = new FakeDevice(_directory, engines);
+
+        _device.Everything.Start();
+        await _device.Everything.Work.WaitAsync(TimeSpan.FromSeconds(10));
+
+        Assert.DoesNotContain("POST me/vms/reprovision", engines.CallsTo("mine"));
+        var parts = _device.Everything.View().Parts.Where(p => p.Engine == "mine").ToArray();
+        Assert.Equal(["failed", "skipped"], parts.Select(p => p.State));
+        Assert.Contains("rolled back", parts[0].Detail, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task A_host_update_that_fails_leaves_that_hosts_vms_alone()
     {
         var engines = new FakeEngines().Add("mine")
