@@ -78,7 +78,8 @@ public sealed partial class EngineReplica
                 {
                     if (ProfileRules.Text(applied["url"]) != version.Url || ProfileRules.Text(applied["path"]) != version.Path)
                         return new UpstreamOutcome.Refused("other-provenance", $"Profile '{name}' is tracked from another file ({ProfileRules.Text(applied["path"])} of another repository or path).");
-                    if (ProfileRules.Text(applied["operationId"]) == version.OperationId
+                    // A base the device brings counts only where the engine has none: another device's newer one stays.
+                    if (knownBase is not null || ProfileRules.Text(applied["operationId"]) == version.OperationId
                         || version.Commit.Length > 0 && ProfileRules.Text(applied["baseCommit"]) == version.Commit)
                         return new UpstreamOutcome.Unchanged();
                 }

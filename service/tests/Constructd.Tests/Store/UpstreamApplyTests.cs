@@ -173,6 +173,25 @@ public sealed class UpstreamApplyTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_second_device_moving_over_later_does_not_put_its_older_base_over_the_newer_one()
+    {
+        var v1 = Web("""
+            "provisionCommands":["a"]
+            """);
+        var replica = await TrackedAsync(v1, v1);
+        var v2 = Web("""
+            "provisionCommands":["a","b"]
+            """);
+        Assert.IsType<UpstreamOutcome.Applied>(await replica.ApplyUpstreamAsync("web", Version("c2", v2), null, "device:pc", [], default));
+        var before = await RevisionsAsync();
+
+        // The other PC's old client stored the base of c1: the engine keeps the base of c2 and the profile as it is.
+        Assert.IsType<UpstreamOutcome.Unchanged>(await replica.ApplyUpstreamAsync("web", Version("c1", v1, "seed-laptop"), new UpstreamBase("c1", v1), "device:laptop", [], default));
+        Assert.Equal(before, await RevisionsAsync());
+        Assert.Equal("""["a","b"]""", (await ValueAsync(EngineReplica.ProfileId("web")))!["provisionCommands"]!.ToJsonString());
+    }
+
+    [Fact]
     public async Task A_refresh_whose_answer_was_lost_is_submitted_again_and_leaves_profile_and_base_consistent()
     {
         var (replica, link) = Engine();

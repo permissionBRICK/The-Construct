@@ -105,8 +105,17 @@ public sealed class UpstreamLinks(DeviceAgent agent, IDeviceEngines engines)
                 };
                 try
                 {
-                    await engines.PostAsync(engine, "profiles/" + Uri.EscapeDataString(file.File.Profile) + "/upstream", body, ct).ConfigureAwait(false);
-                    imported++;
+                    var answer = await engines.PostAsync(engine, "profiles/" + Uri.EscapeDataString(file.File.Profile) + "/upstream", body, ct).ConfigureAwait(false);
+                    if (answer?["status"]?.GetValue<string>() == "dropped")
+                    {
+                        // Deleted here already: not tracked.
+                        await RemoveFileAsync(url, file.File.Path, ct).ConfigureAwait(false);
+                        leftOut++;
+                    }
+                    else
+                    {
+                        imported++;
+                    }
                 }
                 catch (AgentFailure failure) when (failure.Status is 400 or 409)
                 {
