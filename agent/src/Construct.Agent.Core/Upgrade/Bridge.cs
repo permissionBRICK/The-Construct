@@ -32,7 +32,7 @@ public sealed record BridgeState
     /// <summary>The last run's items and their outcome, for the dialog.</summary>
     public IReadOnlyList<UpgradeItem> Items { get; init; } = [];
 
-    /// <summary>What the last run says the user should know (leases end, upstream links kept as data, ...).</summary>
+    /// <summary>What the last run says the user should know (open vault leases end, ...).</summary>
     public IReadOnlyList<string> Notes { get; init; } = [];
 
     /// <summary>The account the last run wrote <see cref="Notes"/> for; they are shown to that account only.</summary>
@@ -48,7 +48,12 @@ public sealed record BridgeState
 }
 
 /// <summary>One item of a conversion run: <c>done</c>, <c>skipped</c> (already there), <c>pending</c> (retried later) or <c>failed</c>.</summary>
-public sealed record UpgradeItem(string Id, string Label, string State, string? Message = null);
+/// <param name="Message">A few words: what happened, or while it runs what it does now.</param>
+/// <param name="Percent">While a long item runs (a VM's reprovision): how far it is.</param>
+public sealed record UpgradeItem(string Id, string Label, string State, string? Message = null, int? Percent = null);
+
+/// <summary>How far a running step is, for its one bar: a percentage and a few words.</summary>
+public sealed record StepProgress(int Percent, string Label);
 
 public sealed class BridgeFile(string path)
 {
