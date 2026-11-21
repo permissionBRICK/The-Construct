@@ -135,10 +135,14 @@ public sealed partial class VmAgents(IHostConfigStore config, ChangeFeed changes
         finally { _marking.Release(); }
     }
 
-    /// <summary>Writes a report and announces each lost sign-in that appeared or went.</summary>
+    /// <summary>
+    /// Writes a report and announces a change of the agents (<c>vm.agents.changed</c>, R11: the pages read them again at
+    /// once) and each lost sign-in that appeared or went.
+    /// </summary>
     private async Task WriteAsync(Vm vm, VmAgentsReport report, VmAgentsReport? before, CancellationToken ct)
     {
         await config.SetAsync(Key(vm.Name), report, "vm:" + vm.Name, ct);
+        if (before is null || !before.Agents.SequenceEqual(report.Agents)) changes.Vm("vm.agents.changed", vm);
         var was = before?.Lost ?? [];
         var now = report.Lost ?? [];
         foreach (var tool in was.Select(l => l.Tool).Except(now.Select(l => l.Tool)).Concat(now.Select(l => l.Tool).Except(was.Select(l => l.Tool))))

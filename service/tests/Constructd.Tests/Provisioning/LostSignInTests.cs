@@ -67,6 +67,23 @@ public sealed class LostSignInTests
     }
 
     [Fact]
+    public async Task A_changed_agent_report_is_announced_and_an_unchanged_one_is_not()
+    {
+        await using var h = await ProvisionHarness.StartAsync();
+        using var changes = h.App.Service<ChangeFeed>().Subscribe(null);
+        await ReportAsync(h, ("claude", true), ("codex", false));
+        await ReportAsync(h, ("claude", true), ("codex", false));
+        await ReportAsync(h, ("claude", true), ("codex", true));
+
+        var seen = new List<Change>();
+        while (changes.Live.TryRead(out var change)) seen.Add(change);
+        var reports = seen.Where(c => c.Type == "vm.agents.changed").ToList();
+        // The first report and the sign-in that changed; the same report again is no change (R11).
+        Assert.Equal(2, reports.Count);
+        Assert.All(reports, c => Assert.Equal((ProvisionHarness.Vm, ProvisionHarness.Vm, "alice", false), (c.Id, c.Vm, c.Owner, c.OwnerOnly)));
+    }
+
+    [Fact]
     public async Task While_a_job_works_on_the_vm_a_signed_out_report_is_no_lost_sign_in_and_the_next_report_after_it_decides()
     {
         await using var h = await ProvisionHarness.StartAsync();
