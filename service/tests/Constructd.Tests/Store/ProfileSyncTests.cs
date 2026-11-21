@@ -22,6 +22,54 @@ public sealed class ProfileSyncTests
     private static string Vm(string name, string profile = "web") => $"/api/v1/vms/{name}/profiles/{profile}";
 
     [Fact]
+    public async Task A_device_submits_upstream_versions_the_engine_merges_them_and_the_VMs_get_the_merge_or_the_conflict()
+    {
+        await using var h = await ProfileSyncHarness.StartAsync();
+        using var device = h.DeviceClient(h.Laptop!);
+        const string url = "https://git.example.test/team/configs.git";
+        var created = await device.PutProfileAsync("/api/v1/profiles/web", Web.Replace("[\"npm ci\"]", "[\"npm ci\",\"npm run lint\"]"), null);
+        using var one = await h.VmAsync("one", "web");
+        await h.SyncAsync();
+
+        // The converter's seed: the old manifest's base, the profile left as it is.
+        var seed = await device.PostUpstreamAsync("web", new UpstreamApplyRequest("op-1", url, "projects/web.json", "main", "c1",
+            JsonNode.Parse(Web)!.AsObject(), new UpstreamBaseRequest("c1", JsonNode.Parse(Web)!.AsObject())));
+        Assert.Equal("merged", seed.Status);
+        Assert.Equal(created.Revision, seed.Revision);
+
+        // Upstream changed the SDK: merged with the local command, written back into the VM that uses the profile.
+        var merged = await device.PostUpstreamAsync("web", new UpstreamApplyRequest("op-2", url, "projects/web.json", "main", "c2",
+            JsonNode.Parse(Web.Replace("\"20\"", "\"22\""))!.AsObject(), null));
+        Assert.Equal("merged", merged.Status);
+        Assert.True(merged.Revision > created.Revision);
+        await h.SyncAsync();
+        Assert.Equal("22", h.Guests.Profile("one", "web")!["sdks"]!["node"]!.GetValue<string>());
+        Assert.Equal(["npm ci", "npm run lint"], h.Guests.Profile("one", "web")!["provisionCommands"]!.AsArray().Select(c => c!.GetValue<string>()));
+        Assert.Equal("unchanged", (await device.PostUpstreamAsync("web", new UpstreamApplyRequest("op-2", url, "projects/web.json", "main", "c2",
+            JsonNode.Parse(Web.Replace("\"20\"", "\"22\""))!.AsObject(), null))).Status);
+
+        // The same field changed both here and upstream: a conflict, delivered to the VM's agent.
+        var edit = await device.PutProfileAsync("/api/v1/profiles/web", (await device.GetFromJsonAsync<ProfileResponse>("/api/v1/profiles/web"))!.Profile.ToJsonString()
+            .Replace("\"22\"", "\"24\""), merged.Revision);
+        Assert.Equal("written", edit.Status);
+        var conflict = await device.PostUpstreamAsync("web", new UpstreamApplyRequest("op-3", url, "projects/web.json", "main", "c3",
+            JsonNode.Parse(Web.Replace("\"20\"", "\"18\""))!.AsObject(), null));
+        Assert.Equal("conflict", conflict.Status);
+        Assert.Equal(["sdks.node"], conflict.Fields);
+        Assert.Equal(conflict.ConflictId, Assert.Single(await h.HeartbeatAsync(one, "one"))!["id"]!.GetValue<string>());
+        Assert.Equal("waiting", (await device.PostUpstreamAsync("web", new UpstreamApplyRequest("op-4", url, "projects/web.json", "main", "c4",
+            JsonNode.Parse(Web.Replace("\"20\"", "\"16\""))!.AsObject(), null))).Status);
+
+        // A VM token may not submit upstream versions: only devices fetch upstream repos.
+        var refused = await one.PostAsJsonAsync("/api/v1/profiles/web/upstream", new UpstreamApplyRequest("op-5", url, "projects/web.json", "main", "c5",
+            JsonNode.Parse(Web)!.AsObject(), null));
+        Assert.Equal(HttpStatusCode.Forbidden, refused.StatusCode);
+        var invalid = await device.PostAsJsonAsync("/api/v1/profiles/web/upstream", new UpstreamApplyRequest("op-6", "https://a:b@git.example.test/x.git", "projects/web.json", "main", "c5",
+            JsonNode.Parse(Web)!.AsObject(), null));
+        Assert.Equal(HttpStatusCode.BadRequest, invalid.StatusCode);
+    }
+
+    [Fact]
     public async Task Two_VMs_editing_different_fields_of_one_profile_end_merged_in_both()
     {
         await using var h = await ProfileSyncHarness.StartAsync();

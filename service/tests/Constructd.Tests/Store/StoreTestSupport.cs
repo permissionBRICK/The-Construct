@@ -48,7 +48,18 @@ public sealed class PartitionableClient(IStoreClient inner) : IStoreClient
         return outcome;
     }
 
-    public Task<BatchOutcome> BatchAsync(IReadOnlyList<RecordWrite> writes, CancellationToken ct) { Check(); return inner.BatchAsync(writes, ct); }
+    public async Task<BatchOutcome> BatchAsync(IReadOnlyList<RecordWrite> writes, CancellationToken ct)
+    {
+        Check();
+        var outcome = await inner.BatchAsync(writes, ct);
+        if (LoseNextAnswer)
+        {
+            LoseNextAnswer = false;
+            throw new StoreUnavailableException("answer lost");
+        }
+
+        return outcome;
+    }
 
     public Task<long> ActiveEpochAsync(CancellationToken ct) { Check(); return inner.ActiveEpochAsync(ct); }
 }

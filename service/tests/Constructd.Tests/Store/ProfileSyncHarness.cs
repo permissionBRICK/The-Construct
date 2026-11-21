@@ -280,6 +280,13 @@ public static class ProfileSyncApi
         return (await response.Content.ReadFromJsonAsync<ProfileWriteResponse>())!;
     }
 
+    public static async Task<UpstreamApplyResponse> PostUpstreamAsync(this HttpClient client, string profile, UpstreamApplyRequest request)
+    {
+        var response = await client.PostAsJsonAsync($"/api/v1/profiles/{profile}/upstream", request);
+        Assert.True(response.StatusCode == HttpStatusCode.OK, $"POST upstream {profile}: {response.StatusCode} {await response.Content.ReadAsStringAsync()}");
+        return (await response.Content.ReadFromJsonAsync<UpstreamApplyResponse>())!;
+    }
+
     public static async Task<ProfileWriteResponse> ResolveAsync(this HttpClient client, string path, string json)
     {
         var response = await client.PostAsJsonAsync(path, new ProfileResolveRequest(JsonNode.Parse(json)!.AsObject()));

@@ -41,6 +41,9 @@ public static class ProfileEndpoints
             .RequireAuthorization(Policies.User).Audited("profile.write", "profile").WithName("PutProfile").Produces<ProfileWriteResponse>();
         api.MapDelete("/profiles/{profile}", DeleteFromDeviceAsync)
             .RequireAuthorization(Policies.User).Audited("profile.delete", "profile").WithName("DeleteProfile").Produces<ProfileWriteResponse>();
+        api.MapPost("/profiles/{profile}/upstream", UpstreamFromDeviceAsync)
+            .RequireAuthorization(Policies.User).Audited("profile.upstream", "profile").WithName("ApplyUpstreamProfile").Produces<UpstreamApplyResponse>()
+            .WithDescription("A device's new version of the file an upstream config repo tracks for this profile (design 9.7): merged with the stored base, written with the new base in one batch, or held as a conflict. A retry of the same operation or commit changes nothing.");
         api.MapGet("/profile-conflicts", DeviceConflictsAsync)
             .RequireAuthorization(Policies.User).WithName("ListProfileConflicts").Produces<List<ProfileConflictResponse>>();
         api.MapPost("/profile-conflicts/{id}/resolve", ResolveFromDeviceAsync)
@@ -143,6 +146,39 @@ public static class ProfileEndpoints
         if (Device(http) is not { } device) return DevicesOnly();
         if (request?.Profile is null) return CodedProblems.Validation("profile", "A body with the resolved profile is required.");
         return Answer(await sync.ResolveAsync(device.Account, id, request.Profile, ProfileSync.DeviceOrigin(device.DeviceId), null, ct));
+    }
+
+    private static async Task<IResult> UpstreamFromDeviceAsync(string profile, [FromBody] UpstreamApplyRequest? request, HttpContext http, ProfileSync sync, CancellationToken ct)
+    {
+        if (Device(http) is not { } device) return DevicesOnly();
+        if (request?.Content is null) return CodedProblems.Validation("content", "The upstream file's content is required.");
+        if (request.OperationId is not { Length: > 0 and <= 128 } operation) return CodedProblems.Validation("operationId", "An operation id of 1 to 128 characters is required.");
+        if (Constructd.Sync.Profiles.UpstreamUrls.Refused(request.Url))
+            return CodedProblems.Validation("url", "A git URL is required, without a password (the credential helper supplies it).");
+        if (request.Path is not { Length: > 0 and <= 512 } path || path.StartsWith('/') || path.Contains("..", StringComparison.Ordinal))
+            return CodedProblems.Validation("path", "The file's path in the repository is required.");
+        if (request.Commit is not { Length: <= 64 } commit || !commit.All(Uri.IsHexDigit))
+            return CodedProblems.Validation("commit", "The upstream commit is a hex object id (empty when not known).");
+        if (request.Ref is { Length: > 255 }) return CodedProblems.Validation("ref", "The ref is at most 255 characters.");
+        if (request.Base is { Content: null }) return CodedProblems.Validation("base", "A base carries its content.");
+
+        var version = new UpstreamVersion(operation, request.Url!.Trim(), path, request.Ref, commit.ToLowerInvariant(), request.Content);
+        var known = request.Base is { Content: { } content } b ? new UpstreamBase(b.Commit, content) : null;
+        return await sync.ApplyUpstreamAsync(device.Account, profile, version, known, ProfileSync.DeviceOrigin(device.DeviceId), ct) switch
+        {
+            UpstreamOutcome.Unchanged => TypedResults.Ok(new UpstreamApplyResponse("unchanged", null, null, null)),
+            UpstreamOutcome.Applied a => TypedResults.Ok(new UpstreamApplyResponse("merged", a.ProfileRevision, null, null)),
+            UpstreamOutcome.Conflict c => TypedResults.Ok(new UpstreamApplyResponse("conflict", null, c.ConflictId, c.Fields)),
+            UpstreamOutcome.Waiting w => TypedResults.Ok(new UpstreamApplyResponse("waiting", null, w.ConflictId, null)),
+            UpstreamOutcome.Dropped => TypedResults.Ok(new UpstreamApplyResponse("dropped", null, null, null)),
+            UpstreamOutcome.Refused r => CodedProblems.Create(r.Code switch
+            {
+                "invalid-name" or "invalid-profile" => 400,
+                "store-unavailable" => 503,
+                _ => 409,
+            }, r.Code, r.Message),
+            _ => throw new InvalidOperationException(),
+        };
     }
 
     // ---- answers --------------------------------------------------------------------------------
