@@ -223,16 +223,21 @@ public sealed class ProvisionJob(ISshRunner ssh, ISourceCache sources, IVmApplie
     /// The <c>restore</c> job (design 7.1): one chosen stored backup into the running VM, as the
     /// client's <c>backup-restore</c> action does. The key came from a device, in the bag.
     /// </summary>
+    /// <remarks>
+    /// With <see cref="ProvisionRun.DeferProjectCommands"/> (a pre-reinstall backup), the project commands run again after
+    /// the restore; their failures are the job's warnings, since the restore itself is done and is never run twice.
+    /// </remarks>
     public async Task<JobOutcome> RestoreOnlyAsync(ProvisionRun run, IProgress<string> progress, CancellationToken cancel)
     {
-        JobProgressTracker.Current?.Expect(["restore"]);
+        JobProgressTracker.Current?.Expect(run.DeferProjectCommands ? ["restore", "project-commands"] : ["restore"], GuestStep, run.DeferProjectCommands ? 2 : 0);
         var context = new Context(run, progress) { Step = "restore" };
         var restore = run.Restore ?? throw new InvalidOperationException("A restore run names its backup.");
         try
         {
             await BeginAsync(context, "restore", cancel);
             await RestoreStepAsync(context, restore);
-            return new JobOutcome(new RestoreJobResult(restore.BackupId, true, null, null, null));
+            var warnings = run.DeferProjectCommands ? await ProjectCommandsAfterRestoreAsync(context, cancel) : [];
+            return new JobOutcome(new RestoreJobResult(restore.BackupId, true, null, null, null, warnings.Count == 0 ? null : warnings));
         }
         catch (ProvisionStepException ex)
         {
@@ -247,6 +252,26 @@ public sealed class ProvisionJob(ISshRunner ssh, ISourceCache sources, IVmApplie
             throw new JobFailureException($"restore-failed: {safe}", new RestoreJobResult(restore.BackupId, false, context.Step, "restore-failed", safe));
         }
         finally { run.Secrets.Clear(); }
+    }
+
+    /// <summary>The project phase of <c>provision.sh</c> after a restore job's restore; the VM keeps running.</summary>
+    private async Task<IReadOnlyList<ProvisionStepError>> ProjectCommandsAfterRestoreAsync(Context context, CancellationToken cancel)
+    {
+        var run = context.Run;
+        await BeginAsync(context, "project-commands", cancel);
+        var input = new ProvisionEnvInput(run.Vm.Name, run.Desired.Desired, run.DefaultSeedUser, run.Commit, run.Target.IsRoot, true,
+            new HashSet<string>(StringComparer.Ordinal), null, run.Desired.Hash, run.Channel);
+        var vars = ProvisionScript.ProjectPhaseEnvironment(input, rebootFollows: false);
+        var phase = await GuestScriptAsync(context, "project-commands", ProvisionScript.ProvisionCommand(vars), vars, []);
+        var result = ProvisionScript.ParseResult(phase.Lines);
+        if (!result.IsValid || phase.ExitCode is not (0 or 3))
+        {
+            context.Report("project-commands", "failed", $"the project commands phase broke off (exit {phase.ExitCode})");
+            return [new ProvisionStepError(ProvisionScript.ProjectCommandsTitle, phase.ExitCode, "")];
+        }
+
+        context.Done(result.ErrorCount == 0 ? "project provisioning commands finished" : $"project provisioning commands finished with {result.ErrorCount} error(s)");
+        return [.. result.Errors.Select(e => e with { Title = run.Secrets.Redact(e.Title), LogPath = run.Secrets.Redact(e.LogPath) })];
     }
 
     /// <summary>

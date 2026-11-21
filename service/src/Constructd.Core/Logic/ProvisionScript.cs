@@ -122,13 +122,14 @@ public static partial class ProvisionScript
     }
 
     /// <summary>The variables of the project-commands phase (<c>Invoke-DeferredProjectCommands</c>).</summary>
-    public static IReadOnlyList<KeyValuePair<string, string>> ProjectPhaseEnvironment(ProvisionEnvInput input)
+    /// <param name="rebootFollows">Whether the VM reboots right after the phase; by default the provision's rule (the bootstrap path reboots).</param>
+    public static IReadOnlyList<KeyValuePair<string, string>> ProjectPhaseEnvironment(ProvisionEnvInput input, bool? rebootFollows = null)
     {
         var s = input.Desired.Settings;
         var vars = new List<KeyValuePair<string, string>>
         {
             new("PROVISION_PHASE", "project-commands"),
-            new("REBOOT_AFTER_PROVISION", Bool(!input.ConnectedAsRoot)),
+            new("REBOOT_AFTER_PROVISION", Bool(rebootFollows ?? !input.ConnectedAsRoot)),
             new("CHECKOUT_PROJECTS", Bool(s.CheckoutProjects ?? true)),
         };
         if (!input.SecretNames.Contains(CloneCredentialsVariable)) vars.Add(new(CloneCredentialsVariable, string.Empty));

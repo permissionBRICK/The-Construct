@@ -148,15 +148,21 @@ public sealed record ProvisionJobResult(
     VmAppliedState? Applied);
 
 /// <summary>
-/// The durable result of a <see cref="JobKinds.Restore"/> job: which backup, and where it stopped. No secret.
+/// The durable result of a <see cref="JobKinds.Restore"/> job: which backup, and where it stopped. A restore of a
+/// pre-reinstall backup runs the project commands after it; <paramref name="FailedSteps"/> are the ones of them that
+/// failed (the job's warnings). No secret.
 /// </summary>
-public sealed record RestoreJobResult(string BackupId, bool Succeeded, string? FailedStep, string? Code, string? Message);
+public sealed record RestoreJobResult(string BackupId, bool Succeeded, string? FailedStep, string? Code, string? Message,
+    IReadOnlyList<ProvisionStepError>? FailedSteps = null);
 
 /// <summary>
 /// The durable result of a <see cref="JobKinds.Reinstall"/> job. <paramref name="BackupId"/> is the
 /// pre-reinstall backup it relies on (kept on the host whatever happens); <paramref name="VmDeleted"/>
 /// whether the old VM is gone; <paramref name="Restored"/> whether the backup is back in the new one;
-/// <paramref name="Provision"/> the provisioning part, once it ran. No secret.
+/// <paramref name="Provision"/> the provisioning part, once it ran. <paramref name="RestoreNeeded"/>: the VM is
+/// reinstalled and provisioned, but the backup could not be restored by the job (its key went with an engine restart);
+/// a device restores it with a <c>restore</c> job of <paramref name="BackupId"/>, made at <paramref name="BackupCreatedAt"/>.
+/// No secret.
 /// </summary>
 public sealed record ReinstallJobResult(string? BackupId, bool Succeeded, string? FailedStep, string? Code, string? Message,
-    bool VmDeleted, bool Restored, ProvisionJobResult? Provision);
+    bool VmDeleted, bool Restored, ProvisionJobResult? Provision, bool RestoreNeeded = false, DateTimeOffset? BackupCreatedAt = null);

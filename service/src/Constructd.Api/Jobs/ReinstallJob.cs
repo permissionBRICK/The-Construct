@@ -45,8 +45,8 @@ public sealed record ReinstallRun(
 /// Retries (design 7.1): every attempt records in <see cref="RecoveryMarks"/> whether the VM was deleted and
 /// which backup the reinstall relies on. A retry after the delete gets the media and starts at <c>create</c> with the same
 /// backup and never makes a new one; without the key (the engine restarted) it rebuilds and provisions
-/// the VM and ends with <c>restore-needs-device</c>, naming the backup a device restores with a
-/// <c>restore</c> job. Once the restore started, a retry stops instead of deleting the VM again.
+/// the VM and succeeds with <c>restore-needs-device</c> (<see cref="ReinstallJobResult.RestoreNeeded"/>), naming the
+/// backup a device restores with a <c>restore</c> job. Once the restore started, a retry stops instead of deleting the VM again.
 /// </summary>
 public sealed class ReinstallJob(ProvisionJob provision, IProvisionTargets targets, BackupCoordinator backups,
     IHypervisorDriver driver, IVmNestedDriver nested, IVmRepository vms, IServiceScopeFactory scopes, RecoveryMarks marks,
@@ -180,11 +180,13 @@ public sealed class ReinstallJob(ProvisionJob provision, IProvisionTargets targe
             await marks.ClearReinstallAsync(vm, CancellationToken.None);
             if (restore is null)
             {
-                // A retry without the key: the VM is back and provisioned, the restore waits for a device.
-                var message = $"restore-needs-device: the VM is reinstalled and provisioned, but the job's key for backup {state.BackupId} is gone (the engine restarted). "
-                    + $"A device restores it with a restore job for backup {state.BackupId}; the backup stays on the host.";
-                ProvisionJob.Report(state.Guest, progress, "restore", "failed", message);
-                throw new JobFailureException(message, Result(state, false, "restore", "restore-needs-device", message));
+                // A retry without the key: the VM is back and provisioned, which is done; the restore waits for a device,
+                // and the result says which backup (F37): a client turns it into a one-click restore of exactly that one.
+                var made = (await backups.Store.GetAsync(state.BackupId!, CancellationToken.None))?.CreatedAt;
+                var message = $"Reinstalled. Restore your settings from the backup of {made?.ToString("u", System.Globalization.CultureInfo.InvariantCulture) ?? state.BackupId}: "
+                    + $"the job's key for backup {state.BackupId} went with an engine restart, so a device restores it (a restore job); the backup stays on the host.";
+                ProvisionJob.Report(state.Guest, progress, "restore", "skipped", message);
+                return new JobOutcome(Result(state, true, null, "restore-needs-device", message) with { RestoreNeeded = true, BackupCreatedAt = made });
             }
 
             return new JobOutcome(Result(state, true, null, null, null));

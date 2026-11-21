@@ -281,8 +281,13 @@ public sealed class ProvisionJobs(IJobStore jobs, IJobQueryStore history, IPersi
             var queued = new Job(id, JobKinds.Restore, vm.Name, vm.Owner, JobState.Queued, [], null, null, clock.UtcNow, null,
                 actor, request.RequestId, "restore");
             await jobs.UpsertAsync(queued, ct);
-            // A restore uses no source and no settings: the run carries the VM, its address and the backup.
-            var run = new ProvisionRun(id, vm, target, "", null!, null, false, options.Iso.SeedUser, null, request.Secrets,
+            // A restore uses no source: the run carries the VM, its address and the backup. A backup made for a reinstall
+            // is restored into the VM built from it, whose project commands ran before the restore brought back what they
+            // need (secrets, tokens): they run again after it, with the VM's stored settings (F39).
+            var projects = backup.Trigger == BackupTriggers.PreReinstall;
+            var settings = projects ? await desired.GetDesiredForAsync(vm, ct) : null;
+            settings ??= new StoredDesiredState(new VmDesiredState([], new ProvisionSettings()), "", clock.UtcNow, actor);
+            var run = new ProvisionRun(id, vm, target, "", settings, null, projects, options.Iso.SeedUser, null, request.Secrets,
                 new ProvisionRestore(backupId));
             await runner.StartPersistedAsync(queued, handle, (progress, token) => job.RestoreOnlyAsync(run, progress, token), CancellationToken.None);
             handle = null;

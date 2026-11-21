@@ -375,7 +375,9 @@ The same route starts the two other jobs of a VM's life:
   before the delete. Nothing is deleted without a verified, host-requested (pinned) backup. Needs
   backups enabled on the host; an external machine is refused.
 - `{kind: "restore", requestId, backupId, secrets: {backupKey}}` restores a stored backup into the
-  running VM; `backupKey` is the backup's key a device unwrapped. Step: `restore`.
+  running VM; `backupKey` is the backup's key a device unwrapped. Step: `restore`; for a `pre-reinstall` backup
+  also `project-commands`, the project phase of `provision.sh` with the VM's stored settings, since what the
+  commands need came back with the backup (failed project steps are the job's warnings).
 
 `POST /jobs/{id}/retry` (`{secrets?}`) starts the same kind of job again for the same VM with its stored settings
 and the engine's installed commit: a failed `provision`, `reinstall` or `restore` (a restore with its backup's key in
@@ -386,8 +388,9 @@ second click answers the retry already started. The rules below hold for a retry
 
 Retries: the job key's private half lives in the job's memory only. After a reinstall failed past the
 delete it stays in memory for an hour, and a retry gets the media and starts at `create` with the same backup and key; a
-retry after an engine restart rebuilds and provisions the VM and fails with `restore-needs-device`,
-naming the backup a device restores with a `restore` job. A restore is recorded before the guest
+retry after an engine restart rebuilds and provisions the VM and succeeds with `code: restore-needs-device`,
+`restoreNeeded: true`, the `backupId` and its `backupCreatedAt`: a client turns that into a one-click restore of
+exactly that backup by a device (a `restore` job). A restore is recorded before the guest
 starts it: a restore of the same backup that did not finish is not run again (`restore-already-ran`),
 and a reinstall whose restore started never deletes the VM again; both say what to do by hand. These
 records (`reinstall:<vm>`, `restore:<vm>` in the host config store) hold backup ids, a fingerprint and

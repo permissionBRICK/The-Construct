@@ -508,6 +508,8 @@ public sealed class ReinstallJobTests : IAsyncDisposable
         Assert.True(job.State == JobState.Succeeded, job.Error);
         Assert.Equal(id, Result<RestoreJobResult>(job).BackupId);
         Assert.Equal([id], guest.Restored);
+        // Not a pre-reinstall backup: the project commands are not run again.
+        Assert.DoesNotContain(guest.Commands, c => c.Contains("PROVISION_PHASE", StringComparison.Ordinal));
 
         // A wrong key is the guest's decryption failure; the VM was not touched, so it may be run again.
         var wrong = await RestoreAsync(h, "restore-2", id, "AGE-SECRET-KEY-1WRONG");
@@ -598,19 +600,30 @@ public sealed class ReinstallJobTests : IAsyncDisposable
                 Assert.Equal([result.BackupId!], guest.Restored);
                 break;
             case "create" or "provision":
-                // After the delete, with the key gone with the engine: the VM is back and provisioned, the
-                // original backup is untouched and waits for a device's restore job.
-                Assert.Equal(JobState.Failed, retry.State);
-                Assert.Equal("restore-needs-device", result.Code);
+                // After the delete, with the key gone with the engine: the VM is reinstalled and provisioned (done), and
+                // the result names the backup a device restores, with its time, for a one-click restore (F37). The
+                // original backup is untouched and waits for it.
+                Assert.True(retry.State == JobState.Succeeded, retry.Error);
+                Assert.Equal(("restore-needs-device", true, false), (result.Code, result.RestoreNeeded, result.Restored));
+                Assert.StartsWith("Reinstalled. Restore your settings from the backup of ", result.Message, StringComparison.Ordinal);
                 var id = Assert.Single(madeBefore);
                 Assert.Equal(id, result.BackupId);
                 Assert.Equal(id, Assert.Single(backups).Id);
+                Assert.Equal(backups[0].CreatedAt, result.BackupCreatedAt);
                 Assert.True(backups[0].IsPinned(second.App.Clock.UtcNow));
                 Assert.Empty(guest.Restored);
                 Assert.Contains(second.App.Driver.Calls, c => c == "create:" + ProvisionHarness.Vm);
+                // The device's restore of that backup runs the project commands again after it (F39): they need what
+                // the backup brings back.
+                var before = guest.Commands.Count();
                 var restored = await RestoreAsync(second, "restore-1", id, guest.Made[id].Key);
                 Assert.True(restored.State == JobState.Succeeded, restored.Error);
                 Assert.Equal([id], guest.Restored);
+                var after = guest.Commands.Skip(before).ToList();
+                var projects = after.FindIndex(c => c.Contains("PROVISION_PHASE", StringComparison.Ordinal));
+                Assert.True(projects > after.FindIndex(c => c.Contains(" restore --from-host", StringComparison.Ordinal)), string.Join("\n", after));
+                Assert.Equal("false", FakeSshRunner.Variable(after[projects], "REBOOT_AFTER_PROVISION"));
+                Assert.Contains(restored.Progress, p => p.Step == "project-commands" && p.State == "succeeded");
                 break;
             case "restore":
                 // The restore may have changed the new VM: the retry neither deletes it nor restores again.
