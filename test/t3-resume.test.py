@@ -644,8 +644,8 @@ class ProvisionWiringTests(unittest.TestCase):
                       main[:main.index('check_disk_space\n')])
         snapshot = source.index('snapshot --reason reprovision')
         self.assertLess(source.index('run_step critical "Checking free disk space"'), snapshot)
-        self.assertLess(snapshot, source.index('Installing T3 Code web GUI'))
-        self.assertLess(snapshot, source.index('Running core host bootstrap'))
+        self.assertLess(snapshot, source.index('run_step optional "Installing T3 Code web GUI"'))
+        self.assertLess(snapshot, source.index('run_step critical "Running core host bootstrap"'))
 
     def test_installer_wiring(self):
         installer = (ROOT / 'bin' / 'install-ai-tools.sh').read_text()
