@@ -85,6 +85,30 @@ public static partial class SetupChannel
         }
     }
 
+    /// <summary>
+    /// The engine (host) package the manifest names (<c>payloadAsset</c>, <c>payloadSha256</c>), or null when it names
+    /// none usable: the agent's engine step then downloads it itself.
+    /// </summary>
+    public static SetupPackage? EnginePackage(string manifestJson, Uri manifestUrl, string channel, string repository)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(manifestJson);
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object) return null;
+            var version = Text(root, "version");
+            var asset = Text(root, "payloadAsset") ?? "";
+            var sha = Text(root, "payloadSha256") ?? "";
+            if (!IsVersion(version) || asset is "" or "." or ".." || asset.IndexOfAny(['/', '\\']) >= 0 || !Sha256Pattern().IsMatch(sha)) return null;
+            if (channel is not ("stable" or "nightly")) return new(version!, new Uri(manifestUrl, Uri.EscapeDataString(asset)), sha.ToLowerInvariant());
+            var tag = Text(root, "releaseTag") ?? "";
+            return TagPattern().IsMatch(tag)
+                ? new(version!, new Uri($"https://github.com/{repository}/releases/download/{tag}/{Uri.EscapeDataString(asset)}"), sha.ToLowerInvariant())
+                : null;
+        }
+        catch (JsonException) { return null; }
+    }
+
     /// <summary>How a channel is named in messages: a URL channel by its host.</summary>
     public static string Name(string channel) => channel is "stable" or "nightly" ? channel : Uri.TryCreate(channel, UriKind.Absolute, out var url) ? url.Host : "chosen";
 

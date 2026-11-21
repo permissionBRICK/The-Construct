@@ -49,19 +49,31 @@ export function Stack({ footer }: { footer: boolean }) {
       <VaultCards />
       <SignInCards />
       <div class="hd"><VmMenu /><span class="host">{host?.name}</span><PowerBtn vm={vm} /></div>
-      <Btn kind="pri" icon="open" onClick={() => be.open(vm.id, 't3')} disabled={na(s, 'open')}>T3 Code</Btn>
-      <div class="two">
-        <Btn icon="code" onClick={() => be.open(vm.id, 'vscode')} disabled={na(s, 'open')}>VS Code</Btn>
-        <Btn icon="term" onClick={() => be.open(vm.id, 'ssh')} disabled={na(s, 'open')}>SSH</Btn>
-      </div>
+      {footer ? (
+        // The pop-out: the control panel is what it is opened for most; the open actions share one row below it.
+        <>
+          <Btn class="big" icon="gear" onClick={() => shell.openWindow({ page: 'home' })}>Control panel</Btn>
+          <div class="three">
+            <Btn kind="pri" icon="open" onClick={() => be.open(vm.id, 't3')} disabled={na(s, 'open')}>T3 Code</Btn>
+            <Btn icon="code" onClick={() => be.open(vm.id, 'vscode')} disabled={na(s, 'open')}>VS Code</Btn>
+            <Btn icon="term" onClick={() => be.open(vm.id, 'ssh')} disabled={na(s, 'open')}>SSH</Btn>
+          </div>
+        </>
+      ) : (
+        <>
+          <Btn kind="pri" icon="open" onClick={() => be.open(vm.id, 't3')} disabled={na(s, 'open')}>T3 Code</Btn>
+          <div class="two">
+            <Btn icon="code" onClick={() => be.open(vm.id, 'vscode')} disabled={na(s, 'open')}>VS Code</Btn>
+            <Btn icon="term" onClick={() => be.open(vm.id, 'ssh')} disabled={na(s, 'open')}>SSH</Btn>
+          </div>
+        </>
+      )}
       {job ? <JobBlock job={job} vm={vm} /> : wipe ? <ReinstallConfirm vm={vm} onCancel={() => setWipe(false)} /> : <Tiles vm={vm} onReinstall={() => setWipe(true)} />}
       {warned && <WarnedBlock job={warned} />}
       {s.everything && (s.everything.running || s.everything.parts.some(p => p.state === 'failed')) && <EverythingBlock e={s.everything} />}
       {footer && (
         <nav class="sft">
           <button type="button" onClick={() => shell.openWindow({ page: 'vault' })}><Icon n="key" />Key vault</button>
-          <span class="grow" />
-          <button type="button" onClick={() => shell.openWindow({ page: 'home' })}><Icon n="gear" />Control panel</button>
         </nav>
       )}
     </div>

@@ -9,6 +9,9 @@ public interface ISetupPlatform
     /// <summary><c>%LOCALAPPDATA%</c>: the old Companion's state (<c>The-Construct\companion</c>) and program (<c>Programs\ConstructCompanion</c>).</summary>
     string LocalAppData { get; }
 
+    /// <summary>The user's profile folder: the old client's VM keys are in its <c>.ssh</c> folder.</summary>
+    string Home { get; }
+
     /// <summary>Writes a value under the current user's Run key; null deletes it (a missing value is no error).</summary>
     void SetRunValue(string name, string? command);
 
