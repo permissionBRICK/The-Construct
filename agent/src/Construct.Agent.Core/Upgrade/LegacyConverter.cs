@@ -108,6 +108,15 @@ public sealed class LegacyConverter(DeviceAgent agent, IDeviceEngines engines, D
         Report(item);
     }
 
+    /// <summary>
+    /// Names the items of a group before the first of them runs, as waiting: the dialog shows one row per group with
+    /// "n / total" (finding 6), and the total is known from the start.
+    /// </summary>
+    private void Waiting(IEnumerable<(string Id, string Label)> items)
+    {
+        foreach (var (id, label) in items) Report(new UpgradeItem(id, label, "waiting"));
+    }
+
     private void Report(UpgradeItem item)
     {
         var at = _items.FindIndex(i => i.Id == item.Id);
@@ -170,7 +179,9 @@ public sealed class LegacyConverter(DeviceAgent agent, IDeviceEngines engines, D
     {
         var repo = new LegacyConfigRepo(legacy.ConfigRepository);
         if (!repo.Exists) return;
-        foreach (var (name, text) in repo.Profiles())
+        var profiles = repo.Profiles();
+        Waiting(profiles.Keys.Select(name => ("profile:" + name, "Profile " + name)));
+        foreach (var (name, text) in profiles)
         {
             await ItemAsync("profile:" + name, "Profile " + name, async () =>
             {
@@ -307,6 +318,7 @@ public sealed class LegacyConverter(DeviceAgent agent, IDeviceEngines engines, D
 
             if (vault.Leases > 0 || vault.Cleanups > 0)
                 Note("Open vault leases end with the upgrade: a VM that needs a secret again asks for it again.");
+            Waiting(vault.Secrets.Select(secret => ("secret:" + secret.Name, "Secret " + secret.Name)));
             foreach (var secret in vault.Secrets)
             {
                 await ItemAsync("secret:" + secret.Name, "Secret " + secret.Name, async () =>
