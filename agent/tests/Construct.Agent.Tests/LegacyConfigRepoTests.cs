@@ -59,6 +59,34 @@ public sealed class LegacyConfigRepoTests
     }
 
     [Fact]
+    public void A_profile_saved_as_UTF_16_reads_as_its_text()
+    {
+        // Windows PowerShell 5.1's Out-File writes UTF-16 LE with a byte order mark.
+        using var f = new LegacyFixture();
+        f.ConfigRepo(new Dictionary<string, string> { ["projects/api.json"] = """{"name":"api"}""" }, "vm",
+            new Dictionary<string, string?> { ["projects/api.json"] = """{"name":"api","hostPackages":["jq"]}""" });
+        var repo = Path.Combine(f.Root, "config");
+        var text = """{"name":"api","hostPackages":["jq","Über"]}""";
+        File.WriteAllText(Path.Combine(repo, "projects", "wide.json"), text, new System.Text.UnicodeEncoding(bigEndian: false, byteOrderMark: true));
+        Run("add", "-A");
+        Run("-c", "user.name=F", "-c", "user.email=f@example.test", "-c", "commit.gpgsign=false", "commit", "-qm", "wide");
+        File.Delete(Path.Combine(repo, "projects", "wide.json"));
+
+        Assert.Equal(text, new LegacyConfigRepo(repo).Profiles()["wide"]);
+
+        void Run(params string[] args)
+        {
+            var info = new System.Diagnostics.ProcessStartInfo("git") { RedirectStandardError = true };
+            info.ArgumentList.Add("-C");
+            info.ArgumentList.Add(repo);
+            foreach (var a in args) info.ArgumentList.Add(a);
+            using var p = System.Diagnostics.Process.Start(info)!;
+            p.WaitForExit();
+            Assert.Equal(0, p.ExitCode);
+        }
+    }
+
+    [Fact]
     public void A_folder_without_git_is_read_from_its_files_and_sees_no_branch()
     {
         using var f = new LegacyFixture();

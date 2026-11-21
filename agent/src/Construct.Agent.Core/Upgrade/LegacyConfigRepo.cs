@@ -149,7 +149,7 @@ public sealed class LegacyConfigRepo(string path)
                 var content = new byte[size];
                 output.ReadExactly(content);
                 output.ReadByte();
-                if (parts[1] == "blob") result[i] = Utf8.GetString(content).TrimStart('\uFEFF');
+                if (parts[1] == "blob") result[i] = Decode(content);
             }
 
             writer.Wait();
@@ -163,6 +163,13 @@ public sealed class LegacyConfigRepo(string path)
     }
 
     private static readonly UTF8Encoding Utf8 = new(false);
+
+    /// <summary>A file's text as the old one-file-per-process read gave it: UTF-8, unless a byte order mark says UTF-16 or UTF-32.</summary>
+    private static string Decode(byte[] content)
+    {
+        using var reader = new StreamReader(new MemoryStream(content), Utf8, detectEncodingFromByteOrderMarks: true);
+        return reader.ReadToEnd();
+    }
 
     private static string? ReadLine(Stream stream)
     {
