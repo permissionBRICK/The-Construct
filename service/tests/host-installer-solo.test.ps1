@@ -26,7 +26,7 @@ function ok($name, $cond) {
 }
 
 $ast = [System.Management.Automation.Language.Parser]::ParseFile($installer, [ref]$null, [ref]$null)
-foreach ($name in @('Get-ConstructSoloHostName', 'Set-ConstructGuestFirewallRule', 'Set-ConstructHostFirewall', 'Add-ConstructSoloSettings',
+foreach ($name in @('Get-ConstructSoloHostName', 'Set-ConstructGuestFirewallRule', 'Set-ConstructHostFirewall', 'Add-ConstructSoloSettings', 'Set-ConstructInstallerChannel',
                     'Install-ConstructBootstrapKey', 'Get-ConstructPrivateFileSddl', 'Write-ConstructPrivateFile',
                     'New-ConstructSoloTokenDocument', 'Get-ConstructCertificateSha256')) {
     $fn = $ast.Find({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq $name }, $true)
@@ -49,6 +49,24 @@ ok "a solo install without -TokenFile stops before the elevation prompt" ($guard
 ok "solo names the user who started the install as the admin, before elevation" (
     $installText -match "if \(\`$Solo -and -not \`$forward\.ContainsKey\('AdminUser'\)\) \{\s*\r?\n\s*\`$forward\['AdminUser'\] = \[Security\.Principal\.WindowsIdentity\]::GetCurrent\(\)\.Name")
 ok "the service package, not a client checkout, holds the driver: no drivers\ check" (-not ($installText -match 'drivers\\\\Load-ConstructDriver\.ps1'))
+
+# ── The installing device's update channel ───────────────────────────────────
+Write-Host ""
+Write-Host "=== Channel ===" -ForegroundColor Cyan
+$channelParam = $ast.ParamBlock.Parameters | Where-Object { $_.Name.VariablePath.UserPath -eq 'Channel' }
+$channelPattern = ($channelParam.Attributes | Where-Object { $_.TypeName.Name -eq 'ValidatePattern' }).PositionalArguments[0].Value
+ok "-Channel is a string" ($params['Channel'] -eq 'String')
+ok "-Channel takes stable, nightly, an https manifest URL or nothing" (
+    ('', 'stable', 'nightly', 'https://example.test/manifest.json' | Where-Object { $_ -notmatch $channelPattern }).Count -eq 0)
+ok "-Channel refuses anything else" (('beta', 'http://example.test/m.json', 'nightly; rm' | Where-Object { $_ -match $channelPattern }).Count -eq 0)
+$hostAdmin = [pscustomobject]@{ Source = [pscustomobject]@{ RootDir = 'D:\src' } }
+Set-ConstructInstallerChannel -HostAdmin $hostAdmin -Channel ''
+ok "no channel leaves the settings alone" (-not $hostAdmin.PSObject.Properties['Updates'])
+Set-ConstructInstallerChannel -HostAdmin $hostAdmin -Channel 'nightly'
+ok "a channel lands in HostAdmin.Updates.Channel" ($hostAdmin.Updates.Channel -eq 'nightly' -and $hostAdmin.Source.RootDir -eq 'D:\src')
+Set-ConstructInstallerChannel -HostAdmin $hostAdmin -Channel 'stable'
+ok "a later install replaces it" ($hostAdmin.Updates.Channel -eq 'stable')
+ok "the installer sets it on the HostAdmin section it writes" ($installText -match 'Set-ConstructInstallerChannel -HostAdmin \$savedHostAdmin -Channel \$Channel')
 
 # ── The firewall: the PC's own VMs, and nothing else ─────────────────────────
 Write-Host ""

@@ -1834,6 +1834,7 @@ Run it again after publishing a new build: it updates binaries, settings and the
 | `-Solo` | off | This PC's own engine; see *Solo install* below. |
 | `-TokenFile` | – | With `-Solo` (required): where the admin token is written, readable by `-AdminUser` only. |
 | `-BootstrapKeyPath` | – | With `-Solo`: the old client's `keys\bootstrap_ed25519`, taken over with its `.pub`; otherwise a pair is generated once. |
+| `-Channel` | – | The update channel of the device that installs the engine (`stable`, `nightly` or an https manifest URL), written as `Constructd:HostAdmin:Updates:Channel`: the engine's channel until its `updates` settings are saved. The device agent passes its own, and a later change of the device's channel follows to the engine with one `PUT /host/config`. |
 | `-ResultFile` | – | Unattended (the device agent's run): nothing is asked, and the outcome goes to this file as `{result, message}`: `done`, `failed` with the reason in one line, or `restart` (exit 3) when Windows must restart to turn on Hyper-V. Nothing restarts by itself; run it again afterwards. Without it the installer asks as before, the restart prompt included. |
 
 ### Solo install

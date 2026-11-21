@@ -39,7 +39,7 @@ public static class DeviceRoutes
 
         api.MapGet("/device/settings", () => TypedResults.Ok(Settings(device))).WithName("GetDeviceSettings");
 
-        api.MapPut("/device/settings", ([FromBody] DeviceSettingsRequest request) =>
+        api.MapPut("/device/settings", async ([FromBody] DeviceSettingsRequest request, CancellationToken ct) =>
         {
             if (request.Channel is { } channel && AgentUpdater.ManifestUrl(channel, AgentUpdater.DefaultRepository) is null)
                 throw new AgentFailure(400, "invalid-channel", "A channel is stable, nightly or an https manifest URL.");
@@ -49,9 +49,12 @@ public static class DeviceRoutes
                 device.Platform.SetStartWithOs(start, device.StartExecutable ?? throw new AgentFailure(409, "not-installed", "The agent's executable is unknown."));
             }
 
+            var before = device.Settings.Read().Channel;
             device.Settings.Update(s => s with { Channel = request.Channel ?? s.Channel, AutoUpdate = request.AutoUpdate ?? s.AutoUpdate });
+            // This PC's engine follows the device's channel, so one update moves both (F17).
+            if (request.Channel is { } changed && changed != before) await engineSetup.FollowChannelAsync(changed, ct);
             return TypedResults.Ok(Settings(device));
-        }).WithName("SetDeviceSettings").WithDescription("Changes what is given: the release channel, automatic updates, start with the OS.");
+        }).WithName("SetDeviceSettings").WithDescription("Changes what is given: the release channel (this PC's engine follows it), automatic updates, start with the OS.");
 
         api.MapGet("/device/ssh-key", async (CancellationToken ct) =>
             TypedResults.Ok(new SshKeyView(await device.Ssh.EnsureDeviceKeyAsync("construct-agent", ct), device.Ssh.DeviceKeyPath))).WithName("GetDeviceSshKey")

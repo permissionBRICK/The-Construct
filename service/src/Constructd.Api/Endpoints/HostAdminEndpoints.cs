@@ -159,6 +159,7 @@ public static class HostAdminEndpoints
             rows.TryGetValue(key, out var row);
             object value = row is null ? fallback : JsonSerializer.Deserialize(row.ValueJson, fallback.GetType(), ApiJson.Options)!;
             if (row is null && key == "capacity") value = HostAdminDefaults.Capacity with { Mode = options.HostAdmin.Capacity.Mode };
+            if (row is null && key == "updates") value = HostUpdateTrust.Defaults(options);
             if (value is UpdatesConfig updates) value = HostUpdateTrust.Apply(updates, options);
             // Fields stay at section level; source and updatedAt describe the whole section.
             var fields = JsonSerializer.SerializeToNode(value, ApiJson.Options)!.AsObject();
