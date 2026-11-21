@@ -10,6 +10,19 @@ namespace Construct.Agent.Tests;
 public sealed class CoreTests
 {
     [Theory]
+    [InlineData(96, 1120, 920)]
+    [InlineData(120, 1400, 1150)] // 125 %: the FatPC's window was 1200 x 820 device pixels, too small for the move's list (R6)
+    public void The_window_opens_big_enough_for_the_upgrade_in_the_screens_dpi(int dpi, int width, int height)
+    {
+        var big = Construct.Companion.Core.Desktop.WindowPlacement.Main(new(0, 0, 3840, 2100), dpi);
+        Assert.Equal((width, height), (big.Width, big.Height));
+        Assert.Equal(((3840 - width) / 2, (2100 - height) / 2), (big.X, big.Y));
+        // Never larger than the working area.
+        var small = Construct.Companion.Core.Desktop.WindowPlacement.Main(new(0, 0, 1920, 1040), 120);
+        Assert.Equal((260, 0, 1400, 1040), (small.X, small.Y, small.Width, small.Height));
+    }
+
+    [Theory]
     [InlineData("opencode v2.3.2", "2.3.2")] // OpenCode 2
     [InlineData("1.19.6", "1.19.6")] // OpenCode 1
     public void The_probe_reads_the_opencode_version_of_both_generations(string output, string version) =>
