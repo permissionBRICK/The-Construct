@@ -26,6 +26,8 @@ public partial class FakeSshRunner : ISshRunner
     public int UnpackExit { get; set; }
     public bool RebootRequired { get; set; }
     public string? SudoPrompt { get; set; }
+    /// <summary>What the guest names as its seed user (<c>SSH_USER</c>, an existing account); null names none.</summary>
+    public string? GuestSeedUser { get; set; }
 
     /// <summary>A step name ("copy", "provision", "project-commands", "applied") whose first command waits here.</summary>
     public string? HoldAt { get; set; }
@@ -68,6 +70,7 @@ public partial class FakeSshRunner : ISshRunner
             "copy" => (command.Contains("tar -xzf", StringComparison.Ordinal) ? UnpackExit : 0, []),
             "applied" => (0, Marker.Select(kv => $"{kv.Key}={kv.Value}").ToArray()),
             _ when command.Contains("reboot-required", StringComparison.Ordinal) => (0, [RebootRequired ? "yes" : "no"]),
+            _ when command.Contains("s/^SSH_USER=//p", StringComparison.Ordinal) => (0, GuestSeedUser is null ? [] : [GuestSeedUser]),
             _ => (0, []),
         };
         foreach (var line in answer.Lines) lines?.Report(line);

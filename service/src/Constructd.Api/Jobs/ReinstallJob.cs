@@ -102,6 +102,7 @@ public sealed class ReinstallJob(ProvisionJob provision, IProvisionTargets targe
             {
                 // Whatever an earlier attempt left under the name goes first: the backup was never restored into it.
                 await driver.RemoveVmAsync(vm.Name, progress, CancellationToken.None);
+                targets.ForgetAdoptedKey(vm.Name);
             }
 
             var current = await vms.GetAsync(vm.Name, CancellationToken.None) ?? throw Fail("create", "vm-deleting", "The VM's record is gone.");

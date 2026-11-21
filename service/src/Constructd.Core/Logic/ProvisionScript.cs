@@ -190,6 +190,14 @@ public static partial class ProvisionScript
 
     public const string ReadMarkerCommand = "cat /etc/construct/provisioned.env 2>/dev/null || true";
 
+    /// <summary>Prints the guest's seed user (<c>SSH_USER</c> in its config) when that account exists; nothing otherwise.</summary>
+    public const string GuestSeedUserCommand =
+        "u=$(sed -n 's/^SSH_USER=//p' /etc/construct/config.env 2>/dev/null | head -n 1 | tr -d \"'\\\"\"); " +
+        "if [ -n \"$u\" ] && id -u \"$u\" >/dev/null 2>&1; then printf '%s\\n' \"$u\"; fi; true";
+
+    /// <summary>A plain POSIX account name, safe inside the provisioning commands.</summary>
+    public static bool IsSafeUserName(string name) => System.Text.RegularExpressions.Regex.IsMatch(name, "^[a-z_][a-z0-9_-]{0,31}$");
+
     public const string RebootRequiredCommand = "test -e /var/run/reboot-required && echo yes || echo no";
 
     /// <summary>The PowerShell's final step: strip the bootstrap key (root path only) and reboot in the background.</summary>

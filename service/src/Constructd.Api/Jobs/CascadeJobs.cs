@@ -54,6 +54,7 @@ public sealed class CascadeJobs(IVmRepository vms, IVmDelegationRepository deleg
             if (id is not null && parent.Incarnation is not null && id != parent.Incarnation) throw new LifecycleException("vm-incarnation-conflict");
             await driver.RemoveVmAsync(parent.Name, progress, ct);
             if (await driver.GetStateAsync(parent.Name, ct) != VmState.Absent) throw new LifecycleException("cleanup-unverified");
+            await using (var scope = scopes.CreateAsyncScope()) scope.ServiceProvider.GetService<IProvisionTargets>()?.ForgetAdoptedKey(parent.Name);
             await Phase("forwards");
             var removed = await forwards.RemoveAllForwardsAsync(parent.Name, ct);
             await forwards.ReleaseSshForwardAsync(parent.Name, ct);

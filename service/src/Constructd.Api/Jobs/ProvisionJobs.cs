@@ -56,7 +56,12 @@ public sealed class ProvisionTargets(IHypervisorDriver driver, ConstructdOptions
 
     private static string KeyDirectory(ConstructdOptions options) => Path.Combine(Path.GetDirectoryName(Path.GetFullPath(options.DatabasePath))!, "ssh");
 
-    public void ForgetAdoptedKey(string vm) => File.Delete(AdoptedKeyPath(options, vm));
+    public void ForgetAdoptedKey(string vm)
+    {
+        // File.Delete throws for a missing directory: an engine that never adopted a VM has none.
+        var key = AdoptedKeyPath(options, vm);
+        if (File.Exists(key)) File.Delete(key);
+    }
 
     public string? BootstrapPublicKey()
     {
