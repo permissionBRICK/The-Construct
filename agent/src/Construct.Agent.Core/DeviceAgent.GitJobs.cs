@@ -79,22 +79,24 @@ public sealed partial class DeviceAgent
         return await GatherAsync(entry, projects, ct).ConfigureAwait(false);
     }
 
-    /// <summary>The repo URLs of the profiles (as this user reads them from the engine), then the helper's credentials for their hosts.</summary>
+    /// <summary>
+    /// The repo URLs of the profiles (as this user reads them from the engine, all at once: a VM with some 30 profiles
+    /// read them one after the other before the job started), then the helper's credentials for their hosts.
+    /// </summary>
     private async Task<GitCloneCredentialSet> GatherAsync(EngineEntry entry, IReadOnlyList<string> projects, CancellationToken ct)
     {
-        var urls = new List<string>();
-        foreach (var name in projects.Distinct(StringComparer.Ordinal))
+        var read = await Task.WhenAll(projects.Distinct(StringComparer.Ordinal).Select(async name =>
         {
             try
             {
                 var profile = await EngineSendAsync(entry, HttpMethod.Get, "api/v1/profiles/" + Uri.EscapeDataString(name), null, ct).ConfigureAwait(false);
-                foreach (var repo in profile?["profile"]?["repos"] as JsonArray ?? [])
-                    if (repo?["url"] is JsonValue v && v.TryGetValue<string>(out var url)) urls.Add(url);
+                return (profile?["profile"]?["repos"] as JsonArray ?? []).Select(repo => repo?["url"] is JsonValue v && v.TryGetValue<string>(out var url) ? url : null)
+                    .OfType<string>().ToArray();
             }
-            catch (AgentFailure) { /* a profile the engine does not have declares no repos */ }
-        }
+            catch (AgentFailure) { return []; /* a profile the engine does not have declares no repos */ }
+        })).ConfigureAwait(false);
 
-        return await Git.GatherAsync(urls, ct).ConfigureAwait(false);
+        return await Git.GatherAsync(read.SelectMany(urls => urls), ct).ConfigureAwait(false);
     }
 
     private static string? Kind(JsonObject body) => body["kind"] is JsonValue v && v.TryGetValue<string>(out var s) ? s : null;

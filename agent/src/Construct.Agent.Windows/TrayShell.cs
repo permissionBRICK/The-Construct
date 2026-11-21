@@ -7,8 +7,8 @@ namespace Construct.Agent.Windows;
 
 /// <summary>
 /// The tray (11.2): a single click opens the pop-out by the tray, a double click the window, the menu
-/// opens the window, the key vault, start with Windows and quit. While both the pop-out and the window
-/// are closed, a new vault request (an approval or a secret an agent asked for) pops the vault card alone,
+/// opens the window, the key vault, start with Windows and quit. While the pop-out is closed and the window
+/// is not in front, a new vault request (an approval or a secret an agent asked for) pops the vault card alone,
 /// and so does a lost sign-in (S36), once per loss while the agent runs.
 /// </summary>
 internal sealed class TrayShell : ApplicationContext, IAgentShell
@@ -163,6 +163,9 @@ internal sealed class TrayShell : ApplicationContext, IAgentShell
 
     private bool Visible(string surface) => _windows.TryGetValue(surface, out var window) && window.Visible;
 
+    private bool InFront(string surface) =>
+        _windows.TryGetValue(surface, out var window) && window.Visible && window.WindowState != FormWindowState.Minimized && Form.ActiveForm == window;
+
     /// <summary>Where the pop-out appears: at the tray icon last clicked, else the bottom right of the primary screen.</summary>
     private Rectangle PopupBounds(int width, int height)
     {
@@ -189,7 +192,9 @@ internal sealed class TrayShell : ApplicationContext, IAgentShell
             // A lost sign-in pops once: its id carries the time of the loss, so only a new loss pops again.
             var notices = (await Task.Run(() => _agent.AgentNoticesAsync(CancellationToken.None))).Notices
                 .Select(n => "n:" + n.Engine + "/" + n.Vm + "/" + n.Agent + "@" + n.At).Where(_seenNotices.Add).ToArray();
-            if ((fresh.Length > 0 || notices.Length > 0) && !Visible("pop") && !Visible("win"))
+            // The open window shows the card on every page, but only to someone looking at it: behind other windows or
+            // minimized, the card pops alone all the same (finding 43).
+            if ((fresh.Length > 0 || notices.Length > 0) && !Visible("pop") && !InFront("win"))
             {
                 Show("alone", null);
                 _attention = true;
