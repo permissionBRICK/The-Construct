@@ -260,6 +260,54 @@ public sealed class DeviceLinkTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task T3_code_opens_the_desktop_app_on_a_repair_thread_by_its_link()
+    {
+        // The failed job's repair runs as a T3 Code thread in the VM; its card opens T3 Desktop on that thread.
+        await _device.Links.RefreshAsync(CancellationToken.None);
+        _device.Platform.T3Desktop = true;
+        var actions = new VmActions(_device.Links, _device.Platform);
+
+        var opened = await actions.OpenAsync("e1", "work", "t3", "6f1c0b9e-2d4a", "thread:9f%2", CancellationToken.None);
+
+        Assert.Equal(("desktop", true), (opened.Kind, opened.ThreadOpened));
+        Assert.Equal(["t3-desktop t3code://threads/6f1c0b9e-2d4a/thread%3A9f%252"], _device.Platform.Opened);
+        Assert.Empty(_device.Transports["e1/work"].Scripts);
+        // Without the environment the desktop app opens as it is: the thread cannot be named in a link.
+        _device.Platform.Opened.Clear();
+        Assert.False((await actions.OpenAsync("e1", "work", "t3", null, "thread-1", CancellationToken.None)).ThreadOpened);
+        Assert.Equal(["t3-desktop"], _device.Platform.Opened);
+    }
+
+    [Fact]
+    public async Task Without_the_desktop_app_a_repair_thread_opens_t3_code_on_the_web_and_says_the_thread_was_not_opened()
+    {
+        await _device.Links.RefreshAsync(CancellationToken.None);
+        var ssh = _device.Transports["e1/work"];
+        var actions = new VmActions(_device.Links, _device.Platform);
+        ssh.ScriptHandler = (_, _) => Task.FromResult(new ProcessResult(0, """{"links":[{"kind":"forwarded","pairUrl":"https://host.example:2300/pair#token=x"}]}"""));
+
+        var opened = await actions.OpenAsync("e1", "work", "t3", "env-1", "thread-1", CancellationToken.None);
+
+        Assert.Equal(("forwarded", false), (opened.Kind, opened.ThreadOpened));
+        Assert.Equal("https://host.example:2300/pair#token=x", _device.Platform.Opened.Single());
+    }
+
+    [Theory]
+    [InlineData("t3", "env-1", "a/../b")]
+    [InlineData("t3", "env 1", "thread-1")]
+    [InlineData("t3", "env-1", "")]
+    [InlineData("vscode", "env-1", "thread-1")]
+    public async Task A_thread_to_open_takes_ids_fit_for_a_link_and_only_in_t3_code(string what, string environment, string thread)
+    {
+        await _device.Links.RefreshAsync(CancellationToken.None);
+        _device.Platform.T3Desktop = true;
+        var actions = new VmActions(_device.Links, _device.Platform);
+        var failure = await Assert.ThrowsAsync<AgentFailure>(() => actions.OpenAsync("e1", "work", what, environment, thread, CancellationToken.None));
+        Assert.Equal((400, "invalid-request"), (failure.Status, failure.Code));
+        Assert.Empty(_device.Platform.Opened);
+    }
+
+    [Fact]
     public async Task T3_desktop_gets_a_pairing_link_for_its_own_vm_with_the_administrative_scopes_and_nothing_opens()
     {
         await _device.Links.RefreshAsync(CancellationToken.None);

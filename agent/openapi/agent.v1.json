@@ -2621,7 +2621,7 @@
         "tags": [
           "device"
         ],
-        "description": "Opens the VM: `t3` (the patched T3 Code desktop app Construct installed here, else T3 Code's pairing link in the browser), `vscode` (Remote-SSH), `ssh` (a terminal).",
+        "description": "Opens the VM: `t3` (the patched T3 Code desktop app Construct installed here, else T3 Code's pairing link in the browser), `vscode` (Remote-SSH), `ssh` (a terminal). With `threadId` (and `environmentId`, the VM's T3 environment) T3 Desktop opens on that thread (`threadOpened`); the web UI opens without it.",
         "operationId": "OpenVm",
         "parameters": [
           {
@@ -3874,6 +3874,18 @@
         "properties": {
           "what": {
             "type": "string"
+          },
+          "environmentId": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "threadId": {
+            "type": [
+              "null",
+              "string"
+            ]
           }
         }
       },
@@ -3895,6 +3907,10 @@
               "null",
               "string"
             ]
+          },
+          "threadOpened": {
+            "type": "boolean",
+            "default": false
           }
         }
       },

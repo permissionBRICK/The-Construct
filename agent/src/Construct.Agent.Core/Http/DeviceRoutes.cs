@@ -107,8 +107,9 @@ public static class DeviceRoutes
         }).WithName("RemoveSshConfig");
 
         vm.MapPost("/open", async (string engine, string vm, [FromBody] OpenRequest request, CancellationToken ct) =>
-            TypedResults.Ok(await device.Actions.OpenAsync(engine, vm, request.What, ct))).WithName("OpenVm")
-            .WithDescription("Opens the VM: `t3` (the patched T3 Code desktop app Construct installed here, else T3 Code's pairing link in the browser), `vscode` (Remote-SSH), `ssh` (a terminal).");
+            TypedResults.Ok(await device.Actions.OpenAsync(engine, vm, request.What, request.EnvironmentId, request.ThreadId, ct))).WithName("OpenVm")
+            .WithDescription("Opens the VM: `t3` (the patched T3 Code desktop app Construct installed here, else T3 Code's pairing link in the browser), `vscode` (Remote-SSH), `ssh` (a terminal). " +
+                "With `threadId` (and `environmentId`, the VM's T3 environment) T3 Desktop opens on that thread (`threadOpened`); the web UI opens without it.");
 
         vm.MapPost("/t3-pairing", async (string engine, string vm, CancellationToken ct) =>
             TypedResults.Ok(await device.Actions.T3PairingAsync(engine, vm, ct))).WithName("CreateT3PairingLink")
@@ -186,7 +187,8 @@ public sealed record SshKeyView(string PublicKey, string Path);
 
 public sealed record SwitchRequest(bool On);
 
-public sealed record OpenRequest(string What);
+/// <summary>What to open; for <c>t3</c> optionally one thread of the VM's T3 Code (a repair's, as the engine names it).</summary>
+public sealed record OpenRequest(string What, string? EnvironmentId = null, string? ThreadId = null);
 
 public sealed record ShellOpenRequest(string Surface, string? Route = null);
 

@@ -38,9 +38,10 @@ public interface IDevicePlatform
 
     /// <summary>
     /// Starts the T3 Code desktop app, or brings it to the front, when Construct installed its patched build on this
-    /// device; false when there is none (the T3 Code web UI is opened instead).
+    /// device; false when there is none (the T3 Code web UI is opened instead). <paramref name="link"/>, when given, is a
+    /// <c>t3code://threads/...</c> link the app opens (a running app gets it from the new instance's command line).
     /// </summary>
-    Task<bool> OpenT3DesktopAsync(CancellationToken ct) => Task.FromResult(false);
+    Task<bool> OpenT3DesktopAsync(string? link, CancellationToken ct) => Task.FromResult(false);
 
     /// <summary>Whether the agent starts with the user's session; null when this platform cannot say.</summary>
     bool? StartWithOs { get; }

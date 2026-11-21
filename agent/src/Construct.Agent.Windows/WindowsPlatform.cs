@@ -68,9 +68,10 @@ internal sealed partial class WindowsPlatform : IDevicePlatform, IAgentLauncher
     /// Construct's patched T3 Code desktop app, as the old client installed it (<c>Programs\t3code</c>, with the record of
     /// the patched build in <c>The-Construct\artifacts\t3code\installed.json</c>): started detached, as the Companion did;
     /// a running one comes to the front (the app allows one instance). False without one: a stock T3 Desktop would not
-    /// know this agent, so the web UI opens instead.
+    /// know this agent, so the web UI opens instead. A <c>t3code://threads/...</c> link goes on its command line: T3 Desktop
+    /// opens that thread, and a running one gets it from the second instance and comes to the front on it.
     /// </summary>
-    public Task<bool> OpenT3DesktopAsync(CancellationToken ct)
+    public Task<bool> OpenT3DesktopAsync(string? link, CancellationToken ct)
     {
         var local = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
         var directory = Path.Combine(local, "Programs", "t3code");
@@ -79,6 +80,7 @@ internal sealed partial class WindowsPlatform : IDevicePlatform, IAgentLauncher
             .FirstOrDefault(p => !Path.GetFileName(p).StartsWith("Uninstall", StringComparison.OrdinalIgnoreCase));
         if (executable is null) return Task.FromResult(false);
         var start = new ProcessStartInfo(executable) { UseShellExecute = false, CreateNoWindow = true, WorkingDirectory = directory };
+        if (link is not null) start.ArgumentList.Add(link);
         // Electron attaches to its parent's console unless told not to.
         start.Environment["ELECTRON_NO_ATTACH_CONSOLE"] = "1";
         using var _ = Process.Start(start);
