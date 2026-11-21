@@ -82,8 +82,6 @@ public sealed class AgentSetup(ISetupPlatform platform, HttpClient web, HttpClie
 
         // The agent holds the Companion's single-instance mutex; the Companion no longer starts with Windows.
         platform.SetRunValue(CompanionRunValue, null);
-        // It runs in the background (the way Windows starts it at sign-in): its window, where the setup goes on, is opened here.
-        if (!await TryPostAsync(agent, "/api/shell/open", OpenWindow, ct).ConfigureAwait(false)) output.WriteLine("    Open Construct from its tray icon.");
         output.WriteLine($"==> The Construct agent {version} is running. Its window finishes the setup.");
         return new(version, HandedOver: false);
     }
@@ -277,7 +275,8 @@ public sealed class AgentSetup(ISetupPlatform platform, HttpClient web, HttpClie
 
         var exe = Path.Combine(target, AgentExecutable);
         platform.SetRunValue(AgentRunValue, $"\"{exe}\" --background");
-        platform.Start(exe, "--background");
+        // Started with its window: asked over the API instead, the agent answers before its window exists and refuses.
+        platform.Start(exe, "--background --open win");
         return package.Version;
     }
 

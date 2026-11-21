@@ -173,7 +173,8 @@ function Install-ConstructAgentPackage {
 
     $exe = Join-Path $target 'construct-agent.exe'
     Set-ItemProperty -Path $runKey -Name 'ConstructAgent' -Value ('"' + $exe + '" --background')
-    Start-Process -FilePath $exe -ArgumentList '--background' | Out-Null
+    # Started with its window: asked over the API instead, the agent answers before its window exists and refuses.
+    Start-Process -FilePath $exe -ArgumentList '--background', '--open', 'win' | Out-Null
     return $version
 }
 
@@ -212,7 +213,7 @@ if ($running) {
 $stoppedCompanion = Stop-ConstructOldCompanion
 try {
     $installed = Install-ConstructAgentPackage -Channel $channel
-    $agent = Wait-ConstructAgent
+    $null = Wait-ConstructAgent
 } catch {
     # Leave the user with a running Companion: the update can be retried from its button.
     if ($stoppedCompanion) { Start-ConstructOldCompanion }
@@ -220,6 +221,4 @@ try {
 }
 # The agent holds the Companion's single-instance mutex; the Companion no longer starts with Windows.
 Remove-ItemProperty -Path $runKey -Name 'ConstructCompanion' -ErrorAction SilentlyContinue
-# It runs in the background (the way Windows starts it at sign-in): its window, where the setup goes on, is opened here.
-try { Invoke-ConstructAgentRoute -Endpoint $agent -Path '/api/shell/open' -Body @{ surface = 'win' } | Out-Null } catch { Write-Warning 'Open Construct from its tray icon.' }
 Write-Host "==> The Construct agent $installed is running. Its window finishes the setup." -ForegroundColor Green
