@@ -323,6 +323,19 @@ settings, parses the result block, runs the deferred project phase when asked, r
 `provision`, `restore` (only with a backup to restore), `project-commands`, `applied`, `finish`; progress lines carry `{step, state, percent?}`
 and the job's `phase` is the step it is in.
 
+One bar per job: a create, reinstall, provision or restore names its sub-steps as they start (the engine's steps,
+`Downloading ISO`, `Building image`, `Installing Ubuntu`, and every `provision.sh` section, which prints
+`::construct-step LABEL|TITLE` before it runs), and a sub-step that measures itself moves the bar within its share
+(the ISO download, the T3 download through `::construct-progress PERCENT`). Each progress line then also carries
+`overall` (0 to 99 while the job runs, never going back) and `label` (the sub-step in one to three words), and the job
+carries `overall: {percent, label}` from its latest line, `percent` 100 once it succeeded. A sub-step weighs what it took
+in the last successful run of the same kind on the VM (else of any VM; equal weights without one); the plans are
+`progress-plan:<kind>[:<vm>]` in the host config store. Markers never reach the job log.
+
+A provision whose only failures are optional guest steps (`provision.sh` exit 3) succeeds: `result.succeeded` stays
+true, `result.failedSteps` and the fix prompt name them, and the job carries their titles as `warnings`. A deferred
+project phase that breaks off (no result block, another exit) fails the job, `project-commands-failed`.
+
 - `requestId` identifies the click: the same id returns the job it started (`replayed: true`). One
   job per VM: a second provision or a lifecycle job answers `409 operation-in-progress`.
 - `desired` (`{projects[], settings}`) replaces the VM's stored settings; without it the stored ones
