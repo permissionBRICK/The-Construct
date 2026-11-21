@@ -111,6 +111,7 @@ public class RouteCoverageTests
         "DELETE /api/v1/profiles/{profile}",
         "GET /api/v1/profile-conflicts",
         "POST /api/v1/profile-conflicts/{id}/resolve",
+        "POST /api/v1/profiles/{profile}/upstream",
         "GET /api/v1/health",
         "GET /api/v1/host/status",
         "GET /api/v1/host/iso-catalog",

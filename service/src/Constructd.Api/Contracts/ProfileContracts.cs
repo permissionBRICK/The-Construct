@@ -37,3 +37,25 @@ public sealed record ProfileConflictNotice(string Id, string Profile, IReadOnlyL
 
 /// <summary><c>POST …/profile-conflicts/{id}/resolve</c>: the resolved profile.</summary>
 public sealed record ProfileResolveRequest(JsonObject? Profile);
+
+/// <summary>
+/// <c>POST /profiles/{profile}/upstream</c> (design 9.7): a device fetched a new version of the file an upstream config
+/// repo tracks for this profile. <c>operationId</c> names the submission (a retry sends the same); <c>url</c> and
+/// <c>path</c> are the file's provenance (a URL never carries a password), <c>commit</c> the upstream commit and
+/// <c>content</c> the file at it. <c>base</c> only when the engine has stored no base for the profile yet: the base the
+/// device knows (the old client's stored base, carried over by the converter).
+/// </summary>
+public sealed record UpstreamApplyRequest(string? OperationId, string? Url, string? Path, string? Ref, string? Commit, JsonObject? Content,
+    UpstreamBaseRequest? Base);
+
+/// <summary>The base a device knows for an upstream file: its commit and content.</summary>
+public sealed record UpstreamBaseRequest(string? Commit, JsonObject? Content);
+
+/// <summary>
+/// What an upstream version came to. <c>status</c>: <c>unchanged</c> (applied already, or the file did not change),
+/// <c>merged</c> (the profile is at <c>revision</c> with the upstream changes, the new base is stored), <c>conflict</c>
+/// (both changed <c>fields</c>: the conflict <c>conflictId</c> holds the upstream version, the profile stays), <c>waiting</c>
+/// (an open conflict <c>conflictId</c> on the profile is resolved first; submit again later) or <c>dropped</c> (the
+/// profile was deleted here: the file is no longer tracked).
+/// </summary>
+public sealed record UpstreamApplyResponse(string Status, long? Revision, string? ConflictId, IReadOnlyList<string>? Fields);

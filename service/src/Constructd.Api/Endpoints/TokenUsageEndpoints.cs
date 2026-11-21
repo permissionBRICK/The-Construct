@@ -89,18 +89,15 @@ public static class TokenUsageEndpoints
         var agents = new List<VmAgentVersion>();
         foreach (var agent in request.Agents ?? [])
         {
-            if (agent?.Tool is not { } tool || !VmAgents.Names.ContainsKey(tool) || agent.Version is not { } version ||
-                !VmAgents.VersionPattern().IsMatch(version) || agents.Any(a => a.Tool == tool))
+            if (!VmAgents.Accept(agent?.Tool, agent?.Version, agent?.SignedIn, agents))
                 return Problems.BadRequest("Each agent requires a unique known tool (claude, codex, opencode, antigravity, t3) and a version.");
-            agents.Add(new(tool, version, tool == "t3" ? null : agent.SignedIn));
         }
         if (!await store.UpsertAsync(lookup.Vm!, days, clock.UtcNow, ct)) return LifecycleEndpoints.Problem("power-state-changed");
         if (request.Agents is not null)
         {
             // A lost sign-in is noted only for an agent the VM is meant to have (its desired coding agents).
             var desired = await http.RequestServices.GetRequiredService<IVmDesiredStateSource>().GetDesiredForAsync(lookup.Vm!, ct);
-            var chosen = desired is null ? null
-                : (CodingAgents.FromAiTools(CodingAgents.AiTools(desired.Desired)) ?? CodingAgents.Default).Select(AgentSignInScript.Tool).ToArray();
+            var chosen = VmAgents.Chosen(desired?.Desired);
             // While a job works on the VM (its gate is held), a signed-out agent is no lost sign-in yet (F35).
             var busy = http.RequestServices.GetRequiredService<IVmOperationGate>().IsHeld(lookup.Vm!.Name, out _);
             await http.RequestServices.GetRequiredService<VmAgents>().SaveAsync(lookup.Vm!, agents, clock.UtcNow, ct, chosen, busy);

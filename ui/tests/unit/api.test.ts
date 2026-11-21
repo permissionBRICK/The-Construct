@@ -1967,6 +1967,57 @@ describe('ApiBackend lost sign-ins', () => {
   });
 });
 
+describe('ApiBackend agent reports', () => {
+  const P = `/api/engines/${E1}/api/v1`;
+  it('reads the VM\'s agents again at once when the engine says its report changed', async () => {
+    const { be, on, settle } = world();
+    await be.start();
+    on('GET', `${P}/vms/atlas/agents`, { json: { reportedAt: null, agents: [{ tool: 'claude', name: 'Claude Code', version: '2.1.0', latest: '2.1.0', updateAvailable: false, signedIn: false, lostAt: null }] } });
+    be.onEvent('vm.agents.changed', { seq: 1, type: 'vm.agents.changed', engine: E1, data: { id: 'atlas', vm: 'atlas' } });
+    await settle();
+    expect(be.snapshot().vms.find(v => v.name === 'atlas')!.agents.find(a => a.id === 'claude')!.signedIn).toBe(false);
+  });
+});
+
+describe('ApiBackend upstream config repos', () => {
+  const view = (state: string, message: string | null, refreshedAt = '2026-11-21T14:05:00Z') => ({ json: {
+    running: false, refreshedAt, links: [{ url: 'https://git.example.test/team/configs.git', ref: 'main', commit: 'c'.repeat(40), error: null,
+      files: [{ profile: 'webshop', path: 'projects/webshop.json', state, message }] }],
+  } });
+
+  it('shows no line where no repository is linked', async () => {
+    const { be } = world();
+    await be.start();
+    expect(be.snapshot().upstream).toBeNull();
+  });
+
+  it('shows where the shared profiles come from and what needs a look, and checks again on demand', async () => {
+    const { be, calls, on, settle } = world();
+    on('GET', '/api/upstream', view('conflict', 'Changed here and upstream: sdks.node.'));
+    await be.start();
+    const u = be.snapshot().upstream!;
+    expect(u.repos).toEqual([{ url: 'https://git.example.test/team/configs.git', files: [{ profile: 'webshop', state: 'conflict' }] }]);
+    expect(u.problem).toBe('webshop: Changed here and upstream: sdks.node.');
+    expect(u.when).toMatch(/^\d\d:\d\d$/);
+
+    // Checked now: merged, and the profiles are read again.
+    on('POST', '/api/upstream/refresh', view('merged', null, '2026-11-21T14:35:00Z'));
+    const profileReads = calls.filter(c => c.path.endsWith('/api/v1/profiles')).length;
+    be.refreshUpstream();
+    await settle();
+    expect(posts(calls).map(c => c.path)).toContain('/api/upstream/refresh');
+    expect(be.snapshot().upstream!.problem).toBeNull();
+    expect(calls.filter(c => c.path.endsWith('/api/v1/profiles')).length).toBeGreaterThan(profileReads);
+
+    // A refresh on the agent's schedule announces itself: the line follows.
+    on('GET', '/api/upstream', { json: { running: false, refreshedAt: '2026-11-21T15:05:00Z', links: [{ url: 'https://git.example.test/team/configs.git', ref: 'main', commit: null,
+      error: 'The repository could not be fetched.', files: [{ profile: 'webshop', path: 'projects/webshop.json', state: 'failed', message: 'The repository could not be fetched.' }] }] } });
+    be.onEvent('upstream', { seq: 5, type: 'upstream', engine: null, data: null });
+    await settle();
+    expect(be.snapshot().upstream!.problem).toBe('https://git.example.test/team/configs.git: The repository could not be fetched.');
+  });
+});
+
 describe('ApiBackend OpenCode with an OpenRouter key', () => {
   const P = `/api/engines/${E1}/api/v1`;
   it('asks for the key first, starts OpenRouter\'s sign-in, sends the key once as a secret; its own list is the other way', async () => {

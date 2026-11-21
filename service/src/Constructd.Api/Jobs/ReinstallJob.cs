@@ -157,7 +157,8 @@ public sealed class ReinstallJob(ProvisionJob provision, IProvisionTargets targe
             }
 
             var provisionRun = new ProvisionRun(run.JobId, current, target, run.Commit, run.Desired, run.Channel, restore is not null,
-                run.DefaultSeedUser, target.IsRoot ? targets.BootstrapPublicKey() : null, run.Secrets, restore);
+                run.DefaultSeedUser, target.IsRoot ? targets.BootstrapPublicKey() : null, run.Secrets, restore,
+                RestoreFollows: restore is null && state.BackupId is not null);
             try
             {
                 var outcome = await provision.RunAsync(provisionRun, progress, cancel);

@@ -394,7 +394,7 @@ public sealed class UpgradeService
             _live = [];
         }
 
-        var converter = new LegacyConverter(_agent, _engines, _settings, Bridge, _platform, _options.DataDirectory, item =>
+        var converter = new LegacyConverter(_agent, _engines, _settings, Bridge, _platform, item =>
         {
             lock (_gate)
             {

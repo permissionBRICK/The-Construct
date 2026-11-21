@@ -961,6 +961,34 @@ Devices never merge (design S9). A device submits an edit to an engine with its 
 reads `GET /api/v1/profiles`, `GET /api/v1/profiles/{profile}` and the open conflicts,
 `GET /api/v1/profile-conflicts`, and can resolve one with `POST /api/v1/profile-conflicts/{id}/resolve`.
 
+### Upstream config repos
+
+§7's semantics, without a host config repo (design 9.7). A linked repository is an `upstream`
+record (URL, ref, the tracked files and the profile each is imported as), written by devices. What
+was applied is the engine's `upstream-applied` record per profile: the provenance (URL, path, ref),
+the base commit and the base content.
+
+- **Moving over.** The converter turns the old client's `manifest/` entries into `upstream` records
+  and submits each stored base (`bases/<name>.json`) to the store's engine, which keeps it as the
+  profile's base without changing the profile. A file without a stored base, or a URL with a
+  password, is left out. An install converted before this kept the links in the agent's
+  `legacy-upstream.json`; its first refresh carries them over the same way.
+- **Refresh.** Every 30 minutes, and on demand (`POST /api/upstream/refresh` on the device agent;
+  "Check now" on the Projects page), the device agent fetches each linked repository with plain git
+  and the PC's own credentials (no prompt) into a cache in its data folder, safe to delete, and
+  submits each tracked file at the fetched commit: `POST /api/v1/profiles/{profile}/upstream` with an
+  operation id, URL, path, commit and content.
+- **Merge.** The engine merges with the per-field rules of the design (9.6): base = the stored
+  base, the upstream version, the profile here. A clean merge writes the profile and the new base
+  in one batch; the VMs get it by write-back. A field both sides changed is a `conflict` record (the
+  local value stays) written with the new base in one batch; the VMs that select the profile get
+  it in their heartbeat, as any conflict. A newer upstream version waits while a conflict on the
+  profile is open. The same operation, or a commit applied already, changes nothing.
+- **Rename/delete.** Removed upstream: the local profile stays, the refresh says so. Deleted here:
+  the base goes and the file is no longer tracked. A profile of the same name that did not come
+  from that file is never overwritten.
+- **Push-back** stays manual and is not built in the new stack yet.
+
 ### Not covered
 
 - Two VMs on one engine are told about the same conflict when both edits are in it; both agents

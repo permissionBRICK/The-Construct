@@ -76,7 +76,7 @@ public sealed class InvalidProfileException(IReadOnlyList<ProfileProblem> proble
 ///
 /// The replica keeps payloads decrypted: the engine holds <c>D</c> anyway (8.2).
 /// </summary>
-public sealed class EngineReplica : IDisposable
+public sealed partial class EngineReplica : IDisposable
 {
     private readonly SqliteConnection _db;
     private readonly SemaphoreSlim _lock = new(1, 1);

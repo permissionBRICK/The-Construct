@@ -407,6 +407,25 @@ export interface State {
   everything?: Everything | null;
   /** The coding agent sign-in this device started, while it runs or after it failed; null otherwise. */
   signIn?: SignIn | null;
+  /** Upstream config repos shared profiles come from (design 9.7); null when none is linked. */
+  upstream?: Upstream | null;
+}
+
+/** The linked upstream config repos as the last refresh found them. */
+export interface Upstream {
+  repos: UpstreamRepo[];
+  /** When the last refresh ended (HH:MM, this device's time); null before one. */
+  when: string | null;
+  running: boolean;
+  /** The first thing that needs a look (a repo that was not read, a file in conflict or refused), or null. */
+  problem: string | null;
+}
+
+export interface UpstreamRepo {
+  /** Shown without user info. */
+  url: string;
+  /** Tracked profiles and how each stands: up-to-date, merged, conflict, waiting, removed-upstream, invalid, refused, dropped, failed. */
+  files: { profile: string; state: string }[];
 }
 
 export type SettingsPatch = { [K in keyof VmSettings]?: Partial<VmSettings[K]> };
@@ -484,6 +503,8 @@ export interface Backend {
   saveProfile(name: string, doc: Record<string, unknown>, revision: number | undefined): Promise<ProfileSave>;
   addProject(name: string): void;
   syncProjects(): void;
+  /** Fetches the upstream config repos now; their changes are merged into the shared profiles. */
+  refreshUpstream(): void;
   closeForward(vmId: string, forwardId: string): void;
   /** This device's SSH config: write the VM's `Host` alias again, or remove it. */
   setSshAlias(vmId: string, on: boolean): void;

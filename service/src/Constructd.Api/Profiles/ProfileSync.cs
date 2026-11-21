@@ -333,6 +333,39 @@ public sealed class ProfileSync : IDisposable
         }
     }
 
+    // ---- upstream config repos (9.7) ------------------------------------------------------------
+
+    /// <summary>
+    /// A new upstream version of a file a device tracks for profile <paramref name="name"/>, merged by this engine
+    /// (<see cref="EngineReplica.ApplyUpstreamAsync"/>). A conflict reaches the agents of the account's VMs that select
+    /// the profile; the loop writes a merge back into them.
+    /// </summary>
+    public async Task<UpstreamOutcome> ApplyUpstreamAsync(string account, string name, UpstreamVersion version, UpstreamBase? knownBase, string origin, CancellationToken ct)
+    {
+        if (!VmProfileFolder.SafeName(name)) return new UpstreamOutcome.Refused("invalid-name", "A profile name is one path component.");
+        if (Replica(account) is not { } replica)
+            return new UpstreamOutcome.Refused("not-participating", "No device has granted this engine the record key of this account yet.");
+        var users = new List<string>();
+        foreach (var vm in await _vms.ListAsync(account, ct))
+        {
+            if (vm.Owner == account && (await _desired.GetDesiredAsync(vm.Name, ct))?.Desired.Projects.Contains(name, StringComparer.Ordinal) == true)
+                users.Add(VmOrigin(vm.Name));
+        }
+
+        UpstreamOutcome outcome;
+        try
+        {
+            outcome = await replica.ApplyUpstreamAsync(name, version, knownBase, origin, users, ct);
+        }
+        catch (Exception ex) when (ex is StoreUnavailableException or HttpRequestException)
+        {
+            return new UpstreamOutcome.Refused("store-unavailable", "The store is not reachable; the upstream version is submitted again later.");
+        }
+
+        if (outcome is UpstreamOutcome.Applied or UpstreamOutcome.Conflict) Wake();
+        return outcome;
+    }
+
     // ---- heartbeat ------------------------------------------------------------------------------
 
     /// <summary>

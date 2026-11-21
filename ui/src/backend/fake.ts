@@ -15,9 +15,9 @@ export type Scene =
   | 'calm' | 'update' | 'update-nightly' | 'changed' | 'lease' | 'enter' | 'job' | 'failed' | 'failed-reinstall' | 'repair' | 'updating' | 'restart'
   | 'pairing' | 'pair-confirm' | 'revoked' | 'handout' | 'creating' | 'created' | 'sign-in' | 'sign-in-failed' | 'sign-in-browser' | 'sign-in-key' | 'signed-out' | 'signed-out-two'
   | 'upgrade-intro' | 'upgrade-engine' | 'upgrade-name' | 'upgrade-code' | 'upgrade-close' | 'upgrade-convert' | 'upgrade-host' | 'upgrade-done' | 'upgrade-restart'
-  | 'first-run' | 'first-run-restart' | 'warned' | 'old-guest';
+  | 'first-run' | 'first-run-restart' | 'warned' | 'old-guest' | 'upstream';
 
-export const SCENES: Scene[] = ['calm', 'update', 'update-nightly', 'changed', 'lease', 'enter', 'job', 'failed', 'failed-reinstall', 'repair', 'updating', 'restart', 'pairing', 'pair-confirm', 'revoked', 'handout', 'creating', 'created', 'sign-in', 'sign-in-failed', 'sign-in-browser', 'sign-in-key', 'signed-out', 'signed-out-two', 'upgrade-intro', 'upgrade-engine', 'upgrade-name', 'upgrade-code', 'upgrade-close', 'upgrade-convert', 'upgrade-host', 'upgrade-done', 'upgrade-restart', 'first-run', 'first-run-restart', 'warned', 'old-guest'];
+export const SCENES: Scene[] = ['calm', 'update', 'update-nightly', 'changed', 'lease', 'enter', 'job', 'failed', 'failed-reinstall', 'repair', 'updating', 'restart', 'pairing', 'pair-confirm', 'revoked', 'handout', 'creating', 'created', 'sign-in', 'sign-in-failed', 'sign-in-browser', 'sign-in-key', 'signed-out', 'signed-out-two', 'upgrade-intro', 'upgrade-engine', 'upgrade-name', 'upgrade-code', 'upgrade-close', 'upgrade-convert', 'upgrade-host', 'upgrade-done', 'upgrade-restart', 'first-run', 'first-run-restart', 'warned', 'old-guest', 'upstream'];
 
 /** Things the preview frame can make happen, beside the user's own actions. */
 export type Demo = 'lease' | 'enter' | 'release' | 'fail-next' | 'change';
@@ -97,6 +97,12 @@ export class FakeBackend implements Backend {
       case 'warned': d.jobs.push({ ...this.newJob('atlas', 'reprovision', REPROVISION_STEPS.length - 1, 100), state: 'done', warnings: ['Requesting project port forwards'] }); break;
       // A guest from before the sign-in helper: it reports its agents but not their sign-in (finding 11).
       case 'old-guest': for (const a of d.vms[0].agents) a.signedIn = null; break;
+      // Shared profiles from a company config repo (design 9.7), one changed here and upstream.
+      case 'upstream':
+        d.upstream = { repos: [{ url: 'https://git.example.net/team/configs.git', files: [{ profile: 'webshop', state: 'conflict' }, { profile: 'toolkit', state: 'up-to-date' }] }],
+          when: '14:05', running: false, problem: 'webshop: changed here and upstream; an agent resolves it' };
+        d.projects.find(p => p.name === 'webshop')!.conflict = true;
+        break;
       case 'changed': this.vm(d, 'atlas').changeWaits = 'webshop'; break;
       case 'lease': d.vaultRequests.push({ id: 'r1', kind: 'lease', secret: 'forge-token', vmId: 'atlas', vmName: 'atlas', hostName: 'This PC', reason: 'Push the release', span: '2 h', ttlSeconds: 7200 }); break;
       case 'enter': d.vaultRequests.push({ id: 'r2', kind: 'enter', secret: 'payments-sandbox', vmId: 'atlas', vmName: 'atlas', hostName: 'This PC', reason: 'API key of the payments sandbox', span: '' }); break;
@@ -528,6 +534,7 @@ export class FakeBackend implements Backend {
   }
 
   syncProjects() { this.set(d => { d.sync.when = 'just now'; }, 'Synced'); }
+  refreshUpstream() { this.set(d => { if (d.upstream) d.upstream.when = 'just now'; }, 'Checked the upstream repos'); }
 
   closeForward(vmId: string, forwardId: string) {
     const f = this.s.vms.find(v => v.id === vmId)?.forwards.find(x => x.id === forwardId);

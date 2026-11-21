@@ -6838,6 +6838,63 @@
         }
       }
     },
+    "/api/v1/profiles/{profile}/upstream": {
+      "post": {
+        "tags": [
+          "ProfileEndpoints"
+        ],
+        "description": "A device's new version of the file an upstream config repo tracks for this profile (design 9.7): merged with the stored base, written with the new base in one batch, or held as a conflict. A retry of the same operation or commit changes nothing.",
+        "operationId": "ApplyUpstreamProfile",
+        "parameters": [
+          {
+            "name": "profile",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/UpstreamApplyRequest"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpstreamApplyResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error, as a Problem document.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/profile-conflicts": {
       "get": {
         "tags": [
@@ -14732,6 +14789,131 @@
           "auto": {
             "type": "boolean",
             "default": false
+          }
+        }
+      },
+      "UpstreamApplyRequest": {
+        "required": [
+          "operationId",
+          "url",
+          "path",
+          "ref",
+          "commit",
+          "content",
+          "base"
+        ],
+        "type": "object",
+        "properties": {
+          "operationId": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "url": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "path": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "ref": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "commit": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "content": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/JsonObject"
+              }
+            ]
+          },
+          "base": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/UpstreamBaseRequest"
+              }
+            ]
+          }
+        }
+      },
+      "UpstreamApplyResponse": {
+        "required": [
+          "status",
+          "revision",
+          "conflictId",
+          "fields"
+        ],
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string"
+          },
+          "revision": {
+            "type": [
+              "null",
+              "integer"
+            ],
+            "format": "int64"
+          },
+          "conflictId": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "fields": {
+            "type": [
+              "null",
+              "array"
+            ],
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "UpstreamBaseRequest": {
+        "required": [
+          "commit",
+          "content"
+        ],
+        "type": "object",
+        "properties": {
+          "commit": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "content": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/JsonObject"
+              }
+            ]
           }
         }
       },

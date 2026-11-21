@@ -1,7 +1,7 @@
 import type { components as E } from '../generated/engine';
 import type { components as A } from '../generated/agent';
 import { AGENTS, agentSwitches, DEFAULT_AGENTS } from '../../model/settings';
-import type { Agent, Backup, Device, Everything, Forward, Host, HostJob, HostUpdate, HostUser, HostVm, Job, JobKind, Lease, Power, Profile, Repair, RepairMessage, Secret, SettingsPatch, Upgrade, VaultEvent, VaultRequest, Vm, VmSettings, WinGuest, WinKey } from '../types';
+import type { Agent, Backup, Device, Everything, Forward, Host, HostJob, HostUpdate, HostUser, HostVm, Job, JobKind, Lease, Power, Profile, Repair, RepairMessage, Secret, SettingsPatch, Upgrade, Upstream, VaultEvent, VaultRequest, Vm, VmSettings, WinGuest, WinKey } from '../types';
 
 /* From what the agent and the engines report to the pieces of `State`. Pure functions, no I/O: each takes
    the responses it needs and leaves out what they do not say. */
@@ -503,6 +503,29 @@ export function toRepair(s: Omit<RepairSession, 'lines'>, lines: RepairLine[], s
 export function clock(iso: string): string {
   const d = new Date(iso);
   return Number.isNaN(d.getTime()) ? '' : `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+}
+
+/* --- upstream config repos --- */
+
+export type UpstreamView = A['schemas']['UpstreamView'];
+
+const UPSTREAM_SAYS: Record<string, string> = {
+  conflict: 'changed here and upstream; an agent resolves it',
+  waiting: 'waits for its conflict to be resolved',
+  invalid: 'the upstream file is no valid profile',
+  refused: 'not taken',
+  failed: 'not refreshed',
+  'removed-upstream': 'removed upstream; kept here',
+};
+
+/** The Projects page's upstream line: null when no repository is linked. */
+export function toUpstream(v: UpstreamView): Upstream | null {
+  if (!v.links.length) return null;
+  const repos = v.links.map(l => ({ url: l.url, files: l.files.map(f => ({ profile: f.profile, state: f.state })) }));
+  const broken = v.links.find(l => l.error);
+  const file = v.links.flatMap(l => l.files).find(f => f.state in UPSTREAM_SAYS);
+  const problem = broken ? `${broken.url}: ${broken.error}` : file ? `${file.profile}: ${file.message ?? UPSTREAM_SAYS[file.state]}` : null;
+  return { repos, when: v.refreshedAt ? clock(v.refreshedAt) : null, running: v.running, problem };
 }
 
 /* --- the one-time upgrade --- */
