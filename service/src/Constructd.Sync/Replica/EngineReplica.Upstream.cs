@@ -74,21 +74,15 @@ public sealed partial class EngineReplica
                 var appliedRecord = await _store.GetAsync(appliedId, ct);
                 var appliedPayload = appliedRecord is null ? null : await OpenAsync(appliedRecord, ct);
                 var applied = RecordPayload.ValueOf(appliedPayload) as JsonObject;
-                if (applied is not null)
-                {
-                    if (ProfileRules.Text(applied["url"]) != version.Url || ProfileRules.Text(applied["path"]) != version.Path)
-                        return new UpstreamOutcome.Refused("other-provenance", $"Profile '{name}' is tracked from another file ({ProfileRules.Text(applied["path"])} of another repository or path).");
-                    // A base the device brings counts only where the engine has none: another device's newer one stays.
-                    if (knownBase is not null || ProfileRules.Text(applied["operationId"]) == version.OperationId
-                        || version.Commit.Length > 0 && ProfileRules.Text(applied["baseCommit"]) == version.Commit)
-                        return new UpstreamOutcome.Unchanged();
-                }
-
                 var profile = await _store.GetAsync(profileId, ct);
-                var profilePayload = profile is null ? null : await OpenAsync(profile, ct);
-                if (profile is { Deleted: true })
+
+                // Deleted here (config-sync 7), now or since the base was written, also when the name was created again
+                // (the store keeps a record's last deletion): the base goes and upstream never brings the profile back.
+                // An old client's base predates every deletion in the store.
+                if (profile is { Deleted: true }
+                    || applied is not null && profile?.DeletedRevision > appliedRecord!.Revision
+                    || applied is null && knownBase is not null && profile?.DeletedRevision is not null)
                 {
-                    // Deleted here (config-sync 7): the manifest entry and base go; upstream never brings it back.
                     if (appliedRecord is not { Deleted: false }) return new UpstreamOutcome.Dropped();
                     var drop = Sealed(key, appliedId, RecordKinds.UpstreamApplied, epoch, appliedRecord.Revision, true, RecordPayload.Rewrite(null, null, [origin], _supported));
                     switch (await _store.BatchAsync([drop.Write], ct))
@@ -103,6 +97,21 @@ public sealed partial class EngineReplica
                     }
                 }
 
+                if (applied is not null)
+                {
+                    if (ProfileRules.Text(applied["url"]) != version.Url || ProfileRules.Text(applied["path"]) != version.Path)
+                        return new UpstreamOutcome.Refused("other-provenance", $"Profile '{name}' is tracked from another file ({ProfileRules.Text(applied["path"])} of another repository or path).");
+                    // A base the device brings counts only where the engine has none: another device's newer one stays.
+                    if (knownBase is not null || ProfileRules.Text(applied["operationId"]) == version.OperationId
+                        || version.Commit.Length > 0 && ProfileRules.Text(applied["baseCommit"]) == version.Commit)
+                        return new UpstreamOutcome.Unchanged();
+                    // The conflict the base's version came to, read from the store: another engine's replica may not
+                    // have it yet. One written meanwhile moves the base, so the batch below is stale and this runs again.
+                    if (ProfileRules.Text(applied["conflict"]) is { Length: > 0 } open && await _store.GetAsync(open, ct) is { Deleted: false })
+                        return new UpstreamOutcome.Waiting(open);
+                }
+
+                var profilePayload = profile is null ? null : await OpenAsync(profile, ct);
                 if (OpenConflictOn(profileId) is { } waiting) return new UpstreamOutcome.Waiting(waiting);
 
                 var local = RecordPayload.ValueOf(profilePayload) as JsonObject;
@@ -163,6 +172,7 @@ public sealed partial class EngineReplica
                     ["profile"] = name, ["url"] = version.Url, ["path"] = version.Path, ["ref"] = version.Ref,
                     ["baseCommit"] = version.Commit, ["baseContent"] = incoming.DeepClone(), ["operationId"] = version.OperationId, ["by"] = origin,
                 };
+                if (done is UpstreamOutcome.Conflict opened) appliedValue["conflict"] = opened.ConflictId;
                 writes.Add(Sealed(key, appliedId, RecordKinds.UpstreamApplied, epoch, appliedRecord?.Revision ?? 0, false,
                     RecordPayload.Rewrite(appliedRecord is { Deleted: false } ? appliedPayload : null, appliedValue, [origin], _supported)));
 

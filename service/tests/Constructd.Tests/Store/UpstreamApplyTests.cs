@@ -25,7 +25,7 @@ public sealed class UpstreamApplyTests : IAsyncLifetime
 
     public UpstreamApplyTests()
     {
-        _store = new StandaloneStoreFixture(_directory.Path, ("engine-1", ParticipantKind.Engine, "e1"));
+        _store = new StandaloneStoreFixture(_directory.Path, ("engine-1", ParticipantKind.Engine, "e1"), ("engine-2", ParticipantKind.Engine, "e2"));
         _keys = new FileRecordKeyProvider(_directory.File("keys"));
     }
 
@@ -38,10 +38,10 @@ public sealed class UpstreamApplyTests : IAsyncLifetime
         _directory.Dispose();
     }
 
-    private (EngineReplica Replica, PartitionableClient Link) Engine()
+    private (EngineReplica Replica, PartitionableClient Link) Engine(string id = "e1")
     {
-        var link = new PartitionableClient(_store.Client("engine-1"));
-        var replica = new EngineReplica(_directory.File("replica-e1.db"), StandaloneStoreFixture.Account, "e1", link, _keys);
+        var link = new PartitionableClient(_store.Client(id == "e1" ? "engine-1" : "engine-2"));
+        var replica = new EngineReplica(_directory.File($"replica-{id}.db"), StandaloneStoreFixture.Account, id, link, _keys);
         _replicas.Add(replica);
         return (replica, link);
     }
@@ -236,6 +236,65 @@ public sealed class UpstreamApplyTests : IAsyncLifetime
         Assert.True((await RecordAsync(EngineReplica.UpstreamAppliedId("web")))!.Deleted);
         Assert.True((await RecordAsync(EngineReplica.ProfileId("web")))!.Deleted);
         Assert.IsType<UpstreamOutcome.Dropped>(await replica.ApplyUpstreamAsync("web", Version("c3", v2), null, "device:pc", [], default));
+    }
+
+    [Fact]
+    public async Task A_profile_deleted_here_stops_being_tracked_also_on_the_same_commit_and_when_its_name_is_created_again()
+    {
+        var (replica, _) = Engine();
+        var v1 = Web("""
+            "provisionCommands":["a"]
+            """);
+        Assert.IsType<UpstreamOutcome.Applied>(await replica.ApplyUpstreamAsync("web", Version("c1", v1), null, "device:pc", [], default));
+
+        // Deleted, then the next refresh still on the same commit: the base goes all the same.
+        await replica.DeleteProfileAsync("web", "device:pc");
+        await replica.SyncAsync();
+        Assert.IsType<UpstreamOutcome.Dropped>(await replica.ApplyUpstreamAsync("web", Version("c1", v1, "op-refresh"), null, "device:pc", [], default));
+        Assert.True((await RecordAsync(EngineReplica.UpstreamAppliedId("web")))!.Deleted);
+
+        // Tracked again from a new import, deleted and created again before any refresh: the new profile is not the
+        // tracked one, so upstream changes do not reach it, and the base goes with the next refresh.
+        var other = replica;
+        Assert.IsType<UpstreamOutcome.Applied>(await other.ApplyUpstreamAsync("api", Version("c1", v1), null, "device:pc", [], default));
+        await other.DeleteProfileAsync("api", "device:pc");
+        await other.SyncAsync();
+        var mine = Json("""{"name":"api","provisionCommands":["mine"]}""");
+        await other.WriteProfileAsync(mine, "device:pc");
+        await other.SyncAsync();
+        var v2 = Web("""
+            "provisionCommands":["a","b"]
+            """);
+        Assert.IsType<UpstreamOutcome.Dropped>(await other.ApplyUpstreamAsync("api", Version("c2", v2), null, "device:pc", [], default));
+        Assert.Equal("""["mine"]""", (await ValueAsync(EngineReplica.ProfileId("api")))!["provisionCommands"]!.ToJsonString());
+        Assert.True((await RecordAsync(EngineReplica.UpstreamAppliedId("api")))!.Deleted);
+        // The old client's base, handed over again, predates the deletion: it does not track the new profile either.
+        Assert.IsType<UpstreamOutcome.Dropped>(await other.ApplyUpstreamAsync("api", Version("c1", v1, "seed-again"), new UpstreamBase("c1", v1), "device:pc", [], default));
+        Assert.Equal("""["mine"]""", (await ValueAsync(EngineReplica.ProfileId("api")))!["provisionCommands"]!.ToJsonString());
+    }
+
+    [Fact]
+    public async Task A_conflict_one_engine_opened_holds_back_a_newer_version_another_engine_brings_before_its_feed_has_it()
+    {
+        var v1 = Web("""
+            "sdks":{"node":"20"}
+            """);
+        var first = await TrackedAsync(Web("""
+            "sdks":{"node":"22"}
+            """), v1);
+        var conflict = Assert.IsType<UpstreamOutcome.Conflict>(await first.ApplyUpstreamAsync("web", Version("c2", Web("""
+            "sdks":{"node":"18"}
+            """)), null, "device:pc", [], default));
+        var before = await RevisionsAsync();
+
+        // The other engine has not pulled anything: only the store knows the conflict.
+        var (second, _) = Engine("e2");
+        var waiting = Assert.IsType<UpstreamOutcome.Waiting>(await second.ApplyUpstreamAsync("web", Version("c3", Web("""
+            "sdks":{"node":"18"},"hostPackages":["jq"]
+            """)), null, "device:laptop", [], default));
+        Assert.Equal(conflict.ConflictId, waiting.ConflictId);
+        Assert.Equal(before, await RevisionsAsync());
+        Assert.Equal("22", (await ValueAsync(EngineReplica.ProfileId("web")))!["sdks"]!["node"]!.GetValue<string>());
     }
 
     [Fact]

@@ -32,6 +32,9 @@ public partial class FakeSshRunner : ISshRunner
     /// <summary>What the guest's agent report (<c>construct-usage-report.sh --agents</c>) prints; null: the guest has none.</summary>
     public string? AgentReport { get; set; }
 
+    /// <summary>The agent report's SSH read runs past its time limit (the runner throws, as on a real timeout).</summary>
+    public bool AgentReportTimesOut { get; set; }
+
     /// <summary>A step name ("copy", "provision", "project-commands", "applied") whose first command waits here.</summary>
     public string? HoldAt { get; set; }
     public TaskCompletionSource Held { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -75,7 +78,8 @@ public partial class FakeSshRunner : ISshRunner
             _ when command.Contains("reboot-required", StringComparison.Ordinal) => (0, [RebootRequired ? "yes" : "no"]),
             _ when command.Contains("s/^SSH_USER=//p", StringComparison.Ordinal) => (0, GuestSeedUser is null ? [] : [GuestSeedUser]),
             _ when command.Contains("construct-usage-report.sh", StringComparison.Ordinal) && command.Contains("--agents", StringComparison.Ordinal) =>
-                AgentReport is null ? (1, []) : (0, [AgentReport]),
+                AgentReportTimesOut ? throw new Constructd.Core.Services.SshRunnerException("ssh to guest:22 timed out.")
+                : AgentReport is null ? (1, []) : (0, [AgentReport]),
             _ => (0, []),
         };
         foreach (var line in answer.Lines) lines?.Report(line);

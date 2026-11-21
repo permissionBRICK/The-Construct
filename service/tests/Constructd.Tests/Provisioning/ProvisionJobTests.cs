@@ -165,6 +165,23 @@ public sealed class ProvisionJobTests
     }
 
     [Theory]
+    [InlineData(null)]
+    [InlineData("[1]")]
+    [InlineData("[[]]")]
+    [InlineData("""[{"tool":"claude","version":"2.1.4","signedIn":true},null]""")]
+    public async Task An_agent_report_that_times_out_or_is_no_report_finishes_all_the_same(string? report)
+    {
+        var ssh = new FakeSshRunner { AgentReport = report, AgentReportTimesOut = report is null };
+        await using var h = await ProvisionHarness.StartAsync(ssh);
+        var job = await h.RunAsync("click-bad-report");
+        Assert.True(job.State == JobState.Succeeded, job.Error);
+        Assert.Contains(job.Progress, p => p.Text == "the coding agents are reported by the VM's next usage report");
+        // The finish step went on: the guest was rebooted after it.
+        Assert.Contains(ssh.Commands, c => c.Contains("sleep 3; reboot", StringComparison.Ordinal));
+        Assert.Empty((await (await h.Client.GetAsync($"/api/v1/vms/{ProvisionHarness.Vm}/agents")).ReadAsync<VmAgentsResponse>()).Agents);
+    }
+
+    [Theory]
     [InlineData(false)]
     [InlineData(true)]
     public async Task A_deleted_vms_stored_settings_go_with_it(bool sqlite)

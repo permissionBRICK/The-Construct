@@ -65,10 +65,11 @@ public sealed partial class VmAgents(IHostConfigStore config, ChangeFeed changes
         {
             if (System.Text.Json.Nodes.JsonNode.Parse(json) is not System.Text.Json.Nodes.JsonArray items) return null;
             var agents = new List<VmAgentVersion>();
-            foreach (var item in items)
+            foreach (var node in items)
             {
-                string? Text(string name) => item?[name] is System.Text.Json.Nodes.JsonValue v && v.TryGetValue<string>(out var t) ? t : null;
-                bool? signedIn = item?["signedIn"] is System.Text.Json.Nodes.JsonValue b && b.TryGetValue<bool>(out var f) ? f : null;
+                if (node is not System.Text.Json.Nodes.JsonObject item) return null;
+                string? Text(string name) => item[name] is System.Text.Json.Nodes.JsonValue v && v.TryGetValue<string>(out var t) ? t : null;
+                bool? signedIn = item["signedIn"] is System.Text.Json.Nodes.JsonValue b && b.TryGetValue<bool>(out var f) ? f : null;
                 if (!Accept(Text("tool"), Text("version"), signedIn, agents)) return null;
             }
 

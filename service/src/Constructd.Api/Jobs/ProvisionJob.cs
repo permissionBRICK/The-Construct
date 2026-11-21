@@ -554,9 +554,9 @@ public sealed class ProvisionJob(ISshRunner ssh, ISourceCache sources, IVmApplie
             var read = await RootCommandAsync(context with { Quiet = true }, context.Step, ProvisionScript.AgentReportCommand, ShortTimeout);
             if (read.ExitCode == 0) reported = VmAgents.Parse(string.Join('\n', read.Lines));
         }
-        catch (ProvisionStepException)
+        catch (Exception ex) when (ex is ProvisionStepException or SshRunnerException)
         {
-            // Unreachable or no sudo: the guest's timer reports.
+            // Unreachable, timed out or no sudo: the guest's timer reports.
         }
 
         if (reported is null)
