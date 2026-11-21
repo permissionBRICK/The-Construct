@@ -9,7 +9,7 @@ namespace Construct.Agent.Upgrade;
 /// <summary>
 /// The converter (13.1): it reads the old client's state (<see cref="LegacyState"/>) and copies it into the
 /// new stack, writing only to the engines, the store and the agent's own files (<c>bridge.json</c>,
-/// <c>device.json</c>, <c>legacy-upstream.json</c>). It changes nothing of the old files but one: once the move is
+/// <c>device.json</c>). It changes nothing of the old files but one: once the move is
 /// complete, the old client's autoinstall images go. It can be run
 /// again at any point: an item listed as done in <c>bridge.json</c>, or already present where it goes, is
 /// left alone. Its last steps switch the local VMs over to the engine (the adopt job) and reprovision each adopted
@@ -46,7 +46,7 @@ public sealed class LegacyConverter(DeviceAgent agent, IDeviceEngines engines, D
         await ChannelAsync(legacy, ct).ConfigureAwait(false);
         await HostsAsync(legacy, ct).ConfigureAwait(false);
         await ProfilesAsync(legacy, store, ct).ConfigureAwait(false);
-        await UpstreamAsync(legacy, ct).ConfigureAwait(false);
+        await UpstreamAsync(legacy, store, ct).ConfigureAwait(false);
         await SecretsAsync(legacy, ct).ConfigureAwait(false);
         var legacyKeys = await BackupKeysAsync(legacy, ct).ConfigureAwait(false);
         await RecipientsAsync(legacy, instances, start.LocalEngine, ct).ConfigureAwait(false);
@@ -284,16 +284,19 @@ public sealed class LegacyConverter(DeviceAgent agent, IDeviceEngines engines, D
         catch (JsonException) { return null; }
     }
 
-    // ---- upstream links: kept as data ----
+    // ---- upstream config repos (9.7) ----
 
-    private Task UpstreamAsync(LegacyState legacy, CancellationToken ct) => ItemAsync("upstream", "Company upstream links", () =>
+    /// <summary>
+    /// The old client's linked config repos and tracked files become <c>upstream</c> records, and each file's stored base
+    /// its <c>upstream-applied</c> record at the store's engine, so the shared profiles keep receiving upstream changes.
+    /// </summary>
+    private Task UpstreamAsync(LegacyState legacy, string store, CancellationToken ct) => ItemAsync("upstream", "Upstream config repos", async () =>
     {
         var files = new LegacyConfigRepo(legacy.ConfigRepository).UpstreamFiles();
-        if (files.Count == 0) return Task.FromResult<(string, string?)>(("skipped", "No upstream links."));
-        var document = new JsonObject { ["v"] = 1, ["files"] = new JsonObject(files.Select(f => KeyValuePair.Create(f.Key, (JsonNode?)f.Value))) };
-        PrivateFiles.Write(Path.Combine(dataDirectory, "legacy-upstream.json"), Encoding.UTF8.GetBytes(document.ToJsonString()));
-        Note("Company upstream links were kept as data in legacy-upstream.json; the new stack does not use them yet.");
-        return Task.FromResult<(string, string?)>(("done", $"{files.Count} file(s) kept for when upstream links come to the new stack."));
+        if (files.Count == 0) return ("skipped", "No upstream links.");
+        var imported = await new Upstream.UpstreamLinks(agent, engines).ImportLegacyAsync(files, store, ct).ConfigureAwait(false);
+        if (imported.Links == 0) return ("skipped", "No upstream links.");
+        return ("done", $"{imported.Links} repo(s), {imported.Tracked} profile(s) tracked" + (imported.LeftOut > 0 ? $", {imported.LeftOut} left out." : "."));
     });
 
     // ---- the vault ----

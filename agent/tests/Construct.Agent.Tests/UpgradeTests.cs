@@ -23,7 +23,8 @@ public sealed class UpgradeTests
         ["projects/api.json"] = """{"name":"api","repos":[{"url":"https://example.test/api.git"}]}""",
         ["projects/default.json"] = """{"name":"default"}""",
         ["manifest/remotes.json"] = """{"remotes":[{"url":"https://git.example.test/company/configs.git"}]}""",
-        ["manifest/api.json"] = """{"remoteUrl":"https://git.example.test/company/configs.git","ref":"main","pathInRemote":"projects/api.json"}""",
+        ["manifest/api.json"] = """{"remoteUrl":"https://git.example.test/company/configs.git","ref":"main","pathInRemote":"projects/api.json","importedAs":"api","baseCommit":"0123456789abcdef0123456789abcdef01234567"}""",
+        ["bases/api.json"] = """{"name":"api","repos":[{"url":"https://example.test/api.git"}]}""",
     };
 
     /// <summary>The default VM's install: one local VM, no registry, a VM branch with an unmerged edit, a vault, a backup key.</summary>
@@ -91,7 +92,9 @@ public sealed class UpgradeTests
         Assert.DoesNotContain(view["items"]!.AsArray(), i => i!["state"]!.GetValue<string>() is "failed" or "pending");
         await rig.AssertArrivedAsync();
         Assert.Contains(view["notes"]!.AsArray(), n => n!.GetValue<string>().Contains("leases end", StringComparison.Ordinal));
-        Assert.Contains(view["notes"]!.AsArray(), n => n!.GetValue<string>().Contains("legacy-upstream.json", StringComparison.Ordinal));
+        // The upstream links work in the new stack: no note about them (R8).
+        Assert.DoesNotContain(view["notes"]!.AsArray(), n => n!.GetValue<string>().Contains("upstream", StringComparison.OrdinalIgnoreCase));
+        Assert.Equal("1 repo(s), 1 profile(s) tracked.", view["items"]!.AsArray().Single(i => i!["id"]!.GetValue<string>() == "upstream")!["message"]!.GetValue<string>());
         // Before its adoption no engine runs the VM: the account key goes on over the old client's SSH. The adoption
         // enrols it as well; after it the old key comes off through the engine, which checked the account key is there.
         Assert.Equal(["agent-vm:construct backup recipients add --label construct-account"], rig.Platform.VmCalls.Select(c => c.Instance + ":" + c.Command));
@@ -483,7 +486,6 @@ public sealed class UpgradeTests
         await rig.RestartAsync();
         var view = await rig.ConvertAsync();
         Assert.Equal("converted", view["stage"]!.GetValue<string>());
-        Assert.Contains(view["notes"]!.AsArray(), n => n!.GetValue<string>().Contains("legacy-upstream.json", StringComparison.Ordinal));
         Assert.Contains(view["notes"]!.AsArray(), n => n!.GetValue<string>().Contains("leases end", StringComparison.Ordinal));
     }
 
@@ -690,12 +692,14 @@ internal sealed class UpgradeRig : IAsyncDisposable
         Assert.Equal("alice", (await Local.Services.GetRequiredService<IVmRepository>().GetAsync("agent-vm", CancellationToken.None))!.Owner);
         Assert.Equal(VmState.Running, Local.Services.GetRequiredService<FakeHypervisorDriver>().StateOf("agent-vm"));
 
-        // The old backup key kept as a setting record; the upstream links as the agent's data; the channel and the microphone.
+        // The old backup key kept as a setting record; the upstream link as its record with the stored base at the engine
+        // (9.7); the channel and the microphone.
         var account = (await Agent.GetAsync("api/state"))["device"]!["account"]!.GetValue<string>();
         var records = (await Local.Services.GetRequiredService<RecordStore>().FeedAsync(account, 0, TimeSpan.Zero, 10_000, CancellationToken.None)).Records;
         Assert.Single(records, r => r.Id.StartsWith("setting:legacy-backup-key:", StringComparison.Ordinal) && !r.Deleted);
-        var upstream = JsonNode.Parse(File.ReadAllText(Path.Combine(Agent.Directory, "legacy-upstream.json")))!;
-        Assert.NotNull(upstream["files"]!["manifest/remotes.json"]);
+        Assert.Single(records, r => r.Id == Upstream.UpstreamLinks.RecordId("https://git.example.test/company/configs.git") && r.Kind == RecordKinds.Upstream && !r.Deleted);
+        Assert.Single(records, r => r.Id == "upstream-applied:api" && r.Kind == RecordKinds.UpstreamApplied && !r.Deleted);
+        Assert.False(File.Exists(Path.Combine(Agent.Directory, "legacy-upstream.json")));
         var device = JsonNode.Parse(File.ReadAllText(Path.Combine(Agent.Directory, "device.json")))!;
         Assert.Equal("stable", device["channel"]!.GetValue<string>());
         Assert.Contains($"{engine}/agent-vm", device["mic"]!.AsArray().Select(m => m!.GetValue<string>()));

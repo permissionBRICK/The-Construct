@@ -3028,6 +3028,68 @@
           }
         }
       }
+    },
+    "/api/upstream": {
+      "get": {
+        "tags": [
+          "upstream"
+        ],
+        "description": "The linked upstream config repos as the last refresh found them: per repository the commit read, per tracked file whether it is up to date, merged, in conflict, removed upstream or refused.",
+        "operationId": "GetUpstream",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpstreamView"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentProblem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/upstream/refresh": {
+      "post": {
+        "tags": [
+          "upstream"
+        ],
+        "description": "Fetches every linked upstream config repo now with this PC's git credentials and hands each tracked file's new version to the store's engine, which merges it into its profile. Answers when done.",
+        "operationId": "RefreshUpstream",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpstreamView"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentProblem"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -4716,6 +4778,96 @@
           }
         }
       },
+      "UpstreamFileStatus": {
+        "required": [
+          "profile",
+          "path",
+          "state"
+        ],
+        "type": "object",
+        "properties": {
+          "profile": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          },
+          "message": {
+            "type": [
+              "null",
+              "string"
+            ]
+          }
+        }
+      },
+      "UpstreamLinkStatus": {
+        "required": [
+          "url",
+          "ref",
+          "commit",
+          "error",
+          "files"
+        ],
+        "type": "object",
+        "properties": {
+          "url": {
+            "type": "string"
+          },
+          "ref": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "commit": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "error": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "files": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UpstreamFileStatus"
+            }
+          }
+        }
+      },
+      "UpstreamView": {
+        "required": [
+          "running",
+          "refreshedAt",
+          "links"
+        ],
+        "type": "object",
+        "properties": {
+          "running": {
+            "type": "boolean"
+          },
+          "refreshedAt": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "date-time"
+          },
+          "links": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UpstreamLinkStatus"
+            }
+          }
+        }
+      },
       "VaultApprovalItem": {
         "required": [
           "engine",
@@ -4963,6 +5115,9 @@
     },
     {
       "name": "upgrade"
+    },
+    {
+      "name": "upstream"
     }
   ]
 }

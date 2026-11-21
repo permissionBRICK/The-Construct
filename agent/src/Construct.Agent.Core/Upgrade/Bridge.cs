@@ -32,7 +32,7 @@ public sealed record BridgeState
     /// <summary>The last run's items and their outcome, for the dialog.</summary>
     public IReadOnlyList<UpgradeItem> Items { get; init; } = [];
 
-    /// <summary>What the last run says the user should know (leases end, upstream links kept as data, ...).</summary>
+    /// <summary>What the last run says the user should know (leases end, ...).</summary>
     public IReadOnlyList<string> Notes { get; init; } = [];
 
     /// <summary>The account the last run wrote <see cref="Notes"/> for; they are shown to that account only.</summary>

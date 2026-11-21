@@ -25,8 +25,9 @@ namespace Construct.Agent.Http;
 public sealed class AgentHost : IAsyncDisposable
 {
     private AgentHost(WebApplication app, DeviceAgent agent, AgentOptions options, string token, DeviceServices device, Upgrade.UpgradeService upgrade,
-        Engines.LocalEngineSetup engineSetup)
+        Engines.LocalEngineSetup engineSetup, Upstream.UpstreamSync upstream)
     {
+        Upstream = upstream;
         Upgrade = upgrade;
         EngineSetup = engineSetup;
         App = app;
@@ -38,6 +39,9 @@ public sealed class AgentHost : IAsyncDisposable
 
     /// <summary>The one-time upgrade from the old client (11.6, 13.2).</summary>
     public Upgrade.UpgradeService Upgrade { get; }
+
+    /// <summary>Upstream config repos (9.7): fetched on a schedule and on demand, merged by the store's engine.</summary>
+    public Upstream.UpstreamSync Upstream { get; }
 
     /// <summary>Setting up the engine on this PC (5.3): the first run's and the upgrade's engine step.</summary>
     public Engines.LocalEngineSetup EngineSetup { get; }
@@ -83,7 +87,8 @@ public sealed class AgentHost : IAsyncDisposable
         var upgradePlatform = options.Upgrade ?? new Upgrade.DefaultUpgradePlatform(Path.Combine(options.DataDirectory, "legacy_known_hosts"));
         var engineSetup = new Engines.LocalEngineSetup(agent, options, upgradePlatform, services.Settings);
         var upgrade = new Upgrade.UpgradeService(agent, options, upgradePlatform, services.Settings, new AgentEngines(agent), engineSetup);
-        var host = new AgentHost(app, agent, options, token, services, upgrade, engineSetup);
+        var upstream = new Upstream.UpstreamSync(agent, new AgentEngines(agent), options.DataDirectory, options.Time);
+        var host = new AgentHost(app, agent, options, token, services, upgrade, engineSetup, upstream);
         var startedAt = options.Time.GetUtcNow();
 
         app.Lifetime.ApplicationStarted.Register(() =>
@@ -113,6 +118,7 @@ public sealed class AgentHost : IAsyncDisposable
         AgentRoutes.Map(app, host, startedAt);
         DeviceRoutes.Map(app.MapGroup("/api").WithTags("device"), services, engineSetup);
         UpgradeRoutes.Map(app.MapGroup("/api").WithTags("upgrade"), upgrade);
+        UpstreamRoutes.Map(app.MapGroup("/api").WithTags("upstream"), upstream);
         return host;
     }
 
@@ -121,6 +127,7 @@ public sealed class AgentHost : IAsyncDisposable
     {
         await App.StartAsync(ct).ConfigureAwait(false);
         Device.Start();
+        Upstream.Start();
     }
 
     /// <summary>
@@ -136,6 +143,7 @@ public sealed class AgentHost : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
+        await Upstream.DisposeAsync().ConfigureAwait(false);
         await Device.DisposeAsync().ConfigureAwait(false);
         EngineSetup.Dispose();
         await App.StopAsync().ConfigureAwait(false);

@@ -273,15 +273,35 @@ public sealed class LegacyFixture : IDisposable
         Git(repo, "checkout", "-q", "main");
     }
 
-    private static void Git(string repo, params string[] args)
+    /// <summary>A company config repository (an upstream) with one commit of <paramref name="files"/>: its path and that commit.</summary>
+    public (string Repo, string Commit) UpstreamRepo(IReadOnlyDictionary<string, string> files)
+    {
+        var repo = Path.Combine(Directory_, "company-configs");
+        Directory.CreateDirectory(repo);
+        Git(repo, "init", "-q", "-b", "main");
+        return (repo, UpstreamCommit(repo, files));
+    }
+
+    /// <summary>One more commit in the upstream repository; its id.</summary>
+    public string UpstreamCommit(string repo, IReadOnlyDictionary<string, string> files)
+    {
+        foreach (var (file, text) in files) Write(file, text, repo);
+        Git(repo, "add", "-A");
+        Git(repo, "commit", "-q", "-m", "upstream");
+        return Git(repo, "rev-parse", "HEAD").Trim();
+    }
+
+    private static string Git(string repo, params string[] args)
     {
         var info = new ProcessStartInfo("git") { RedirectStandardError = true, RedirectStandardOutput = true };
         foreach (var a in new[] { "-C", repo, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "-c", "commit.gpgsign=false" }) info.ArgumentList.Add(a);
         foreach (var a in args) info.ArgumentList.Add(a);
         using var p = Process.Start(info)!;
+        var output = p.StandardOutput.ReadToEndAsync();
         var error = p.StandardError.ReadToEnd();
         p.WaitForExit();
         Assert.True(p.ExitCode == 0, "git " + string.Join(' ', args) + ": " + error);
+        return output.Result;
     }
 
     /// <summary>SHA-256 of every file under the fixture (the old state and ~/.ssh), by relative path.</summary>
