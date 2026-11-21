@@ -1,3 +1,5 @@
+using Constructd.Core.Services;
+
 namespace Constructd.Windows.Iso;
 
 /// <summary>
@@ -37,16 +39,36 @@ public sealed class HttpIsoDownloader : IIsoDownloader
             var total = transfer.Total;
             var elapsed = clock.Elapsed.TotalSeconds;
             var speed = Math.Max(0, (done - previousBytes) / Math.Max(0.001, elapsed - previousSeconds));
-            var size = total > 0
-                ? $"{done / 1048576d:N0} / {total / 1048576d:N0} MiB ({100d * done / total:N1}%)"
-                : $"{done / 1048576d:N0} MiB";
-            var eta = total > done && speed > 0 ? $" | ETA {(total - done) / speed:N0}s" : "";
-            progress?.Report($"host ISO {transfer.Phase}: {size} | {speed / 1048576d:N1} MiB/s | " +
-                $"{transfer.ActiveStreams} streams | {transfer.Retries} retries{eta}");
+            if (total > 0) JobProgressTracker.Current?.Fraction((double)done / total);
+            progress?.Report(ProgressLine(transfer.Phase, done, total, speed, transfer.ActiveStreams, transfer.Retries));
             previousBytes = done;
             previousSeconds = elapsed;
         }
         await transfer.Completion.ConfigureAwait(false);
-        progress?.Report($"source ISO downloaded on the host: {transfer.Downloaded / 1048576d:N0} MiB in {clock.Elapsed.TotalSeconds:N1}s | {transfer.Retries} retries");
+        progress?.Report(Invariant($"source ISO downloaded on the host: {Size(transfer.Downloaded)} in {clock.Elapsed.TotalSeconds:0.0}s | {transfer.Retries} retries"));
     }
+
+    /// <summary>
+    /// One download progress line, the same on every host whatever its language: invariant numbers, sizes above 1024 MiB
+    /// in GiB ("host ISO download: 2.1 / 3.8 GiB (55.7%) | 11.2 MiB/s | ...").
+    /// </summary>
+    public static string ProgressLine(string phase, long done, long total, double bytesPerSecond, int streams, int retries)
+    {
+        var size = total > 0 ? Invariant($"{Sizes(done, total)} ({100d * done / total:0.0}%)") : Size(done);
+        var eta = total > done && bytesPerSecond > 0 ? Invariant($" | ETA {(total - done) / bytesPerSecond:0}s") : "";
+        return Invariant($"host ISO {phase}: {size} | {bytesPerSecond / Mib:0.0} MiB/s | {streams} streams | {retries} retries{eta}");
+    }
+
+    private const double Mib = 1024 * 1024;
+    private const double Gib = Mib * 1024;
+
+    /// <summary>A size: MiB up to 1024 MiB, GiB with one decimal above.</summary>
+    public static string Size(long bytes) => bytes > Gib ? Invariant($"{bytes / Gib:0.0} GiB") : Invariant($"{bytes / Mib:0} MiB");
+
+    /// <summary>"done / total" in the unit of the total.</summary>
+    private static string Sizes(long done, long total) => total > Gib
+        ? Invariant($"{done / Gib:0.0} / {total / Gib:0.0} GiB")
+        : Invariant($"{done / Mib:0} / {total / Mib:0} MiB");
+
+    private static string Invariant(FormattableString text) => FormattableString.Invariant(text);
 }

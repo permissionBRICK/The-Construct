@@ -8,6 +8,13 @@ using Constructd.Api.Infrastructure;
 using Constructd.Core.Configuration;
 using Constructd.Store.Http;
 
+// Every text the engine makes (job progress, errors, logs) reads the same on every host, whatever the PC's language:
+// a German host once printed "2.167 / 3.891 MiB" for two gigabytes.
+System.Globalization.CultureInfo.DefaultThreadCurrentCulture = System.Globalization.CultureInfo.InvariantCulture;
+System.Globalization.CultureInfo.DefaultThreadCurrentUICulture = System.Globalization.CultureInfo.InvariantCulture;
+System.Globalization.CultureInfo.CurrentCulture = System.Globalization.CultureInfo.InvariantCulture;
+System.Globalization.CultureInfo.CurrentUICulture = System.Globalization.CultureInfo.InvariantCulture;
+
 // ---- Admin CLI -----------------------------------------------------------------------------
 // `constructd admin …` is the same executable in command-line mode: it works the stores directly,
 // with no HTTP, which is how the first admin exists before anybody can authenticate. Nothing below
