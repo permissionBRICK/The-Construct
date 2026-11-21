@@ -165,11 +165,13 @@ public sealed class AgentSetup(ISetupPlatform platform, HttpClient web, HttpClie
         if (platform.SessionProcesses(CompanionProcess).Any(id => id != pid)) throw new SetupFailure("The Construct Companion is still running; close it from its tray menu and try again.");
         if (pid is not { } companion || !platform.IsRunning(companion)) return false;
         output.WriteLine("==> Asking the Construct Companion to quit ...");
+        // From here on the quit runs to its end, bounded, even when the setup is cancelled (Ctrl+C): a Companion that
+        // quit is then started again, never left stopped.
         if (Number(file!.Value, "port") is { } port && Text(file.Value, "token") is { } token)
         {
             try
             {
-                using var limit = Limit(ct, TimeSpan.FromSeconds(5));
+                using var limit = Limit(CancellationToken.None, TimeSpan.FromSeconds(5));
                 using var request = new HttpRequestMessage(HttpMethod.Post, $"http://127.0.0.1:{port}/v1/quit")
                 {
                     Content = new StringContent("""{"reason":"update"}""", Encoding.UTF8, "application/json"),
@@ -177,7 +179,7 @@ public sealed class AgentSetup(ISetupPlatform platform, HttpClient web, HttpClie
                 request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
                 (await local.SendAsync(request, limit.Token).ConfigureAwait(false)).Dispose();
             }
-            catch (Exception ex) when (!ct.IsCancellationRequested && ex is HttpRequestException or OperationCanceledException or UriFormatException)
+            catch (Exception ex) when (ex is HttpRequestException or OperationCanceledException or UriFormatException)
             {
                 // It may already be on its way out; the wait below decides.
             }
@@ -187,7 +189,13 @@ public sealed class AgentSetup(ISetupPlatform platform, HttpClient web, HttpClie
         while (platform.IsRunning(companion))
         {
             if (asked.Elapsed >= CompanionQuitLimit) throw new SetupFailure("The Construct Companion did not quit; close it from its tray menu and try again.");
-            await Task.Delay(Poll, ct).ConfigureAwait(false);
+            await Task.Delay(Poll, CancellationToken.None).ConfigureAwait(false);
+        }
+
+        if (ct.IsCancellationRequested)
+        {
+            StartOldCompanion();
+            ct.ThrowIfCancellationRequested();
         }
 
         return true;

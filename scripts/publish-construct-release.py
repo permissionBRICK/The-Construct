@@ -105,6 +105,10 @@ def publish(output, channel='stable', notes_file=None):
     promote = should_promote(commit, current, ancestor, branch_head)
     existing = api('/releases/tags/' + tag)
     channel_files = [output / 'manifest.json'] + ([output / expected['setupWindows']] if 'setupWindows' in expected else [])
+    if existing and not existing['draft'] and channel == 'nightly' and not existing.get('prerelease'):
+        # The commit's release is a stable one: its ConstructSetup.exe installs the stable channel, and handing it out
+        # as the nightly setup would move nightly users to stable without a word.
+        raise ValueError('This commit was published as a stable release; refusing to publish its stable setup as the nightly channel')
     if existing and not existing['draft']:
         # Retries never overwrite already-published bits for a commit.
         names = {asset['name'] for asset in existing['assets']}

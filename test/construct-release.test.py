@@ -304,7 +304,7 @@ class NightlyPublishTests(unittest.TestCase):
             output = Path(directory); names = fixture(output, commit)
             manifest = json.loads((output / 'manifest.json').read_text()); manifest.update(channel='nightly', version='1.0.0+' + commit)
             (output / 'manifest.json').write_text(json.dumps(manifest))
-            published = dict(tag_name='host-' + commit, draft=False, assets=[dict(name=name) for name in names])
+            published = dict(tag_name='host-' + commit, draft=False, prerelease=True, assets=[dict(name=name) for name in names])
             api = lambda path: published if path == '/releases/tags/host-' + commit else None
             with patch.dict(os.environ, GITHUB_SHA=commit, GITHUB_REPOSITORY='owner/repo', GITHUB_REF_NAME='nightly'), \
                  patch.object(publisher, 'api', side_effect=api), \
@@ -322,7 +322,7 @@ class NightlyPublishTests(unittest.TestCase):
             output = Path(directory); names = fixture(output, commit); with_setup(output)
             manifest = json.loads((output / 'manifest.json').read_text()); manifest.update(channel='nightly', version='1.0.0+' + commit)
             (output / 'manifest.json').write_text(json.dumps(manifest))
-            published = dict(tag_name='host-' + commit, draft=False, assets=[dict(name=name) for name in names + ['ConstructSetup.exe']])
+            published = dict(tag_name='host-' + commit, draft=False, prerelease=True, assets=[dict(name=name) for name in names + ['ConstructSetup.exe']])
             api = lambda path: published if path == '/releases/tags/host-' + commit else None
             with patch.dict(os.environ, GITHUB_SHA=commit, GITHUB_REPOSITORY='owner/repo', GITHUB_REF_NAME='nightly'), \
                  patch.object(publisher, 'api', side_effect=api), \
@@ -334,6 +334,22 @@ class NightlyPublishTests(unittest.TestCase):
                                             for name in ('manifest.json', 'ConstructSetup.exe')])
             self.assertEqual(commands[-1], ['gh', 'release', 'upload', 'channel-nightly', '--clobber',
                                             str(output / 'published' / 'manifest.json'), str(output / 'published' / 'ConstructSetup.exe')])
+
+    def test_a_commit_published_as_stable_is_not_handed_out_as_the_nightly_setup(self):
+        # Its ConstructSetup.exe installs the stable channel: nightly users would be moved to stable without a word.
+        commit = 'a' * 40
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory); names = fixture(output, commit); with_setup(output)
+            manifest = json.loads((output / 'manifest.json').read_text()); manifest.update(channel='nightly', version='1.0.0+' + commit)
+            (output / 'manifest.json').write_text(json.dumps(manifest))
+            published = dict(tag_name='host-' + commit, draft=False, prerelease=False, assets=[dict(name=name) for name in names + ['ConstructSetup.exe']])
+            api = lambda path: published if path == '/releases/tags/host-' + commit else None
+            with patch.dict(os.environ, GITHUB_SHA=commit, GITHUB_REPOSITORY='owner/repo', GITHUB_REF_NAME='nightly'), \
+                 patch.object(publisher, 'api', side_effect=api), \
+                 patch.object(publisher.subprocess, 'check_output', return_value=commit + '\trefs/heads/nightly'), \
+                 patch.object(publisher.subprocess, 'run') as run:
+                with self.assertRaises(ValueError): publisher.publish(output, 'nightly')
+            self.assertFalse(any('channel-nightly' in call.args[0] for call in run.call_args_list))
 
     def test_channel_mismatch_is_refused(self):
         with tempfile.TemporaryDirectory() as directory:

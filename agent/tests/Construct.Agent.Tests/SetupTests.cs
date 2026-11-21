@@ -273,6 +273,28 @@ public sealed class SetupTests : IDisposable
     }
 
     [Fact]
+    public async Task A_setup_cancelled_while_the_companion_quits_waits_for_it_and_starts_it_again()
+    {
+        Companion(running: true);
+        var companionExe = Path.Combine(_windows.LocalAppData, "Programs", "ConstructCompanion", "ConstructCompanion.exe");
+        Directory.CreateDirectory(Path.GetDirectoryName(companionExe)!);
+        File.WriteAllText(companionExe, "companion");
+        using var cancel = new CancellationTokenSource();
+        // Ctrl+C right after the Companion accepted the quit; it exits a moment later.
+        _web.CompanionIgnoresQuit = true;
+        _web.OnQuit = () =>
+        {
+            cancel.Cancel();
+            _ = Task.Delay(100).ContinueWith(_ => { lock (_windows.Running) _windows.Running.Remove(CompanionPid); });
+        };
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => Setup().RunAsync("stable", cancel.Token));
+
+        Assert.Equal([(companionExe, "--background")], _windows.Started);
+        Assert.False(File.Exists(Path.Combine(AgentHome, "install.json")));
+    }
+
+    [Fact]
     public async Task A_failure_after_the_companion_quit_starts_it_again_and_keeps_it_starting_with_windows()
     {
         Companion(running: true);
@@ -419,7 +441,7 @@ public sealed class SetupTests : IDisposable
             if (executable.EndsWith(AgentSetup.AgentExecutable, StringComparison.Ordinal) && !AgentNeverStarts) WriteEndpoint();
         }
 
-        public bool IsRunning(int pid) => Running.Contains(pid);
+        public bool IsRunning(int pid) { lock (Running) return Running.Contains(pid); }
 
         /// <summary>The Companions of this session that still run.</summary>
         public IReadOnlyList<int> SessionProcesses(string name) => name == AgentSetup.CompanionProcess ? Session.Where(Running.Contains).ToList() : [];
@@ -449,6 +471,9 @@ public sealed class SetupTests : IDisposable
         public bool UpdateCheckFails { get; set; }
 
         public bool CompanionIgnoresQuit { get; set; }
+
+        /// <summary>Called when the Companion is asked to quit.</summary>
+        public Action? OnQuit { get; set; }
 
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
         {
@@ -488,6 +513,7 @@ public sealed class SetupTests : IDisposable
             {
                 if (request.Headers.Authorization?.ToString() != "Bearer companion-token") return new(HttpStatusCode.Unauthorized);
                 if (!CompanionIgnoresQuit) test._windows.Running.Remove(CompanionPid);
+                OnQuit?.Invoke();
                 return Json("""{"ok":true}""");
             }
 
