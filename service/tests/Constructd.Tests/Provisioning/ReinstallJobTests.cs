@@ -141,7 +141,7 @@ public sealed class ReinstallJobTests : IAsyncDisposable
         var bar = job.Progress.Where(p => p.Overall is not null).Select(p => (p.Overall!.Value, p.Label!)).ToList();
         Assert.Equal(bar.Select(b => b.Value).Order(), bar.Select(b => b.Value));
         Assert.Contains(bar, b => b.Item2 == "Installing Ubuntu");
-        Assert.Equal(["Backing up", "Deleting VM", "Creating VM", "Installing Ubuntu"], bar.Select(b => b.Item2).Distinct().Take(4));
+        Assert.Equal(["Preparing image", "Backing up", "Deleting VM", "Creating VM", "Installing Ubuntu"], bar.Select(b => b.Item2).Distinct().Take(5));
         Assert.Equal(100, job.Overall!.Percent);
     }
 
@@ -268,6 +268,36 @@ public sealed class ReinstallJobTests : IAsyncDisposable
         var again = await ReinstallAsync(h, "reinstall-2");
         Assert.True(again.State == JobState.Succeeded, again.Error);
         Assert.Equal([_pc.Fingerprint], guest.Recipients.Keys);
+    }
+
+    [Fact]
+    public async Task Install_media_that_cannot_be_had_stops_the_reinstall_before_the_backup_and_the_delete()
+    {
+        var guest = new FakeBackupGuest();
+        var h = await HostAsync(guest);
+        var iso = h.App.Service<Constructd.Fakes.FakeIsoBuilder>();
+        iso.Failure = new InvalidOperationException("no source ISO");
+
+        var job = await ReinstallAsync(h, "reinstall-1");
+
+        Assert.Equal(JobState.Failed, job.State);
+        var result = Result<ReinstallJobResult>(job);
+        Assert.Equal(("media", "media-unavailable"), (result.FailedStep, result.Code));
+        Assert.False(result.VmDeleted);
+        Assert.Null(result.BackupId);
+        Assert.Empty(guest.Made);
+        Assert.DoesNotContain(h.App.Driver.Calls, c => c.StartsWith("remove:", StringComparison.Ordinal));
+        Assert.Equal(VmState.Running, h.App.Driver.StateOf(ProvisionHarness.Vm));
+        Assert.Equal([_pc.Fingerprint], guest.Recipients.Keys);
+
+        // With media the reinstall builds it first and creates the VM from what it built, once.
+        iso.Failure = null;
+        var built = iso.Built.Count;
+        var again = await ReinstallAsync(h, "reinstall-2");
+        Assert.True(again.State == JobState.Succeeded, again.Error);
+        Assert.Equal([ProvisionHarness.Vm], iso.Built.Skip(built));
+        var steps = again.Progress.Where(p => p.State == "running" && p.Text == $"{p.Step}: running").Select(p => p.Step).ToList();
+        Assert.Equal(["media", "backup", "delete", "create"], steps.Take(4));
     }
 
     [Fact]

@@ -357,7 +357,9 @@ a 400 naming the field; null keeps the VM's saved choice.
 The same route starts the two other jobs of a VM's life:
 
 - `{kind: "reinstall", requestId, commit?, desired?, freshImage?}` rebuilds the VM with no device online
-  (design 10.2, S29). Steps: `backup` (the job makes an RSA key pair, enrols its public half on the VM
+  (design 10.2, S29). Steps: `media` (the new VM's install media, built or the published one taken before anything
+  happens to the VM: a host that cannot get them fails here with `media-unavailable` and leaves the VM as it is),
+  `backup` (the job makes an RSA key pair, enrols its public half on the VM
   with `construct backup recipients add`, opens the host's `pre-reinstall` request and runs
   `construct backup create`, then unwraps the backup's key with its private half and has the VM
   `verify` it), `delete` (the hypervisor VM only: record, forwards and settings stay), `create` (the
@@ -383,7 +385,7 @@ provision, reinstall or restore on the VM after it `409 job-superseded`. The ret
 second click answers the retry already started. The rules below hold for a retry as for any repeated job.
 
 Retries: the job key's private half lives in the job's memory only. After a reinstall failed past the
-delete it stays in memory for an hour, and a retry starts at `create` with the same backup and key; a
+delete it stays in memory for an hour, and a retry gets the media and starts at `create` with the same backup and key; a
 retry after an engine restart rebuilds and provisions the VM and fails with `restore-needs-device`,
 naming the backup a device restores with a `restore` job. A restore is recorded before the guest
 starts it: a restore of the same backup that did not finish is not run again (`restore-already-ran`),

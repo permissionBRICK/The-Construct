@@ -992,7 +992,7 @@ describe('ApiBackend events and jobs', () => {
     await settle();
     expect(be.snapshot().notice).toBeNull();
     expect(posts(calls)[0].body).toMatchObject({ kind: 'reinstall', freshImage: true });
-    expect(activeJob(be.snapshot(), 'atlas')).toMatchObject({ kind: 'reinstall', state: 'running', step: 'Backing up', stepIndex: 0, stepCount: 10 });
+    expect(activeJob(be.snapshot(), 'atlas')).toMatchObject({ kind: 'reinstall', state: 'running', step: 'Backing up', stepIndex: 1, stepCount: 11 });
     on('GET', `/api/engines/${E1}/api/v1/jobs/r1`, { json: { ...job('r1', 'atlas', 'failed', 'reinstall', [{ at: '', text: 'apt locked', step: 'provision', state: 'failed', percent: null }]), result: { failedStep: 'create' }, error: 'driver-failed' } });
     be.onEvent('job.ended', { seq: 5, type: 'job.ended', engine: E1, data: { id: 'r1', vm: 'atlas' } });
     await settle();

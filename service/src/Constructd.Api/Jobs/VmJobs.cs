@@ -81,11 +81,11 @@ public static class VmJobs
     /// called the moment the hypervisor may have a VM under the name. Returns the endpoint and the
     /// token's plaintext, which the caller hands on once and never stores.
     /// </summary>
+    /// <param name="isoPath">Install media the caller built already (a reinstall does that before it deletes the VM); null builds it here.</param>
     public static async Task<(Constructd.Core.Domain.Endpoint Endpoint, string VmToken)> BuildMachineAsync(IServiceProvider services, VmDescriptor descriptor,
-        Vm initial, bool redownload, Action mayExist, IProgress<string> progress, CancellationToken cancellationToken)
+        Vm initial, bool redownload, Action mayExist, IProgress<string> progress, CancellationToken cancellationToken, string? isoPath = null)
     {
         var options = services.GetRequiredService<ConstructdOptions>();
-        var isoBuilder = services.GetRequiredService<IIsoBuilder>();
         var driver = services.GetRequiredService<IHypervisorDriver>();
         var forwards = services.GetRequiredService<IPortForwardManager>();
         var vms = services.GetRequiredService<IVmRepository>();
@@ -93,17 +93,7 @@ public static class VmJobs
         var name = descriptor.Name;
 
         await network.InitializeAsync(initial, cancellationToken);
-        // Seed credentials exist only for the unattended install; the client's provisioning run
-        // replaces them. Generated per VM, never persisted, never logged.
-        var seedPassword = TokenHasher.GenerateSecret();
-
-        var isoPath = await isoBuilder.BuildAsync(
-            name,
-            options.Iso.SeedUser,
-            seedPassword,
-            options.Iso.BootstrapPublicKeyPath,
-            progress,
-            cancellationToken, redownload).ConfigureAwait(false);
+        isoPath ??= await BuildMediaAsync(services, name, redownload, progress, cancellationToken).ConfigureAwait(false);
 
         mayExist();
         JobProgressTracker.Current?.Begin(InstallStep, "Installing Ubuntu");
@@ -149,6 +139,18 @@ public static class VmJobs
         var endpoint = await network.EndpointAsync(vm! with { SshForwardPort = port }, cancellationToken)
             ?? throw new LifecycleException("no-address");
         return (endpoint, vmToken);
+    }
+
+    /// <summary>
+    /// The install media for <paramref name="name"/>: built, or the published one when it still fits. Seed credentials
+    /// exist only for the unattended install; provisioning replaces them. Generated per build, never persisted, never logged.
+    /// </summary>
+    public static Task<string> BuildMediaAsync(IServiceProvider services, string name, bool redownload, IProgress<string> progress,
+        CancellationToken cancellationToken)
+    {
+        var options = services.GetRequiredService<ConstructdOptions>();
+        return services.GetRequiredService<IIsoBuilder>().BuildAsync(name, options.Iso.SeedUser, TokenHasher.GenerateSecret(),
+            options.Iso.BootstrapPublicKeyPath, progress, cancellationToken, redownload);
     }
 
     /// <summary>
