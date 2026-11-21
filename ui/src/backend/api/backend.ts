@@ -11,8 +11,8 @@ import { agentList, agentSwitches, DEFAULT_AGENTS } from '../../model/settings';
 import {
   updateRunning, allowanceOf, codeGroups, hostVersion, jobKey, problemText, splitJobKey, toCert, toConfig, toDevice, toHostJob, toHostUser, toHostVm, toJob,
   toMedia, toStatus, toUpdates, toUsage, toVm, toWindows, vmKey, toSecret, toLeases, toVaultEvent, toApproval, toEntryRequest, toProfile, splitRequestKey, requestKey, VM_JOB_KINDS,
-  settingsFields, withDesired, codingAgents, toLink, toEverything, hostKind, toIsos, toRepair, REPAIRABLE, upgradeStep, toUpgradeItem,
-  type RepairSession, type RepairLine, type UpgradeView, type AgentSignIn,
+  settingsFields, withDesired, codingAgents, toLink, toEverything, hostKind, toIsos, toRepair, REPAIRABLE, upgradeStep, toUpgradeItem, toUpstream,
+  type RepairSession, type UpstreamView, type RepairLine, type UpgradeView, type AgentSignIn,
   type DeviceItem, type ProfileResponse, type AuditEntry, type EngineView, type Health, type HostUpdateStatus, type HttpsStatus, type JobResponse, type MediaItem, type TokenSummary,
   type UsageSummary, type UserDetail, type VmParts, type VmResponse, type WhoAmI, type HostStatus, type HostConfig, type HostWindows, type HostCapabilities, type IsoCatalog,
   type ConnectionView, type ProvisionSettings,
@@ -209,7 +209,7 @@ export class ApiBackend implements Backend {
       device: { name: '' }, version: '', release: null, vms: [], hosts: [], projects: [], sync: { when: '–', remote: '', rev: '' }, jobs: [],
       vaultRequests: [], secrets: [], leases: [], devices: [], history: [], vaultModes: [], problems: {}, pairing: null, revocation: null, handout: null,
       prefs: { channel: 'stable', theme: p.theme ?? 'auto', scheme: p.scheme ?? 'green', autoUpdate: false, startWithOs: false, notifications: false },
-      upgrade: null, notice: null, na: API_GAPS, firstRun: null, everything: null, signIn: null,
+      upgrade: null, notice: null, na: API_GAPS, firstRun: null, everything: null, signIn: null, upstream: null,
     };
   }
 
@@ -335,7 +335,7 @@ export class ApiBackend implements Backend {
         else this.slices.set(e.id, newSlice(e));
       }
       this.compose();
-      await Promise.all([this.loadDevices(), this.loadDismissed(), ...st.engines.map(e => this.refreshEngine(e.id)), this.loadVault(), this.loadProfiles(),
+      await Promise.all([this.loadDevices(), this.loadDismissed(), ...st.engines.map(e => this.refreshEngine(e.id)), this.loadVault(), this.loadProfiles(), this.loadUpstream(),
         // The share is read only where this device can map one: its features first.
         this.loadDevice().then(() => this.loadConnections())]);
       // After the VMs, so a request names the VM the screens know.
@@ -364,7 +364,7 @@ export class ApiBackend implements Backend {
 
   private async refreshAll() {
     // Vault requests arrive as events; the slow read catches an engine that was not reachable when one was filed.
-    await Promise.all([this.loadDevices(), ...[...this.slices.keys()].map(id => this.refreshEngine(id)), this.loadVault(), this.loadProfiles(), this.loadRequests(), this.loadConnections()]);
+    await Promise.all([this.loadDevices(), ...[...this.slices.keys()].map(id => this.refreshEngine(id)), this.loadVault(), this.loadProfiles(), this.loadUpstream(), this.loadRequests(), this.loadConnections()]);
   }
 
   /** This device: its version on offer, channel, automatic updates, start with the OS, its SSH key, what it can do. */
@@ -510,6 +510,22 @@ export class ApiBackend implements Backend {
     } catch (e) {
       this.problem('projects', errText(e));
     }
+  }
+
+  /** The upstream config repos as the agent's last refresh found them; an agent without them shows none. */
+  private async loadUpstream() {
+    if (!this.registered) return;
+    try {
+      this.showUpstream(await ok(this.agent.GET('/api/upstream')));
+    } catch { /* none to show */ }
+  }
+
+  private showUpstream(v: UpstreamView) {
+    const before = this.s.upstream?.when;
+    const upstream = toUpstream(v);
+    this.emit({ upstream });
+    // A refresh that ended merges upstream changes into the profiles: read them again.
+    if (upstream && !upstream.running && upstream.when !== before) void this.loadProfiles();
   }
 
   /** Reads one engine; a second call while one runs makes it read once more afterwards. */
@@ -777,8 +793,10 @@ export class ApiBackend implements Backend {
         if (at && engine === at.engine && vm?.toLowerCase() === at.vm.toLowerCase() && (id === at.id || at.id === null)) void this.readSignIn();
         return;
       }
-      case 'agent-notice.changed': {
-        // A lost sign-in appeared, cleared or was put away (on any device): the VM's agents again.
+      case 'upstream': void this.loadUpstream(); return;
+      case 'agent-notice.changed': case 'vm.agents.changed': {
+        // A report changed the VM's agents, or a lost sign-in appeared, cleared or was put away (on any device): the
+        // VM's agents again.
         const vm = typeof data?.vm === 'string' ? data.vm : null;
         if (engine && vm && this.slices.has(engine)) void this.readAgents(engine, vm);
         return;
@@ -1548,6 +1566,12 @@ export class ApiBackend implements Backend {
   }
 
   syncProjects() { void this.loadProfiles(); }
+
+  refreshUpstream() {
+    if (this.s.upstream?.running) return;
+    if (this.s.upstream) this.emit({ upstream: { ...this.s.upstream, running: true } });
+    void this.run(async () => this.showUpstream(await ok(this.agent.POST('/api/upstream/refresh'))));
+  }
 
   closeForward(vmId: string, forwardId: string) {
     const ref = this.vmRef(vmId);

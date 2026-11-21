@@ -1066,6 +1066,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/upstream": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description The linked upstream config repos as the last refresh found them: per repository the commit read, per tracked file whether it is up to date, merged, in conflict, removed upstream or refused. */
+        get: operations["GetUpstream"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/upstream/refresh": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Fetches every linked upstream config repo now with this PC's git credentials and hands each tracked file's new version to the store's engine, which merges it into its profile. Answers when done. */
+        post: operations["RefreshUpstream"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -1464,6 +1498,25 @@ export interface components {
             running: boolean;
             error: null | string;
             oldHosts: string[];
+        };
+        UpstreamFileStatus: {
+            profile: string;
+            path: string;
+            state: string;
+            message?: null | string;
+        };
+        UpstreamLinkStatus: {
+            url: string;
+            ref: null | string;
+            commit: null | string;
+            error: null | string;
+            files: components["schemas"]["UpstreamFileStatus"][];
+        };
+        UpstreamView: {
+            running: boolean;
+            /** Format: date-time */
+            refreshedAt: null | string;
+            links: components["schemas"]["UpstreamLinkStatus"][];
         };
         VaultApprovalItem: {
             engine: string;
@@ -3920,6 +3973,64 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["UpgradeView"];
+                };
+            };
+            /** @description An error. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["AgentProblem"];
+                };
+            };
+        };
+    };
+    GetUpstream: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UpstreamView"];
+                };
+            };
+            /** @description An error. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["AgentProblem"];
+                };
+            };
+        };
+    };
+    RefreshUpstream: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UpstreamView"];
                 };
             };
             /** @description An error. */

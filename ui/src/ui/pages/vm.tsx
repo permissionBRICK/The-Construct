@@ -1,5 +1,5 @@
 import { useState } from 'preact/hooks';
-import type { Agent, Profile, SettingsPatch, Vm, VmSettings } from '../../backend/types';
+import type { Agent, Profile, SettingsPatch, Upstream, Vm, VmSettings } from '../../backend/types';
 import { activeJob, vmDot, vmWord, newer, vmUpdateTarget, warnedJob } from '../../model/vm';
 import { AGENTS, groupApplies, hwChange, swapSize } from '../../model/settings';
 import { profileError } from '../../model/profile';
@@ -125,6 +125,7 @@ export function Projects({ vm }: { vm: Vm }) {
       )}
       <div class="line"><span>Synced {s.sync.when}</span><code>{s.sync.remote}</code>{s.sync.rev && <code>{s.sync.rev}</code>}</div>
       {s.problems.projects && <div class="line badc">{s.problems.projects}</div>}
+      {s.upstream && <UpstreamLine u={s.upstream} />}
       <Sec>
         <Table
           cols={[{ h: 'Project' }, { h: 'Repos', cls: 'x m' }, { h: 'SDKs', cls: 'x m' }, { h: 'MCP', cls: 'x m' }, { h: na(s, 'project-on') ? '' : `On ${vm.name}`, cls: 'e' }]}
@@ -136,6 +137,22 @@ export function Projects({ vm }: { vm: Vm }) {
         />
       </Sec>
     </Page>
+  );
+}
+
+/** Shared profiles from upstream config repos (design 9.7): where from, when last checked, and a check now. */
+function UpstreamLine({ u }: { u: Upstream }) {
+  const { be } = useApp();
+  const shared = u.repos.reduce((n, r) => n + r.files.length, 0);
+  return (
+    <>
+      <div class="line">
+        <span>{shared} shared {shared === 1 ? 'profile' : 'profiles'} from</span>{u.repos.length === 1 ? <code>{u.repos[0].url}</code> : <span>{u.repos.length} upstream repos</span>}
+        <span class="d">{u.running ? 'Checking…' : u.when ? `checked ${u.when}` : 'not checked yet'}</span>
+        <Btn sm icon="repro" onClick={() => be.refreshUpstream()} disabled={u.running}>Check now</Btn>
+      </div>
+      {u.problem && <div class="line badc">{u.problem}</div>}
+    </>
   );
 }
 

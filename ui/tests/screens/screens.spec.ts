@@ -39,6 +39,7 @@ const SHOTS: [Surf, string, string, string?][] = [
   ['win', 'repair', 'repair'],
   ['win', 'updating', 'updating'],
   ['win', 'projects', 'calm', 'projects'],
+  ['win', 'projects-upstream', 'upstream', 'projects'],
   ['win', 'project-file', 'calm', 'file/webshop'],
   ['win', 'settings-restart', 'restart', 'settings'],
   ['win', 'settings-agents', 'calm', 'settings/agents'],

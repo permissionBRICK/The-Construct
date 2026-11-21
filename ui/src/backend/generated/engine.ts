@@ -2330,6 +2330,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/profiles/{profile}/upstream": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description A device's new version of the file an upstream config repo tracks for this profile (design 9.7): merged with the stored base, written with the new base in one batch, or held as a conflict. A retry of the same operation or commit changes nothing. */
+        post: operations["ApplyUpstreamProfile"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/profile-conflicts": {
         parameters: {
             query?: never;
@@ -5642,6 +5659,26 @@ export interface components {
             healthTimeoutSeconds: number;
             /** @default false */
             auto: boolean;
+        };
+        UpstreamApplyRequest: {
+            operationId: null | string;
+            url: null | string;
+            path: null | string;
+            ref: null | string;
+            commit: null | string;
+            content: null | components["schemas"]["JsonObject"];
+            base: null | components["schemas"]["UpstreamBaseRequest"];
+        };
+        UpstreamApplyResponse: {
+            status: string;
+            /** Format: int64 */
+            revision: null | number;
+            conflictId: null | string;
+            fields: null | string[];
+        };
+        UpstreamBaseRequest: {
+            commit: null | string;
+            content: null | components["schemas"]["JsonObject"];
         };
         UsageConfig: {
             /**
@@ -11398,6 +11435,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ProfileWriteResponse"];
+                };
+            };
+            /** @description An error, as a Problem document. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    ApplyUpstreamProfile: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                profile: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": null | components["schemas"]["UpstreamApplyRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UpstreamApplyResponse"];
                 };
             };
             /** @description An error, as a Problem document. */
