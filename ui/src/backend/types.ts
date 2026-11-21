@@ -305,8 +305,6 @@ export interface Upgrade {
   items: { name: string; state: 'done' | 'running' | 'waiting' | 'skipped' | 'failed'; count: string; pct: number }[];
   /** What the old install holds. */
   found: { vms: string[]; profiles: number; vault: boolean } | null;
-  /** Step `engine` installs an engine on this PC, with one admin prompt. */
-  adminPrompt: boolean;
   /** Step `convert`: shared hosts that still run the old Construct; their admin updates them from the host page. */
   oldHosts: string[];
   /** Step `done`: what the conversion could not finish, shown once; the step is there only when there are any. */

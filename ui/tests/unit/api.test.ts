@@ -1305,7 +1305,7 @@ describe('ApiBackend one-time upgrade', () => {
     await be.start();
     // The dialog stands in for the first run of an unregistered device.
     expect(be.snapshot().firstRun).toBeNull();
-    expect(be.snapshot().upgrade).toMatchObject({ step: 'engine', running: false, error: null, adminPrompt: true, found: { vms: ['atlas', 'harbor'], profiles: 1, vault: true } });
+    expect(be.snapshot().upgrade).toMatchObject({ step: 'engine', running: false, error: null, found: { vms: ['atlas', 'harbor'], profiles: 1, vault: true } });
     on('POST', '/api/upgrade/engine', () => {
       on('GET', '/api/upgrade', { json: view({ engine: 'done' }) });
       return { status: 202, json: view({ engine: 'running' }, { running: true }) };

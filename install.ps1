@@ -209,7 +209,7 @@ if ($running) {
 $stoppedCompanion = Stop-ConstructOldCompanion
 try {
     $installed = Install-ConstructAgentPackage -Channel $channel
-    $null = Wait-ConstructAgent
+    $agent = Wait-ConstructAgent
 } catch {
     # Leave the user with a running Companion: the update can be retried from its button.
     if ($stoppedCompanion) { Start-ConstructOldCompanion }
@@ -217,4 +217,6 @@ try {
 }
 # The agent holds the Companion's single-instance mutex; the Companion no longer starts with Windows.
 Remove-ItemProperty -Path $runKey -Name 'ConstructCompanion' -ErrorAction SilentlyContinue
+# It runs in the background (the way Windows starts it at sign-in): its window, where the setup goes on, is opened here.
+try { Invoke-ConstructAgentRoute -Endpoint $agent -Path '/api/shell/open' -Body @{ surface = 'win' } | Out-Null } catch { Write-Warning 'Open Construct from its tray icon.' }
 Write-Host "==> The Construct agent $installed is running. Its window finishes the setup." -ForegroundColor Green
