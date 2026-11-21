@@ -11,7 +11,7 @@ public sealed class CoreTests
 {
     [Theory]
     [InlineData(96, 1120, 920)]
-    [InlineData(120, 1400, 1150)] // 125 %: the FatPC's window was 1200 x 820 device pixels, too small for the move's list (R6)
+    [InlineData(120, 1400, 1150)] // 125 %: the old 1200 x 820 device pixels were too small for the move's list (R6)
     public void The_window_opens_big_enough_for_the_upgrade_in_the_screens_dpi(int dpi, int width, int height)
     {
         var big = Construct.Companion.Core.Desktop.WindowPlacement.Main(new(0, 0, 3840, 2100), dpi);
