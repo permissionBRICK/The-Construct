@@ -140,10 +140,10 @@ public static class LocalVmAdoption
 
         // The engine's own copy of the old client's key: ssh refuses a key file other accounts can
         // read, and the engine's data directory is only its own and the administrators'.
-        var data = Path.GetDirectoryName(Path.GetFullPath(options.DatabasePath))!;
-        var keyDir = Path.Combine(data, "ssh");
+        // Later jobs reach the VM with it too (ProvisionTargets): it has no seed user.
+        var keyFile = ProvisionTargets.AdoptedKeyPath(options, name);
+        var keyDir = Path.GetDirectoryName(keyFile)!;
         Directory.CreateDirectory(keyDir);
-        var keyFile = Path.Combine(keyDir, name + "_root");
         await File.WriteAllTextAsync(keyFile, privateKey.Replace("\r\n", "\n", StringComparison.Ordinal).TrimEnd() + "\n", ct);
         if (!OperatingSystem.IsWindows()) File.SetUnixFileMode(keyFile, UnixFileMode.UserRead | UnixFileMode.UserWrite);
         var target = new SshTarget(endpoint.SshHost, endpoint.SshPort, "root", keyFile, Path.Combine(keyDir, "known_hosts"));

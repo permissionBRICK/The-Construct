@@ -220,6 +220,7 @@ public static class VmJobs
         try
         {
             await driver.RemoveVmAsync(name, progress, cancellationToken).ConfigureAwait(false);
+            services.GetService<IProvisionTargets>()?.ForgetAdoptedKey(name);
 
             var removed = await forwards.RemoveAllForwardsAsync(name, cancellationToken).ConfigureAwait(false);
             await forwards.ReleaseSshForwardAsync(name, cancellationToken).ConfigureAwait(false);

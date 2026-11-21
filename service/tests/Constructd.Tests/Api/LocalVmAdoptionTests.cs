@@ -144,6 +144,30 @@ public sealed class LocalVmAdoptionTests : IDisposable
     }
 
     [Fact]
+    public async Task Later_jobs_reach_an_adopted_vm_as_root_with_the_kept_key_until_it_is_gone()
+    {
+        // FatPC test 2026-11-21: the first reprovision after the move dialled the seed user, which an adopted VM
+        // does not have ("ssh-failed ... construct@agent-vm"); the device keys never arrived for the same reason.
+        var guest = new FakeGuest();
+        await using var services = Services(guest);
+        await services.GetRequiredService<IUserStore>().CreateAsync(new User("alice", Role.Admin, 10, DateTimeOffset.UtcNow), CancellationToken.None);
+        var targets = services.GetRequiredService<IProvisionTargets>();
+        var options = services.GetRequiredService<ConstructdOptions>();
+        Assert.True((await AdoptAsync(services)).Exit == 0);
+        var vm = (await services.GetRequiredService<IVmRepository>().GetAsync("agent-vm", CancellationToken.None))!;
+
+        var target = (await targets.ResolveAsync(vm, CancellationToken.None))!;
+        Assert.Equal(("root", ProvisionTargets.AdoptedKeyPath(options, "agent-vm")), (target.User, target.IdentityFile));
+        Assert.True(target.IsRoot);
+        Assert.Equal(guest.Calls[1].Target.KnownHostsFile, target.KnownHostsFile);
+
+        // Deleted or rebuilt: the VM under the name is the engine's own again.
+        targets.ForgetAdoptedKey("agent-vm");
+        Assert.False(File.Exists(ProvisionTargets.AdoptedKeyPath(options, "agent-vm")));
+        Assert.Equal(options.Iso.SeedUser, (await targets.ResolveAsync(vm, CancellationToken.None))!.User);
+    }
+
+    [Fact]
     public async Task A_guest_that_is_not_this_vm_is_left_alone_and_gets_no_token()
     {
         var guest = new FakeGuest { Firmware = Guid.NewGuid().ToString("D") };

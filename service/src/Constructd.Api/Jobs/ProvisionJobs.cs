@@ -22,26 +22,41 @@ public interface IProvisionTargets
     /// create that provisions) calls this: everywhere else a changed host key stays a failure.
     /// </summary>
     Task ForgetHostKeyAsync(SshTarget target, CancellationToken ct);
+
+    /// <summary>
+    /// Forgets the old client's root key kept for an adopted VM, once that VM is gone (a reinstall's delete, a
+    /// delete): a VM built again under the name is the engine's own, reached as the seed user.
+    /// </summary>
+    void ForgetAdoptedKey(string vm) { }
 }
 
 /// <summary>
 /// The driver's endpoint, as the seed user (the configured account for an external VM), with the
-/// bootstrap key next to <c>Iso:BootstrapPublicKeyPath</c> — the PowerShell's bootstrap path. The
-/// engine has no root key per VM yet (another block generates one at create time).
+/// bootstrap key next to <c>Iso:BootstrapPublicKeyPath</c> — the PowerShell's bootstrap path. A VM the
+/// engine adopted from the old client has no seed user: it is reached as root with the old client's key
+/// the adoption kept (<see cref="AdoptedKeyPath"/>); its first provision adds the bootstrap key for root.
 /// </summary>
 public sealed class ProvisionTargets(IHypervisorDriver driver, ConstructdOptions options) : IProvisionTargets
 {
     public async Task<SshTarget?> ResolveAsync(Vm vm, CancellationToken ct)
     {
         if (await driver.GetEndpointAsync(vm.Name, ct) is not { } endpoint) return null;
-        var user = driver is ExternalEndpointDriver external && external.Find(vm.Name) is { } listed ? listed.User : options.Iso.SeedUser;
+        var known = Path.Combine(KeyDirectory(options), "known_hosts");
+        Directory.CreateDirectory(Path.GetDirectoryName(known)!);
+        var listed = driver is ExternalEndpointDriver external ? external.Find(vm.Name) : null;
+        var adopted = AdoptedKeyPath(options, vm.Name);
+        if (listed is null && File.Exists(adopted)) return new SshTarget(endpoint.SshHost, endpoint.SshPort, "root", adopted, known);
         var pub = options.Iso.BootstrapPublicKeyPath;
         var key = pub.EndsWith(".pub", StringComparison.OrdinalIgnoreCase) && File.Exists(pub[..^4]) ? pub[..^4] : null;
-        var data = Path.GetDirectoryName(Path.GetFullPath(options.DatabasePath))!;
-        var known = Path.Combine(data, "ssh", "known_hosts");
-        Directory.CreateDirectory(Path.GetDirectoryName(known)!);
-        return new SshTarget(endpoint.SshHost, endpoint.SshPort, user, key, known);
+        return new SshTarget(endpoint.SshHost, endpoint.SshPort, listed?.User ?? options.Iso.SeedUser, key, known);
     }
+
+    /// <summary>Where the adoption keeps the old client's root key for a VM (in the engine's own data directory).</summary>
+    public static string AdoptedKeyPath(ConstructdOptions options, string vm) => Path.Combine(KeyDirectory(options), vm + "_root");
+
+    private static string KeyDirectory(ConstructdOptions options) => Path.Combine(Path.GetDirectoryName(Path.GetFullPath(options.DatabasePath))!, "ssh");
+
+    public void ForgetAdoptedKey(string vm) => File.Delete(AdoptedKeyPath(options, vm));
 
     public string? BootstrapPublicKey()
     {
