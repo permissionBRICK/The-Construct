@@ -86,18 +86,23 @@ function useFit() {
     const el = ref.current;
     if (!el || !shell.fit || typeof ResizeObserver === 'undefined') return;
     let last = 0;
+    let ro: ResizeObserver | null = null;
     const measure = () => {
       const top = el.getBoundingClientRect().top;
       let h = el.getBoundingClientRect().height;
-      for (const m of el.querySelectorAll('details[open] > .vml')) h = Math.max(h, m.getBoundingClientRect().bottom - top + 12);
+      for (const m of el.querySelectorAll('details[open] > .vml')) {
+        // An open menu is placed over the page, so the page's own size does not change with it: watched as well.
+        ro?.observe(m);
+        h = Math.max(h, m.getBoundingClientRect().bottom - top + 12);
+      }
       h = Math.ceil(h);
       if (h !== last) { last = h; shell.fit!(h); }
     };
-    const ro = new ResizeObserver(measure);
+    ro = new ResizeObserver(measure);
     ro.observe(el);
     el.addEventListener('toggle', measure, true);
     measure();
-    return () => { ro.disconnect(); el.removeEventListener('toggle', measure, true); };
+    return () => { ro?.disconnect(); el.removeEventListener('toggle', measure, true); };
   }, [shell]);
   return ref;
 }

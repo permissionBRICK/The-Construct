@@ -148,13 +148,13 @@ export function JobBlock({ job, vm }: { job: Job; vm: Vm }) {
         <div class="bh"><Icon n="x" /><b>{failedTitle(job)}</b><Btn sm icon="log" onClick={() => setLog(!log)}>Log</Btn>
           <Btn sm icon="x" title="Dismiss" onClick={() => be.dismissJob(job.id)} /></div>
         <div class="msg">{job.step}: {job.error}</div>
-        {(log || !job.repair) && <LogView job={job} />}
+        {(log || !job.repair) && <LogView key={job.id} job={job} />}
         {pop && (job.repair || job.canRepair) && (
           <Btn icon="fix" onClick={() => { if (!job.repair || job.canRepair) be.startRepair(job.id); shell.openWindow({ page: 'home', arg: vm.id }); }}>
             {job.repair && !job.canRepair ? `${job.repair.agent} · ${repairWhen(job.repair)}` : 'Let an agent fix it'}
           </Btn>
         )}
-        {!pop && job.repair && <Repair job={job} />}
+        {!pop && job.repair && <Repair key={job.id} job={job} />}
         {!pop && job.canRepair && <Btn icon="fix" onClick={() => be.startRepair(job.id)}>Let an agent fix it</Btn>}
         {job.kind === 'reinstall' || job.kind === 'restore'
           ? <Confirm label="Retry" icon="retry" verb={job.kind === 'reinstall' ? 'Reinstall again' : 'Restore again'} sm={false} onYes={() => be.retryJob(job.id)} />
@@ -174,7 +174,7 @@ export function JobBlock({ job, vm }: { job: Job; vm: Vm }) {
       <Bar pct={job.pct} />
       {job.repair?.state === 'done' && <div class="msg okc">{job.repair.agent}: {job.repair.outcome}</div>}
       <div class="bf"><span class="lbl">{job.step}</span>{!job.pending && <><Btn sm onClick={() => setLog(!log)}>Log</Btn><Btn sm onClick={() => be.stopJob(job.id)}>Stop</Btn></>}</div>
-      {log && <LogView job={job} />}
+      {log && <LogView key={job.id} job={job} />}
     </div>
   );
 }
@@ -191,7 +191,7 @@ export function WarnedBlock({ job }: { job: Job }) {
         <Btn sm icon="log" onClick={() => setLog(!log)}>Log</Btn>
         <Btn sm icon="x" title="Dismiss" onClick={() => be.dismissJob(job.id)} /></div>
       <div class="msg">{job.warnings?.join(' · ')}</div>
-      {log && <LogView job={job} />}
+      {log && <LogView key={job.id} job={job} />}
     </div>
   );
 }
