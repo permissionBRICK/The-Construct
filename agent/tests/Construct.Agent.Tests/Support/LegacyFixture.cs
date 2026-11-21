@@ -90,6 +90,9 @@ public sealed class AdoptableGuest : ISshRunner
     /// <summary>The provision runs that reached provision.sh.</summary>
     public int Provisions { get; private set; }
 
+    /// <summary>When set, a provision run waits for it after its progress line: a test looks at a reprovision while it runs.</summary>
+    public TaskCompletionSource? HoldProvision { get; set; }
+
     public Task<int> RunAsync(SshTarget target, string command, string? standardInput, IProgress<string>? lines, TimeSpan timeout, CancellationToken ct)
     {
         lock (Commands) Commands.Add(command);
@@ -131,8 +134,19 @@ public sealed class AdoptableGuest : ISshRunner
                 if (FailProvisions > 0 && !command.Contains("PROVISION_PHASE", StringComparison.Ordinal)) { FailProvisions--; failed = true; }
             }
 
-            foreach (var line in new[] { "===CONSTRUCT-PROVISION-RESULT===", "errors=0", "===END-CONSTRUCT-PROVISION-RESULT===" }) lines?.Report(line);
-            return Task.FromResult(failed ? 2 : 0);
+            return Finish();
+
+            async Task<int> Finish()
+            {
+                if (HoldProvision is { } hold && !command.Contains("PROVISION_PHASE", StringComparison.Ordinal))
+                {
+                    lines?.Report("::construct-progress 40");
+                    await hold.Task.WaitAsync(ct);
+                }
+
+                foreach (var line in new[] { "===CONSTRUCT-PROVISION-RESULT===", "errors=0", "===END-CONSTRUCT-PROVISION-RESULT===" }) lines?.Report(line);
+                return failed ? 2 : 0;
+            }
         }
 
         if (command.Contains("reboot-required", StringComparison.Ordinal))
@@ -284,12 +298,19 @@ public sealed class LegacyFixture : IDisposable
         Assert.True(p.ExitCode == 0, "git " + string.Join(' ', args) + ": " + error);
     }
 
-    /// <summary>SHA-256 of every file under the fixture (the old state and ~/.ssh), by relative path.</summary>
+    /// <summary>
+    /// SHA-256 of every file under the fixture (the old state and ~/.ssh), by relative path; not the install folder's
+    /// scripts, which the move replaces on purpose once converted (R14).
+    /// </summary>
     public SortedDictionary<string, string> Digests()
     {
         var digests = new SortedDictionary<string, string>(StringComparer.Ordinal);
         foreach (var file in Directory.EnumerateFiles(Directory_, "*", SearchOption.AllDirectories))
+        {
+            if (file.EndsWith(".ps1", StringComparison.Ordinal) && file.StartsWith(InstallFolder + Path.DirectorySeparatorChar, StringComparison.Ordinal)) continue;
             digests[Path.GetRelativePath(Directory_, file)] = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(file)));
+        }
+
         return digests;
     }
 

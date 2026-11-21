@@ -29,4 +29,11 @@
     <ProjectReference Include="..\Construct.Companion.Core\Construct.Companion.Core.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- The rework's entry scripts, which replace the old install folder's after the move (OldInstallScripts, R14). -->
+    <EmbeddedResource Include="../../../install.ps1;../../../Update-Construct.ps1;../../../Update-T3Code.ps1;../../../Get-ConstructT3PairingLink.ps1"
+                      Link="Shims/%(Filename)%(Extension)" LogicalName="Shims.%(Filename)%(Extension)" />
+    <EmbeddedResource Include="../../../lib/Construct.AgentShim.ps1;../../../lib/Construct.MovedScript.ps1" Link="Shims/lib/%(Filename)%(Extension)" LogicalName="Shims.lib.%(Filename)%(Extension)" />
+  </ItemGroup>
+
 </Project>

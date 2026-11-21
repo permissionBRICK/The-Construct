@@ -82,7 +82,12 @@ public sealed class AgentHost : IAsyncDisposable
         var services = device?.Invoke(agent, stop) ?? DeviceServices.Create(agent, options, options.Platform ?? new LinuxPlatform(), stop);
         var upgradePlatform = options.Upgrade ?? new Upgrade.DefaultUpgradePlatform(Path.Combine(options.DataDirectory, "legacy_known_hosts"));
         var engineSetup = new Engines.LocalEngineSetup(agent, options, upgradePlatform, services.Settings);
-        var upgrade = new Upgrade.UpgradeService(agent, options, upgradePlatform, services.Settings, new AgentEngines(agent), engineSetup);
+        var upgrade = new Upgrade.UpgradeService(agent, options, upgradePlatform, services.Settings, new AgentEngines(agent), engineSetup)
+        {
+            ShipsAgent = services.Updater.ShipsAgentAsync,
+        };
+        // A shared host that moved to the new stack through Update: this device connects there as the converter would (R5).
+        services.Everything.Connect = upgrade.ConnectHostAsync;
         var host = new AgentHost(app, agent, options, token, services, upgrade, engineSetup);
         var startedAt = options.Time.GetUtcNow();
 
@@ -121,6 +126,7 @@ public sealed class AgentHost : IAsyncDisposable
     {
         await App.StartAsync(ct).ConfigureAwait(false);
         Device.Start();
+        Upgrade.Start();
     }
 
     /// <summary>
@@ -137,6 +143,7 @@ public sealed class AgentHost : IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         await Device.DisposeAsync().ConfigureAwait(false);
+        Upgrade.Dispose();
         EngineSetup.Dispose();
         await App.StopAsync().ConfigureAwait(false);
         await App.DisposeAsync().ConfigureAwait(false);

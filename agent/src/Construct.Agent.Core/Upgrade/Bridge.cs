@@ -32,7 +32,7 @@ public sealed record BridgeState
     /// <summary>The last run's items and their outcome, for the dialog.</summary>
     public IReadOnlyList<UpgradeItem> Items { get; init; } = [];
 
-    /// <summary>What the last run says the user should know (leases end, upstream links kept as data, ...).</summary>
+    /// <summary>What the last run says the user should know (open vault leases end, ...).</summary>
     public IReadOnlyList<string> Notes { get; init; } = [];
 
     /// <summary>The account the last run wrote <see cref="Notes"/> for; they are shown to that account only.</summary>
@@ -44,11 +44,33 @@ public sealed record BridgeState
     /// <summary>Shared hosts that still run the old stack (no <c>GET /engine</c>): this device stays signed in the old way there.</summary>
     public IReadOnlyList<string> OldHosts { get; init; } = [];
 
+    /// <summary>The old entry scripts the last replacement left as they were (R14): they are tried again, and a note names them.</summary>
+    public IReadOnlyList<string> ScriptsLeft { get; init; } = [];
+
     public DateTimeOffset? ConvertedAt { get; init; }
+
+    /// <summary>
+    /// The notes with <paramref name="text"/> in place of those that start with <paramref name="prefix"/>, for
+    /// <paramref name="account"/>; null text removes them. A note that was not there shows the notes again.
+    /// </summary>
+    public BridgeState Noted(string? account, string prefix, string? text)
+    {
+        var mine = NotesAccount == account;
+        if (text is null && !mine) return this;
+        var notes = (mine ? Notes : []).Where(n => !n.StartsWith(prefix, StringComparison.Ordinal)).ToList();
+        if (text is not null) notes.Add(text);
+        var fresh = text is not null && !(mine && Notes.Contains(text));
+        return this with { Notes = notes, NotesAccount = account, NotesRead = NotesRead && !fresh };
+    }
 }
 
 /// <summary>One item of a conversion run: <c>done</c>, <c>skipped</c> (already there), <c>pending</c> (retried later) or <c>failed</c>.</summary>
-public sealed record UpgradeItem(string Id, string Label, string State, string? Message = null);
+/// <param name="Message">A few words: what happened, or while it runs what it does now.</param>
+/// <param name="Percent">While a long item runs (a VM's reprovision): how far it is.</param>
+public sealed record UpgradeItem(string Id, string Label, string State, string? Message = null, int? Percent = null);
+
+/// <summary>How far a running step is, for its one bar: a percentage and a few words.</summary>
+public sealed record StepProgress(int Percent, string Label);
 
 public sealed class BridgeFile(string path)
 {

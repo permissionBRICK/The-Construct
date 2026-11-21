@@ -7,7 +7,7 @@ import { aliasWritten } from '../../backend/api/map';
 import { Icon } from '../icons';
 import { Btn, Confirm, Dot, Field, Head, KV, NotYet, Page, Row, Sec, Seg, Switch, Table, Tabs, Tag, UpTag } from '../kit';
 import { copy, na, useApp } from '../ctx';
-import { ActionButtons, JobBlock, PowerBtn, ReinstallConfirm, SignInBlock, SignInCards, VaultCards, WarnedBlock } from '../blocks';
+import { ActionButtons, JobBlock, MovedNotes, PowerBtn, ReinstallConfirm, SignInBlock, SignInCards, VaultCards, WarnedBlock } from '../blocks';
 import { signInState } from '../../model/signin';
 import { shortVersion } from '../../model/update';
 
@@ -68,6 +68,7 @@ export function Overview({ vm }: { vm: Vm }) {
     <Page>
       <VaultCards />
       <SignInCards />
+      <MovedNotes />
       <div class="vp">
         <div class="vp1">
           <div class="vpn">

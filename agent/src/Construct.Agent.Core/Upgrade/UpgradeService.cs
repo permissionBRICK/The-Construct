@@ -2,6 +2,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using Construct.Agent.Device;
 using Construct.Agent.Engines;
+using Construct.Agent.Update;
 
 namespace Construct.Agent.Upgrade;
 
@@ -11,14 +12,18 @@ namespace Construct.Agent.Upgrade;
 /// <param name="Found">What the converter will read (counts and names, never a value).</param>
 /// <param name="Notes">What the last run says the user should know, until the user went on from them (<c>POST /api/upgrade/notes/read</c>); only to the account they were written for.</param>
 /// <param name="OldHosts">Shared hosts that still run the old stack: this device stays signed in the old way there until their admin updates them.</param>
+/// <param name="Progress">While the engine or the conversion step runs: how far it is, for its one bar (R2, R7).</param>
 public sealed record UpgradeView(bool Legacy, string Stage, IReadOnlyList<UpgradeStep> Steps, UpgradeFound? Found, string? StoreEngine, string? LocalEngine,
-    IReadOnlyList<UpgradeItem> Items, IReadOnlyList<string> Notes, IReadOnlyList<string> OldWriters, bool Running, string? Error, IReadOnlyList<string> OldHosts);
+    IReadOnlyList<UpgradeItem> Items, IReadOnlyList<string> Notes, IReadOnlyList<string> OldWriters, bool Running, string? Error, IReadOnlyList<string> OldHosts,
+    StepProgress? Progress = null);
 
 public sealed record UpgradeStep(string Id, string State, string? Message = null);
 
 /// <summary>The old state the converter will copy.</summary>
+/// <param name="StayOld">The remote VMs whose host runs the old Construct and does not move with this PC (R1), as far as the hosts told yet.</param>
 public sealed record UpgradeFound(string? InstallFolder, IReadOnlyList<string> OtherInstallFolders, IReadOnlyList<string> LocalVms, IReadOnlyList<string> RemoteVms,
-    IReadOnlyList<string> Hosts, IReadOnlyList<string> Profiles, int UnmergedChanges, bool Vault, int BackupKeys, bool Upstream, string Channel);
+    IReadOnlyList<string> Hosts, IReadOnlyList<string> Profiles, int UnmergedChanges, bool Vault, int BackupKeys, bool Upstream, string Channel,
+    IReadOnlyList<string> StayOld);
 
 /// <summary><c>POST /api/upgrade/convert</c>: the previous install folder, when not the one found.</summary>
 public sealed record ConvertRequest(string? From = null);
@@ -42,6 +47,12 @@ public sealed class UpgradeService
     private Task _work = Task.CompletedTask;
     private string? _running;
     private string? _error;
+    private StepProgress? _convertProgress;
+    private List<UpgradeItem> _live = [];
+    private Task? _probe;
+    private Task? _scripts;
+    private readonly CancellationTokenSource _lifetime = new();
+    private readonly Dictionary<string, bool> _staysOld = new(StringComparer.OrdinalIgnoreCase);
 
     /// <param name="setup">Sets up the engine on this PC; the first run uses the same.</param>
     public UpgradeService(DeviceAgent agent, AgentOptions options, IUpgradePlatform platform, DeviceSettings settings, IDeviceEngines engines, LocalEngineSetup setup)
@@ -67,6 +78,21 @@ public sealed class UpgradeService
     {
         get => _setup.Installer;
         set => _setup.Installer = value;
+    }
+
+    /// <summary>Whether a host release is the new Construct (<see cref="AgentUpdater.ShipsAgentAsync"/>); without it no old host moves.</summary>
+    public Func<string, string, CancellationToken, Task<bool>>? ShipsAgent { get; set; }
+
+    /// <summary>How an old host's update is followed; tests make it quick.</summary>
+    public TimeSpan OldHostPoll { get; set; } = TimeSpan.FromSeconds(5);
+
+    private OldHostUpdate OldHostUpdate(IDeviceEngines engines) =>
+        new(engines, ShipsAgent ?? ((_, _, _) => Task.FromResult(false)), _options.Time) { PollInterval = OldHostPoll };
+
+    /// <summary>The R1 probe of the old client's hosts, awaitable (tests).</summary>
+    public Task Probe
+    {
+        get { lock (_gate) return _probe ?? Task.CompletedTask; }
     }
 
     /// <summary>The running step, awaitable.</summary>
@@ -110,21 +136,80 @@ public sealed class UpgradeService
             Step("close", bridge.Stage == BridgeState.Converted ? "done" : writers.Count == 0 ? "done" : "todo", writers.Count == 0 ? null : string.Join(", ", writers) + " still open."),
             Step("convert", bridge.Stage == BridgeState.Converted ? "done" : bridge.Items.Any(i => i.State == "failed") ? "failed" : "todo"),
         };
-        return new UpgradeView(legacy is not null, bridge.Stage, steps, legacy is null ? null : Found(legacy), bridge.StoreEngine ?? _agent.StoreEngineId, bridge.LocalEngine,
-            bridge.Items, !bridge.NotesRead && bridge.NotesAccount is { } owner && owner == _agent.Account ? bridge.Notes : [], writers, _running is not null, error,
-            bridge.OldHosts);
+        StepProgress? progress;
+        IReadOnlyList<UpgradeItem> items;
+        lock (_gate)
+        {
+            progress = _running switch { "engine" => setup.Progress, "convert" => _convertProgress, _ => null };
+            // While the conversion runs its rows as they are now, so a reload keeps them; after it, the run's own list.
+            items = _running == "convert" ? [.. _live] : bridge.Items;
+        }
+
+        return new UpgradeView(legacy is not null, bridge.Stage, steps, legacy is null ? null : Found(legacy, bridge.Stage != BridgeState.Converted), bridge.StoreEngine ?? _agent.StoreEngineId,
+            bridge.LocalEngine, items, !bridge.NotesRead && bridge.NotesAccount is { } owner && owner == _agent.Account ? bridge.Notes : [], writers, _running is not null,
+            error, bridge.OldHosts, progress);
 
         UpgradeStep Step(string id, string state, string? message = null) =>
             _running == id ? new UpgradeStep(id, "running") : new UpgradeStep(id, state, message);
     }
 
-    private UpgradeFound Found(LegacyState legacy)
+    private UpgradeFound Found(LegacyState legacy, bool probe)
     {
         var instances = legacy.Instances();
         var repo = RepoSummary(legacy.ConfigRepository, instances.Select(i => i.ConfigBranch).ToArray());
+        var remote = instances.Where(i => !i.Local).ToArray();
+        if (probe && remote.Length > 0) StartProbe(legacy);
+        string[] stayOld;
+        lock (_gate) stayOld = remote.Where(i => i.ServiceUrl is { } url && _staysOld.GetValueOrDefault(LegacyState.Slug(url))).Select(i => i.Name).ToArray();
         return new UpgradeFound(legacy.InstallFolder, legacy.OtherInstallFolders, instances.Where(i => i.Local).Select(i => i.Name).ToArray(),
-            instances.Where(i => !i.Local).Select(i => i.Name).ToArray(), legacy.Hosts().Select(h => h.Url).ToArray(),
-            repo.Profiles, repo.Unmerged, legacy.HasVault, legacy.BackupKeyFiles().Count, repo.Upstream, legacy.Channel());
+            remote.Select(i => i.Name).ToArray(), legacy.Hosts().Select(h => h.Url).ToArray(),
+            repo.Profiles, repo.Unmerged, legacy.HasVault, legacy.BackupKeyFiles().Count, repo.Upstream, legacy.Channel(), stayOld);
+    }
+
+    /// <summary>
+    /// R1: asks each host of the old client once per agent run, in the background, whether its VMs stay on the old
+    /// Construct: it runs the old stack (no <c>GET /engine</c>) and will not move with this PC (the user does not
+    /// administer it, or it offers no new version). Through the host's old pin and token, before the engine step adds it.
+    /// The dialog is told when the answers are in.
+    /// </summary>
+    private void StartProbe(LegacyState legacy)
+    {
+        lock (_gate)
+        {
+            if (_probe is not null) return;
+            _probe = Task.Run(async () =>
+            {
+                foreach (var host in legacy.Hosts().Where(h => h.Pin is not null && h.HasToken))
+                {
+                    try
+                    {
+                        var token = legacy.HostToken(host);
+                        if (token is null) continue;
+                        // https only, as for any engine (it throws otherwise): over http:// the pin is never checked and the token would go out in the clear.
+                        using var engine = new PinnedEngine(host.Url, host.Pin!, token);
+                        bool old;
+                        try
+                        {
+                            await engine.GetAsync("host", "engine", CancellationToken.None).ConfigureAwait(false);
+                            old = false;
+                        }
+                        catch (AgentFailure failure) when (failure.Status == 404)
+                        {
+                            old = true;
+                        }
+
+                        var stays = old && await OldHostUpdate(engine).OfferAsync("host", CancellationToken.None).ConfigureAwait(false) is null;
+                        lock (_gate) _staysOld[host.Slug] = stays;
+                    }
+                    catch (Exception ex) when (ex is AgentFailure or IOException or FormatException or System.Security.Cryptography.CryptographicException)
+                    {
+                        // Unreachable or unreadable: nothing is said about its VMs.
+                    }
+                }
+
+                _agent.Events.Publish("upgrade");
+            });
+        }
     }
 
     private sealed record ConfigRepoSummary(string Key, IReadOnlyList<string> Profiles, int Unmerged, bool Upstream);
@@ -178,16 +263,91 @@ public sealed class UpgradeService
         Bridge.Update(b => b with { Engine = local ? "done" : "skipped", LocalEngine = localEngine, StoreEngine = store });
     }
 
-    /// <summary>Notes a shared host as still on the old stack, or no longer, as far as it told; the dialog names it before the conversion.</summary>
-    internal static async Task MarkOldHostAsync(DeviceAgent agent, BridgeFile bridge, string engineId, CancellationToken ct)
+    /// <summary>Notes a shared host as still on the old stack, or no longer, as far as it told; the dialog names it before the conversion. What it told.</summary>
+    internal static async Task<bool?> MarkOldHostAsync(DeviceAgent agent, BridgeFile bridge, string engineId, CancellationToken ct)
     {
         var old = await agent.RunsOldStackAsync(engineId, ct).ConfigureAwait(false);
-        if (old is null || agent.Engines().FirstOrDefault(e => e.Id == engineId) is not { } engine) return;
+        if (old is null || agent.Engines().FirstOrDefault(e => e.Id == engineId) is not { } engine) return old;
         bridge.Update(b => b with
         {
             OldHosts = old.Value ? (b.OldHosts.Contains(engine.Name) ? b.OldHosts : [.. b.OldHosts, engine.Name]) : b.OldHosts.Where(h => h != engine.Name).ToArray(),
         });
+        return old;
     }
+
+    /// <summary>
+    /// Connects this device at a host that moved to the new stack after the conversion (Update, R5), as the converter would:
+    /// with the vault mode the old client had there, else locked.
+    /// </summary>
+    public async Task ConnectHostAsync(string engineId, CancellationToken ct)
+    {
+        string? mode = null;
+        try
+        {
+            if (Legacy() is { } legacy && _agent.Engines().FirstOrDefault(e => e.Id == engineId) is { } engine
+                && legacy.Hosts().FirstOrDefault(h => LegacyState.Slug(h.Url) == LegacyState.Slug(engine.Url)) is { } host)
+            {
+                mode = host.VaultMode;
+                // Moved now: the move's note that it was not goes.
+                Bridge.Update(b => b.Noted(_agent.Account, LegacyConverter.HostNote(new Uri(host.Url).Host), null));
+            }
+        }
+        catch (Exception ex) when (ex is AgentFailure or IOException or UriFormatException)
+        {
+        }
+
+        await _agent.ConnectEngineAsync(engineId, mode ?? "locked", ct).ConfigureAwait(false);
+        await MarkOldHostAsync(_agent, Bridge, engineId, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>How often old entry scripts that could not be replaced are tried again.</summary>
+    public TimeSpan ScriptsRetry { get; set; } = TimeSpan.FromMinutes(10);
+
+    /// <summary>
+    /// At the agent's start: an install moved over earlier gets the new entry scripts in its old install folder (R14),
+    /// also when the move happened before this version replaced them, or a file was held then.
+    /// </summary>
+    public void Start()
+    {
+        if (Bridge.Read().Stage == BridgeState.Converted) ProtectScripts();
+    }
+
+    /// <summary>
+    /// Replaces the old entry scripts, and while any is left (a file Windows holds, a link) tries again every
+    /// <see cref="ScriptsRetry"/>; the notes name what is left (<see cref="OldInstallScripts.Protect"/>).
+    /// </summary>
+    private void ProtectScripts()
+    {
+        lock (_gate)
+        {
+            if (_scripts is { IsCompleted: false }) return;
+            _scripts = Task.Run(async () =>
+            {
+                while (!_lifetime.IsCancellationRequested)
+                {
+                    try
+                    {
+                        if (Legacy() is not { } legacy || OldInstallScripts.Protect(legacy, Bridge, _agent.Account)) return;
+                    }
+                    catch (Exception ex) when (ex is AgentFailure or IOException or UnauthorizedAccessException)
+                    {
+                    }
+
+                    try { await Task.Delay(ScriptsRetry, _options.Time, _lifetime.Token).ConfigureAwait(false); }
+                    catch (OperationCanceledException) { return; }
+                }
+            });
+        }
+    }
+
+    /// <summary>The script replacement and its retries, awaitable (tests).</summary>
+    public Task Scripts
+    {
+        get { lock (_gate) return _scripts ?? Task.CompletedTask; }
+    }
+
+    /// <summary>Ends the retries.</summary>
+    public void Dispose() => _lifetime.Cancel();
 
     // ---- step 3: the old writers ----
 
@@ -228,12 +388,31 @@ public sealed class UpgradeService
     public async Task<bool> ConvertAsync(CancellationToken ct, Action<UpgradeItem>? progress = null)
     {
         var legacy = Legacy() ?? throw new AgentFailure(409, "no-legacy", "No old Construct install was found on this PC.");
+        lock (_gate)
+        {
+            _convertProgress = null;
+            _live = [];
+        }
+
         var converter = new LegacyConverter(_agent, _engines, _settings, Bridge, _platform, _options.DataDirectory, item =>
         {
+            lock (_gate)
+            {
+                var at = _live.FindIndex(i => i.Id == item.Id);
+                if (at >= 0) _live[at] = item;
+                else _live.Add(item);
+            }
+
             progress?.Invoke(item);
             _agent.Events.Publish("upgrade", null, JsonSerializer.SerializeToNode(item, Http.AgentJson.Options));
-        }) { BeforeItem = BeforeItem };
-        return await converter.RunAsync(legacy, ct).ConfigureAwait(false);
+        })
+        {
+            BeforeItem = BeforeItem, OldHosts = OldHostUpdate(_engines),
+            Overall = p => { lock (_gate) _convertProgress = p; },
+        };
+        var converted = await converter.RunAsync(legacy, ct).ConfigureAwait(false);
+        if (Bridge.Read() is { Stage: BridgeState.Converted, ScriptsLeft.Count: > 0 }) ProtectScripts();
+        return converted;
     }
 
     private Task ConvertAsync(CancellationToken ct) => ConvertAsync(ct, null);

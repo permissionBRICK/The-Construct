@@ -209,7 +209,7 @@ export class ApiBackend implements Backend {
       device: { name: '' }, version: '', release: null, vms: [], hosts: [], projects: [], sync: { when: '–', remote: '', rev: '' }, jobs: [],
       vaultRequests: [], secrets: [], leases: [], devices: [], history: [], vaultModes: [], problems: {}, pairing: null, revocation: null, handout: null,
       prefs: { channel: 'stable', theme: p.theme ?? 'auto', scheme: p.scheme ?? 'green', autoUpdate: false, startWithOs: false, notifications: false },
-      upgrade: null, notice: null, na: API_GAPS, firstRun: null, everything: null, signIn: null,
+      upgrade: null, movedNotes: [], notice: null, na: API_GAPS, firstRun: null, everything: null, signIn: null,
     };
   }
 
@@ -758,7 +758,11 @@ export class ApiBackend implements Backend {
         if (type.endsWith('ended')) void this.loadVault();
         return;
       case 'pairing': return this.onPairing(data);
-      case 'engine-setup': this.setupWake?.(); return;
+      case 'engine-setup':
+        this.setupWake?.();
+        // The upgrade's engine step shows the setup's progress (R2).
+        if (this.s.upgrade) void this.followUpgrade();
+        return;
       case 'upgrade':
         if (data && typeof data.id === 'string' && typeof data.label === 'string' && this.upgradeItems) {
           this.upgradeItems.set(data.id, toUpgradeItem(data as never));
@@ -816,7 +820,8 @@ export class ApiBackend implements Backend {
   /* --- the one-time upgrade --- */
 
   /** Reads where the one-time upgrade stands; true while its dialog holds the screen. An agent without the
-      upgrade, or an install that is new or converted, shows the normal screens. */
+      upgrade, or an install that is new or converted, shows the normal screens: once converted at once, on every
+      surface, with the move's notes as a card (R9). */
   private async loadUpgrade(): Promise<boolean> {
     let v: UpgradeView;
     try {
@@ -827,15 +832,16 @@ export class ApiBackend implements Backend {
       this.composeUpgrade();
       return true;
     }
-    // Converted: the dialog stays only for the notes the conversion left, until the user went on from them.
-    if (!v.legacy || (v.stage === 'converted' && !v.notes.length)) {
+    if (!v.legacy || v.stage === 'converted') {
       const was = this.s.upgrade !== null;
       this.upgradeView = null;
       this.upgradeCode = null;
       this.upgradeItems = null;
       this.upgradeProblem = null;
       this.watchWriters(false);
-      if (was) { this.emit({ upgrade: null }); this.note('Moved over'); }
+      const notes = v.legacy ? v.notes : [];
+      if (was || notes.join('\n') !== (this.s.movedNotes ?? []).join('\n')) this.emit({ upgrade: null, movedNotes: notes });
+      if (was) this.note('Moved over');
       return false;
     }
     this.upgradeView = v;
@@ -898,19 +904,20 @@ export class ApiBackend implements Backend {
   private composeUpgrade() {
     const v = this.upgradeView;
     if (!v) return;
-    const step = v.stage === 'converted' ? 'done' : upgradeStep(v, this.upgradeCode !== null) ?? 'convert';
+    const step = upgradeStep(v, this.upgradeCode !== null) ?? 'convert';
     const running = this.upgradeBusy || v.running;
     const failedItems = step === 'convert' && v.steps.find(x => x.id === 'convert')?.state === 'failed';
     const error = running ? null : this.upgradeProblem ?? v.error ?? (failedItems ? 'Some items did not move over' : null);
     const live = this.upgradeItems && (running || !v.items.length) ? [...this.upgradeItems.values()] : null;
-    const found = v.found ? { vms: [...v.found.localVms, ...v.found.remoteVms], profiles: v.found.profiles.length, vault: v.found.vault } : null;
+    const found = v.found ? { vms: [...v.found.localVms, ...v.found.remoteVms], stayOld: v.found.stayOld ?? [], profiles: v.found.profiles.length, vault: v.found.vault } : null;
     const engineStep = v.steps.find(x => x.id === 'engine');
     const restart = step === 'engine' && !running && !this.restartLater && engineStep?.state === 'restart' ? engineStep.message ?? RESTART_LINE : null;
     this.emit({
       upgrade: {
         step, running, error, code: step === 'recovery' ? this.upgradeCode : null, writers: step === 'close' ? v.oldWriters : [],
         items: live ?? v.items.map(toUpgradeItem), found,
-        oldHosts: step === 'convert' ? v.oldHosts : [], notes: step === 'done' ? v.notes : [], restart,
+        oldHosts: step === 'convert' ? v.oldHosts : [], restart,
+        progress: running && v.progress ? { pct: v.progress.percent, label: v.progress.label } : null,
       },
     });
     this.watchWriters(step === 'close' && !running);
@@ -960,8 +967,7 @@ export class ApiBackend implements Backend {
             throw e;
           }
           this.upgradeCode = null;
-        } else if (step === 'done') await ok(this.agent.POST('/api/upgrade/notes/read'));
-        else if (step === 'recovery') {
+        } else if (step === 'recovery') {
           const deviceName = input?.deviceName?.trim() ?? '';
           if (!v.storeEngine) throw new Error('No engine holds the account yet; run the first step again');
           if (!deviceName) throw new Error('Name this device');
@@ -981,6 +987,13 @@ export class ApiBackend implements Backend {
       }
       await this.followUpgrade();
     })();
+  }
+
+  /** The move's notes are put away, here and on every other surface (the agent tells them). */
+  readMovedNotes() {
+    if (!this.s.movedNotes?.length) return;
+    this.emit({ movedNotes: [] });
+    void ok(this.agent.POST('/api/upgrade/notes/read')).catch((e: unknown) => this.note(errText(e)));
   }
 
   /* --- the repair agent --- */
@@ -2093,7 +2106,8 @@ export class ApiBackend implements Backend {
     } else {
       this.restartLater = false;
       await ok(this.agent.POST('/api/engines/local/setup'));
-      const v = await this.engineSetupDone();
+      const v = await this.engineSetupDone(progress => set({ progress }));
+      set({ progress: null });
       if (v.state === 'restart') { set({ busy: false, restart: v.message ?? RESTART_LINE }); return; }
       if (v.state !== 'done' || !v.engine) throw new Error(v.message ?? 'The engine could not be set up; retry');
       engine = v.engine;
@@ -2112,11 +2126,13 @@ export class ApiBackend implements Backend {
     set({ busy: false, step: 'code', code: codeGroups(r.recoveryCode), account });
   }
 
-  /** Waits until this PC's engine setup is no longer running: on its event, or a read every two seconds. */
-  private async engineSetupDone() {
+  /** Waits until this PC's engine setup is no longer running: on its event, or a read every two seconds; `progress`
+      sees its bar meanwhile. */
+  private async engineSetupDone(progress?: (p: { pct: number; label: string } | null) => void) {
     for (;;) {
       const v = await ok(this.agent.GET('/api/engines/local/setup'));
       if (v.state !== 'running') return v;
+      progress?.(v.progress ? { pct: v.progress.percent, label: v.progress.label } : null);
       await new Promise<void>(resolve => {
         const t = setTimeout(() => { this.setupWake = null; resolve(); }, 2000);
         this.setupWake = () => { clearTimeout(t); this.setupWake = null; resolve(); };

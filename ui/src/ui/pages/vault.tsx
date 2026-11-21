@@ -79,7 +79,7 @@ export function Secrets() {
       {!na(s, 'vault') && <Sec>
         {s.secrets.length ? (
           <table class="tb secrets">
-            <thead><tr><th>Secret</th><th class="t">Note</th><th class="x">In use</th><th class="x">Last</th><th>Auto</th><th class="e" /></tr></thead>
+            <thead><tr><th>Secret</th><th class="t">Note</th><th class="x">In use</th><th class="x">Last</th><th>Auto-approve</th><th class="e" /></tr></thead>
             <tbody>{s.secrets.map(x => <SecretRow key={x.name} x={x} open={open === x.name} onToggle={() => setOpen(open === x.name ? null : x.name)} />)}</tbody>
           </table>
         ) : <div class="line">None</div>}
@@ -100,7 +100,7 @@ function SecretRow({ x, open, onToggle }: { x: Secret; open: boolean; onToggle: 
         <td class="t" title={x.note}>{x.note}</td>
         <td class="x u" title={used}>{used}</td>
         <td class="x">{x.last}</td>
-        <td onClick={e => e.stopPropagation()}><Switch on={x.auto} onChange={v => be.setAutoApprove(x.name, v)} label={`Auto-approve ${x.name}`} /></td>
+        <td onClick={e => e.stopPropagation()}><Switch on={x.auto} onChange={v => be.setAutoApprove(x.name, v)} label={`Auto-approve ${x.name}`} title="Agents can read this secret without asking" /></td>
         <td class="e"><Icon n="down" /></td>
       </tr>
       {open && (

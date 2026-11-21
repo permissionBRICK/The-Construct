@@ -1205,6 +1205,7 @@ export interface components {
             state: string;
             message: null | string;
             engine: null | string;
+            progress?: null | components["schemas"]["StepProgress"];
         };
         EngineView: {
             id: string;
@@ -1395,6 +1396,11 @@ export interface components {
             engine: string;
             deviceName: string;
         };
+        StepProgress: {
+            /** Format: int32 */
+            percent: number;
+            label: string;
+        };
         SwitchRequest: {
             on: boolean;
         };
@@ -1439,12 +1445,15 @@ export interface components {
             backupKeys: number;
             upstream: boolean;
             channel: string;
+            stayOld: string[];
         };
         UpgradeItem: {
             id: string;
             label: string;
             state: string;
             message?: null | string;
+            /** Format: int32 */
+            percent?: null | number;
         };
         UpgradeStep: {
             id: string;
@@ -1464,6 +1473,7 @@ export interface components {
             running: boolean;
             error: null | string;
             oldHosts: string[];
+            progress?: null | components["schemas"]["StepProgress"];
         };
         VaultApprovalItem: {
             engine: string;
