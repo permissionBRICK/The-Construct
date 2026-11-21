@@ -241,8 +241,10 @@ test('first run, a VM, a reprovision and a second device on the real API', async
   await pa.getByLabel('Note').fill('deploys');
   await pa.getByLabel('Value').fill('e2e-secret-value');
   await pa.getByRole('button', { name: 'Save' }).click();
-  const row = pa.locator('tr', { hasText: 'deploy-token' });
-  await expect(row).toBeVisible();
+  const line = pa.locator('tr', { hasText: 'deploy-token' });
+  await expect(line).toBeVisible();
+  await line.click();
+  const row = pa.locator('tr.more-row');
   await row.getByRole('button', { name: 'Show' }).click();
   await expect(row.locator('code.reveal')).toHaveText('e2e-secret-value');
   await row.getByRole('button', { name: 'Hide' }).click();

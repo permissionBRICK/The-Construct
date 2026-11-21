@@ -1,5 +1,5 @@
 import type { AgentId, Backend, CreateVmRequest, FirstRun, FirstRunRequest, Host, HostProbe, HostUser, Job, JobKind, Prefs, Profile, ProfileSave, SettingsPatch, SignInInput, State, Upgrade, Vm } from './types';
-import { NEXT_RELEASE, PAIR_WORDS, RECOVERY_CODE, REINSTALL_STEPS, REPROVISION_STEPS, SIGN_IN_BROWSER_TEXT, SIGN_IN_TEXT, sampleState } from './sample';
+import { NEXT_RELEASE, NIGHTLY_RELEASE, PAIR_WORDS, RECOVERY_CODE, REINSTALL_STEPS, REPROVISION_STEPS, SIGN_IN_BROWSER_TEXT, SIGN_IN_TEXT, sampleState } from './sample';
 import { activeJob, newer, vmUpdateTarget } from '../model/vm';
 import { AGENTS, agentSwitches, applies, applyPatch } from '../model/settings';
 import { updateParts } from '../model/update';
@@ -12,12 +12,12 @@ import { spanText } from './api/map';
    own, so a scene stays exactly as it is. */
 
 export type Scene =
-  | 'calm' | 'update' | 'changed' | 'lease' | 'enter' | 'job' | 'failed' | 'failed-reinstall' | 'repair' | 'updating' | 'restart'
+  | 'calm' | 'update' | 'update-nightly' | 'changed' | 'lease' | 'enter' | 'job' | 'failed' | 'failed-reinstall' | 'repair' | 'updating' | 'restart'
   | 'pairing' | 'pair-confirm' | 'revoked' | 'handout' | 'creating' | 'created' | 'sign-in' | 'sign-in-failed' | 'sign-in-browser' | 'sign-in-key' | 'signed-out' | 'signed-out-two'
   | 'upgrade-intro' | 'upgrade-code' | 'upgrade-close' | 'upgrade-convert' | 'upgrade-host' | 'upgrade-done' | 'upgrade-restart'
-  | 'first-run' | 'first-run-restart';
+  | 'first-run' | 'first-run-restart' | 'warned' | 'old-guest';
 
-export const SCENES: Scene[] = ['calm', 'update', 'changed', 'lease', 'enter', 'job', 'failed', 'failed-reinstall', 'repair', 'updating', 'restart', 'pairing', 'pair-confirm', 'revoked', 'handout', 'creating', 'created', 'sign-in', 'sign-in-failed', 'sign-in-browser', 'sign-in-key', 'signed-out', 'signed-out-two', 'upgrade-intro', 'upgrade-code', 'upgrade-close', 'upgrade-convert', 'upgrade-host', 'upgrade-done', 'upgrade-restart', 'first-run', 'first-run-restart'];
+export const SCENES: Scene[] = ['calm', 'update', 'update-nightly', 'changed', 'lease', 'enter', 'job', 'failed', 'failed-reinstall', 'repair', 'updating', 'restart', 'pairing', 'pair-confirm', 'revoked', 'handout', 'creating', 'created', 'sign-in', 'sign-in-failed', 'sign-in-browser', 'sign-in-key', 'signed-out', 'signed-out-two', 'upgrade-intro', 'upgrade-code', 'upgrade-close', 'upgrade-convert', 'upgrade-host', 'upgrade-done', 'upgrade-restart', 'first-run', 'first-run-restart', 'warned', 'old-guest'];
 
 /** Things the preview frame can make happen, beside the user's own actions. */
 export type Demo = 'lease' | 'enter' | 'release' | 'fail-next' | 'change';
@@ -91,6 +91,12 @@ export class FakeBackend implements Backend {
     switch (scene) {
       case 'calm': break;
       case 'update': d.release = NEXT_RELEASE; break;
+      // A nightly build's version carries its whole commit (finding 18).
+      case 'update-nightly': d.prefs.channel = 'nightly'; d.release = NIGHTLY_RELEASE; for (const h of d.hosts) h.channel = 'nightly'; break;
+      // A reprovision that succeeded although an optional step failed (finding 41).
+      case 'warned': d.jobs.push({ ...this.newJob('atlas', 'reprovision', REPROVISION_STEPS.length - 1, 100), state: 'done', warnings: ['Requesting project port forwards'] }); break;
+      // A guest from before the sign-in helper: it reports its agents but not their sign-in (finding 11).
+      case 'old-guest': for (const a of d.vms[0].agents) a.signedIn = null; break;
       case 'changed': this.vm(d, 'atlas').changeWaits = 'webshop'; break;
       case 'lease': d.vaultRequests.push({ id: 'r1', kind: 'lease', secret: 'forge-token', vmId: 'atlas', vmName: 'atlas', hostName: 'This PC', reason: 'Push the release', span: '2 h', ttlSeconds: 7200 }); break;
       case 'enter': d.vaultRequests.push({ id: 'r2', kind: 'enter', secret: 'payments-sandbox', vmId: 'atlas', vmName: 'atlas', hostName: 'This PC', reason: 'API key of the payments sandbox', span: '' }); break;
@@ -202,7 +208,7 @@ export class FakeBackend implements Backend {
   private failJob(j: Job) {
     j.state = 'failed';
     j.error = 'apt is locked by another process';
-    j.log.push(`fail ${j.step}: E: Could not get lock /var/lib/dpkg/lock-frontend`);
+    j.log.push(...APT_LOG, `fail ${j.step}: E: Could not get lock /var/lib/dpkg/lock-frontend`);
     // The hosts here start the repair agent by themselves (`repair.auto`); a host with it off offers the button.
     const auto = this.s.hosts.find(h => h.id === this.s.vms.find(v => v.id === j.vmId)?.hostId)?.repairAuto !== false;
     j.repair = auto ? newRepair() : null;
@@ -895,6 +901,15 @@ const REPAIR_SCRIPT = [
   'The apt lock belongs to unattended-upgrades, which is installing security updates right now.',
   'Nothing is broken; the step started while the updates ran.',
   'Two ways: wait until the updates finish (a few minutes), or stop them and run the step again now. Which do you want?',
+];
+
+const APT_LOG = [
+  'Reading package lists...', 'Building dependency tree...', 'Reading state information...',
+  'Waiting for cache lock: Could not get lock /var/lib/dpkg/lock-frontend. It is held by process 2187 (unattended-upgr)',
+  'Waiting for cache lock: Could not get lock /var/lib/dpkg/lock-frontend. It is held by process 2187 (unattended-upgr)',
+  'Waiting for cache lock: Could not get lock /var/lib/dpkg/lock-frontend. It is held by process 2187 (unattended-upgr)',
+  'E: Could not get lock /var/lib/dpkg/lock-frontend - open (11: Resource temporarily unavailable)',
+  'E: Unable to acquire the dpkg frontend lock (/var/lib/dpkg/lock-frontend), is another process using it?',
 ];
 
 const ROTATE = [{ secret: 'forge-token', last: '4 d' }, { secret: 'deploy-key', last: '9 d' }, { secret: 'staging-db', last: '12 d' }];

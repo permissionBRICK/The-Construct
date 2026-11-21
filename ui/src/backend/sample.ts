@@ -235,6 +235,7 @@ export function sampleState(): State {
 }
 
 export const NEXT_RELEASE = '2.5.0';
+export const NIGHTLY_RELEASE = '2.5.0+355ea2f2f0ec5096d4bfe5b0ac620bec9403fb1c';
 export const RECOVERY_CODE = ['K7QD', 'M2XV', '9RTC', 'HW4N', 'PL6E', '3ZBA', 'YU8S', 'F5GJ'];
 export const PAIR_WORDS = ['copper', 'lantern', 'orbit', 'meadow'];
 export const REPROVISION_STEPS = ['Connecting', 'Fetching Construct', 'System packages', 'Installing tools', 'Projects', 'Coding agents', 'Services'];
