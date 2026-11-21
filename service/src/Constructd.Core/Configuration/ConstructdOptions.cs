@@ -465,9 +465,9 @@ public sealed class IsoOptions
     public string SourcePath { get; set; } = string.Empty;
 
     /// <summary>
-    /// Where to download the source ISO from when <see cref="SourcePath"/> is empty. Admin-configured
-    /// on purpose: the service does not go looking for "the current LTS" behind the admin's back, so a
-    /// host's guests do not change release because a mirror did.
+    /// Where to download the source ISO from when <see cref="SourcePath"/> is empty. With neither set (an engine
+    /// installed for one PC), the engine takes the current image of the 24.04 line that its release directory's
+    /// SHA256SUMS names and checks it against that list: the line stays, only the point release moves.
     /// </summary>
     public string SourceUrl { get; set; } = string.Empty;
 

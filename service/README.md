@@ -1049,7 +1049,7 @@ Bound from the `Constructd` section of `appsettings.json`, from environment vari
 | `Iso:SeedUser` | `construct` | Seed user of the unattended install. |
 | `Iso:BootstrapPublicKeyPath` | `<ScriptsDir>\keys\bootstrap_ed25519.pub` | Bootstrap key injected into the ISO. |
 | `Iso:SourcePath` | – | The Ubuntu ISO to remaster. Set this **or** `Iso:SourceUrl`; a path wins and is never downloaded or deleted. |
-| `Iso:SourceUrl` | – | Where to fetch the source ISO when no path is set. Admin-configured on purpose: the service does not go looking for "the current LTS", so a host's guests cannot change release because a mirror did. |
+| `Iso:SourceUrl` | – | Where to fetch the source ISO when no path is set. With neither set (the engine an agent installs for one PC), the engine takes the current 24.04 live-server image that `https://releases.ubuntu.com/24.04/SHA256SUMS` names, checks it against that list, and keeps it in the cache; the line stays 24.04, only its point release moves, and an older point release's image goes once the new one is in place. Offline, the newest kept image is used. |
 | `Iso:Sha256` | – | Expected SHA-256 of the source ISO. Empty skips the check; when set it is verified on **every** use, not only after the download. |
 | `Iso:CacheDir` | `C:\ProgramData\Construct\service\iso` | Holds the downloaded source ISO and the ISO catalog (versioned media, sidecars, `current.pointer`). |
 | `Iso:SourceId` | `ubuntu-server-minimal` | `SOURCE_ID` of `bin/build-autoinstall-iso.sh` (`ubuntu-server` for the standard set). |
@@ -1536,7 +1536,8 @@ payload has to be identical in every mode (plan §4.1):
 - **The source ISO** is `Iso:SourcePath` if set (used as-is, never deleted), otherwise `Iso:SourceUrl`
   downloaded **once** into `Iso:CacheDir` (to `<name>.part`, then renamed, so an interrupted download is
   never mistaken for a complete one) and reused by every later build. Size must be > 0; `Iso:Sha256`, when
-  set, is verified on every use.
+  set, is verified on every use. With neither set, the current 24.04 live-server image named by the release
+  directory's `SHA256SUMS` is downloaded the same way and checked against that list.
 - **The output ISO is per VM** (`<vm>-autoinstall.iso`) in `PerVm` mode, because the guest hostname is
   baked into the seed; generic media is written to the versioned path the catalog chose.
 - **Builds are serialized** with a `SemaphoreSlim(1)`: the LF copy is one shared file, and one xorriso
