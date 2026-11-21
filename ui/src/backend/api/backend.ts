@@ -29,7 +29,7 @@ type Loose = Record<string, unknown>;
 /** What this backend cannot serve yet; the screens show these parts as not available. */
 export const API_GAPS: Feature[] = [
   'sharing', 'console', 'vm-password', 'vm-disk', 'vm-boot', 'windows-sign-in', 'export-code', 'code-reveal', 'vm-token',
-  'agent-update', 'notifications', 'log', 'vm-history', 't3-proxy',
+  'notifications', 'log', 'vm-history', 't3-proxy',
 ];
 /** On Windows the agent signs in with the Windows user where an engine offers it. */
 const WINDOWS_GAPS = API_GAPS.filter(f => f !== 'windows-sign-in');
@@ -1506,7 +1506,10 @@ export class ApiBackend implements Backend {
     await ok(c.PUT('/api/v1/vms/{name}/desired', { ...path, body: next }));
   }
 
-  updateAgents(..._: unknown[]) { this.note(NA); }
+  /** A coding agent's update: the VM's provision installs the newest version of each agent, so it is a reprovision. */
+  updateAgents(vmId: string) {
+    this.reprovision(vmId);
+  }
 
   /** A profile switched on or off for one VM: part of its desired state, applied at the next reprovision. */
   setProjectOn(vmId: string, project: string, on: boolean) {

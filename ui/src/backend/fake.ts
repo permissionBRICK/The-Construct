@@ -281,6 +281,7 @@ export class FakeBackend implements Backend {
     v.reprovisioned = 'just now';
     v.changeWaits = null;
     if (j.kind === 'update' && j.to) v.version = j.to;
+    if (j.kind !== 'restore') for (const ag of v.agents) ag.version = ag.latest;
     if (j.kind === 'create') { v.power = 'on'; const hv = d.hosts.find(h => h.id === v.hostId)?.vms.find(x => x.name === v.name); if (hv) hv.power = 'on'; }
     if (d.release && !updateParts(d).some(p => p.to)) d.release = null;
   }
@@ -435,9 +436,8 @@ export class FakeBackend implements Backend {
     if (a === 'restart' && when === 'now') this.restart(vmId);
   }
 
-  updateAgents(vmId: string) {
-    this.set(d => { for (const ag of this.vm(d, vmId).agents) ag.version = ag.latest; }, 'Agents updated');
-  }
+  /** As on the engine: a reprovision brings every coding agent to its newest version. */
+  updateAgents(vmId: string) { this.startJob(vmId, 'reprovision'); }
 
   /* --- signing in to the coding agents: the CLI's text, a code typed, signed in --- */
 

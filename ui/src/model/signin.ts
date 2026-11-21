@@ -31,6 +31,14 @@ export function signedIn(agents: { id: string; signedIn?: boolean | null }[], to
   return s ?? undefined;
 }
 
+/** What the screens show for an agent's sign-in: `yes`, `no`, `unknown` when the VM reports the agent but cannot say
+    (a guest without the sign-in helper), `unsaid` while the VM has not reported the agent at all (a new VM). */
+export function signInState(agents: { id: string; signedIn?: boolean | null }[], tool: string): 'yes' | 'no' | 'unknown' | 'unsaid' {
+  const a = agents.find(x => x.id === tool);
+  if (!a) return 'unsaid';
+  return a.signedIn === true ? 'yes' : a.signedIn === false ? 'no' : 'unknown';
+}
+
 /** The lost sign-ins (S36) of every VM, oldest first: a card each. */
 export function lostSignIns(vms: Vm[]): { vm: Vm; agent: Agent; id: (typeof AGENTS)[number] }[] {
   return vms
