@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { ApiBackend } from '../../src/backend/api/backend';
 import { SseParser } from '../../src/backend/api/events';
 import { codingAgents, spanText } from '../../src/backend/api/map';
-import { activeJob } from '../../src/model/vm';
+import { activeJob, repairWhen } from '../../src/model/vm';
 import { updateParts } from '../../src/model/update';
 
 /* ApiBackend against hand-written agent and engine responses. The fake fetch routes on method and path,
@@ -13,7 +13,7 @@ const TOKEN = 'agent-token-secret';
 const E1 = 'aaaaaaaaaaaa', E2 = 'bbbbbbbbbbbb';
 
 type Reply = { status?: number; json?: unknown };
-type Handler = (body: unknown, url: URL) => Reply | undefined;
+type Handler = (body: unknown, url: URL) => Reply | undefined | Promise<Reply | undefined>;
 interface Call { method: string; path: string; query: string; body: unknown; auth: string | null }
 
 function vmResponse(name: string, owner: string, extra: Record<string, unknown> = {}) {
@@ -80,7 +80,7 @@ function world(opts: { registered?: boolean; unconfirmed?: boolean; engines?: { 
     const text = req.body ? await req.text() : '';
     const body = text ? JSON.parse(text) : undefined;
     calls.push({ method: req.method, path: url.pathname, query: url.search, body, auth: req.headers.get('authorization') });
-    const r = routes.get(`${req.method} ${url.pathname}`)?.(body, url) ?? { status: 404, json: { title: 'not found', status: 404 } };
+    const r = (await routes.get(`${req.method} ${url.pathname}`)?.(body, url)) ?? { status: 404, json: { title: 'not found', status: 404 } };
     const status = r.status ?? 200;
     return new Response(r.json === undefined || status === 204 ? null : JSON.stringify(r.json), { status, headers: { 'content-type': 'application/json' } });
   };
@@ -190,6 +190,71 @@ describe('ApiBackend', () => {
     expect((p[0].body as { requestId: string }).requestId).not.toBe((p[1].body as { requestId: string }).requestId);
     const j = activeJob(be.snapshot(), 'harbor')!;
     expect(j).toMatchObject({ kind: 'reprovision', state: 'running' });
+  });
+
+  it('shows a reprovision working at once, while the agent still gathers the clone credentials', async () => {
+    // Finding 15: about five seconds passed between the click and any feedback.
+    const { be, on, settle } = world();
+    let answer: (r: Reply) => void = () => {};
+    on('POST', `/api/engines/${E1}/vms/atlas/jobs`, () => new Promise<Reply>(r => { answer = r; }));
+    on('GET', `/api/engines/${E1}/api/v1/jobs/j9`, { json: job('j9', 'atlas', 'running') });
+    await be.start();
+    be.reprovision('atlas');
+    expect(activeJob(be.snapshot(), 'atlas')).toMatchObject({ kind: 'reprovision', state: 'running', step: 'Starting', pending: true });
+    await settle();
+    expect(activeJob(be.snapshot(), 'atlas')?.pending).toBe(true);
+    answer({ status: 202, json: { jobId: 'j9', kind: 'provision', replayed: false } });
+    await settle();
+    const j = activeJob(be.snapshot(), 'atlas')!;
+    expect(j).toMatchObject({ kind: 'reprovision', state: 'running' });
+    expect(j.pending).toBeUndefined();
+    expect(be.snapshot().jobs.filter(x => x.vmId === 'atlas')).toHaveLength(1);
+  });
+
+  it('shows the VM as it was when a start fails', async () => {
+    const { be, on, settle } = world();
+    on('POST', `/api/engines/${E1}/vms/atlas/jobs`, { status: 409, json: { title: 'busy', status: 409, code: 'busy' } });
+    await be.start();
+    be.reprovision('atlas');
+    await settle();
+    expect(activeJob(be.snapshot(), 'atlas')).toBeNull();
+    expect(be.snapshot().notice?.text).toBe('busy');
+  });
+
+  it('copies a T3 Code pairing link for another machine; it is never opened', async () => {
+    const { be, calls, on } = world();
+    on('POST', `/api/connections/${E1}/atlas/t3-pairing`, { json: { pairUrl: 'https://orchard.test:2300/pair#token=one', links: [], scopes: 'standard' } });
+    await be.start();
+    expect(await be.t3Link('atlas')).toBe('https://orchard.test:2300/pair#token=one');
+    expect(posts(calls).map(c => c.path)).toEqual([`/api/connections/${E1}/atlas/t3-pairing`]);
+    expect(JSON.stringify(be.snapshot())).not.toContain('token=one');
+  });
+
+  it('puts a notice away through the agent, so every surface hides it, and follows the others\' dismissals', async () => {
+    // Finding 45: a notice closed in the window stayed in the pop-out.
+    const { be, calls, on, settle } = world();
+    on('GET', `/api/engines/${E1}/api/v1/jobs`, { json: [job('f1', 'atlas', 'failed')] });
+    on('GET', '/api/notices/dismissed', { json: [] });
+    on('POST', '/api/notices/dismissed', b => ({ json: [(b as { key: string }).key] }));
+    await be.start();
+    await settle();
+    const key = activeJob(be.snapshot(), 'atlas')!.id;
+    be.dismissJob(key);
+    expect(activeJob(be.snapshot(), 'atlas')).toBeNull();
+    await settle();
+    expect(posts(calls).filter(c => c.path === '/api/notices/dismissed').map(c => c.body)).toEqual([{ key }]);
+
+    // The other surface: the same job, until the agent says it was put away.
+    const other = world();
+    other.on('GET', `/api/engines/${E1}/api/v1/jobs`, { json: [job('f1', 'atlas', 'failed')] });
+    other.on('GET', '/api/notices/dismissed', { json: [] });
+    await other.be.start();
+    await other.settle();
+    expect(activeJob(other.be.snapshot(), 'atlas')?.state).toBe('failed');
+    other.on('GET', '/api/notices/dismissed', { json: [key] });
+    other.be.onEvent('notices', { seq: 2, type: 'notices', engine: null, data: null });
+    await other.settle();
+    expect(activeJob(other.be.snapshot(), 'atlas')).toBeNull();
   });
 
   it('follows job progress and the end from the agent\'s events, reading the job again each time', async () => {
@@ -723,6 +788,19 @@ describe('ApiBackend key vault', () => {
     expect(be.snapshot().vaultRequests.map(x => x.id)).toEqual([`${E1}/a1`, `${E1}/e1`]);
   });
 
+  it('takes a request away when it was answered elsewhere, also when the read of its engine fails', async () => {
+    // Finding 47: a request allowed in the pop-out stayed in the window.
+    const two = [{ id: E1, name: 'orchard', url: 'https://orchard.test:8443' }, { id: E2, name: 'lab', url: 'https://lab.test:8443' }];
+    const { be, on, settle } = vaultWorld(two);
+    on('GET', '/api/vault/approvals', { json: { approvals: [approval(E1, 'a1', 'atlas'), approval(E2, 'a2', 'harbor')], unreachable: [] } });
+    await be.start();
+    on('GET', '/api/vault/approvals', { json: { approvals: [approval(E1, 'a1', 'atlas')], unreachable: [E2] } });
+    be.onEvent('vault.approval.ended', { seq: 3, type: 'vault.approval.ended', engine: E2, data: { id: 'a2' } });
+    expect(be.snapshot().vaultRequests.map(x => x.id)).toEqual([`${E1}/a1`]);
+    await settle();
+    expect(be.snapshot().vaultRequests.map(x => x.id)).toEqual([`${E1}/a1`]);
+  });
+
   it('brings a card back when its answer failed', async () => {
     const { be, on, settle } = vaultWorld();
     on('GET', '/api/vault/approvals', { json: { approvals: [approval(E1, 'a1', 'atlas')], unreachable: [] } });
@@ -1130,6 +1208,20 @@ describe('ApiBackend repair agent', () => {
     await settle();
     expect(calls.filter(c => c.method === 'DELETE').map(c => c.path)).toEqual([`${P}/vms/atlas/repair/s1`]);
     expect(activeJob(be.snapshot(), 'atlas')).toMatchObject({ canRepair: true, repair: { state: 'stopped', outcome: 'Stopped' } });
+  });
+
+  it('says when the run it shows started and whether the host started it by itself', async () => {
+    // Finding 46: the pop-out's entry opened an analysis that had finished before the click.
+    const { be, on, settle } = world();
+    on('GET', `${P}/jobs`, { json: [failed()] });
+    on('GET', `${P}/vms/atlas/repair`, { json: session({ automatic: true, state: 'ended', outcome: 'gave-up', started: '2026-11-13T10:01:00Z' }) });
+    await be.start();
+    await settle();
+    const r = activeJob(be.snapshot(), 'atlas')!.repair!;
+    const d = new Date('2026-11-13T10:01:00Z');
+    expect(r).toMatchObject({ auto: true, at: `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}` });
+    expect(repairWhen(r)).toBe(`started by itself at ${r.at}`);
+    expect(repairWhen({ auto: false, at: '09:30' })).toBe('started at 09:30');
   });
 
   it('shows "fixed" only when the session ended fixed, then on the job the engine retried', async () => {

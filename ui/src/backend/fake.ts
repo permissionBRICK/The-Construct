@@ -311,6 +311,8 @@ export class FakeBackend implements Backend {
     this.set(() => {}, `${name} opens ${this.vmName(vmId)}`);
   }
 
+  async t3Link(vmId: string): Promise<string> { return `https://${this.vmName(vmId)}.example:5177/pair#token=sample`; }
+
   openForward(vmId: string, port: number) { this.set(() => {}, `${this.vmName(vmId)}:${port} opens in the browser`); }
   openChildConsole(_vmId: string, child: string) { this.set(() => {}, `Console of ${child} opens`); }
   setVmPassword(vmId: string, password: string) { if (password.length >= 8) this.set(() => {}, `Password of ${this.vmName(vmId)} changed`); }
@@ -385,7 +387,7 @@ export class FakeBackend implements Backend {
   startRepair(jobId: string) {
     const j = this.s.jobs.find(x => x.id === jobId);
     if (!j || j.state !== 'failed' || !j.canRepair) return;
-    this.set(d => { const x = this.job(d, jobId)!; x.repair = newRepair(); x.canRepair = false; });
+    this.set(d => { const x = this.job(d, jobId)!; x.repair = newRepair(false); x.canRepair = false; });
     this.repairScript(jobId);
   }
 
@@ -906,7 +908,7 @@ function firstRun(extra: Partial<FirstRun> = {}): FirstRun {
   return { step: 'start', localAddress: null, thisPc: 'setup', restart: null, busy: false, problem: null, code: null, pairing: null, ...extra };
 }
 
-const newRepair = (): NonNullable<Job['repair']> => ({ agent: 'Claude Code', state: 'working', messages: [{ from: 'agent', text: REPAIR_SCRIPT[0] }], t3Thread: false, outcome: null });
+const newRepair = (auto = true): NonNullable<Job['repair']> => ({ agent: 'Claude Code', state: 'working', messages: [{ from: 'agent', text: REPAIR_SCRIPT[0] }], t3Thread: false, outcome: null, at: '14:02', auto });
 
 function UPGRADE_ITEMS(progress = 0) {
   const names: [string, string][] = [['Channel', ''], ['Hosts', '2'], ['Projects', '4'], ['Key vault', '5'], ['Backup keys', '5'], ['VMs to the new engine', '4']];

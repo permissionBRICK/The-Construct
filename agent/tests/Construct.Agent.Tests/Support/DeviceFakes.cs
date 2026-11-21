@@ -36,6 +36,9 @@ public sealed class FakePlatform : IDevicePlatform, IAgentLauncher, IDisposable
 
     public ConcurrentQueue<string> Launched { get; } = new();
 
+    /// <summary>The surfaces each launch was asked to open.</summary>
+    public ConcurrentQueue<string[]> LaunchedSurfaces { get; } = new();
+
     public Task OpenAsync(string uri, CancellationToken ct)
     {
         Opened.Enqueue(uri);
@@ -48,13 +51,23 @@ public sealed class FakePlatform : IDevicePlatform, IAgentLauncher, IDisposable
         return Task.CompletedTask;
     }
 
+    /// <summary>Construct's patched T3 Code desktop app is installed here.</summary>
+    public bool T3Desktop { get; set; }
+
+    public Task<bool> OpenT3DesktopAsync(CancellationToken ct)
+    {
+        if (T3Desktop) Opened.Enqueue("t3-desktop");
+        return Task.FromResult(T3Desktop);
+    }
+
     public bool? StartWithOs { get; private set; } = false;
 
     public void SetStartWithOs(bool on, string executable) => StartWithOs = on;
 
-    public Task LaunchAsync(string executable, CancellationToken ct)
+    public Task LaunchAsync(string executable, IReadOnlyList<string> surfaces, CancellationToken ct)
     {
         Launched.Enqueue(executable);
+        LaunchedSurfaces.Enqueue([.. surfaces]);
         return Task.CompletedTask;
     }
 
@@ -77,9 +90,10 @@ public sealed class FakeEngines : IDeviceEngines
 
     public ConcurrentQueue<(string Engine, string Call, JsonNode? Body)> Calls { get; } = new();
 
-    public FakeEngines Add(string id, string url = "https://engine.test")
+    /// <param name="known">False: the engine's own id is not known (an engine on the old stack never tells it).</param>
+    public FakeEngines Add(string id, string url = "https://engine.test", bool known = true)
     {
-        Engines.Add(new EngineView(id, id, url, new string('A', 64), "engine-" + id, true, false, false));
+        Engines.Add(new EngineView(id, id, url, new string('A', 64), known ? "engine-" + id : null, known, !known, false));
         return this;
     }
 
@@ -160,17 +174,27 @@ public sealed class FakeDevice : IAsyncDisposable
         Options = new AgentOptions { DataDirectory = dataDirectory, Version = version };
         Settings = new DeviceSettings(Path.Combine(dataDirectory, "device.json"));
         var ssh = new SshClientConfig(Platform);
-        Links = new VmLinks(Engines, Platform, ssh, Settings, target =>
+        Links = new VmLinks(Engines, Platform, ssh, Settings, (target, key) =>
         {
             var transport = new FakeSshTransport();
+            // A try of the device key on a VM whose alias names another one; it logs in when the test says so.
+            if (key == ssh.DeviceKeyPath && ssh.KeyFor(target.Alias) != key)
+            {
+                transport.ScriptHandler = (script, _) => { ProbeScripts.Enqueue(script); return Task.FromResult(new ProcessResult(DeviceKeyWorks ? 0 : 255)); };
+                KeyProbes.Enqueue(target.Vm);
+                return transport;
+            }
+
             Transports[target.Engine + "/" + target.Vm] = transport;
+            LinkKeys[target.Engine + "/" + target.Vm] = key;
             return transport;
         }, Processes, new FakeAudioServerFactory(), new SystemClock(TimeProvider.System), null);
         Install = new AgentInstall(dataDirectory, "construct-agent");
         UpdateEverything? everything = null;
         Updater = new AgentUpdater(Options, Install, Settings, new HttpClient(channel ?? new StaticHandler()), "agentLinux",
-            () => everything?.Running != true, Platform, () => Stopped++, () => { }) { Running = running };
-        Everything = new UpdateEverything(Engines, Updater, () => { }, TimeProvider.System) { PollInterval = TimeSpan.FromMilliseconds(20), HostUpdateLimit = TimeSpan.FromSeconds(5) };
+            () => Busy ?? (everything?.Running == true ? "the update of hosts and VMs" : null), Platform, () => Stopped++, () => { })
+            { Running = running, IdlePoll = TimeSpan.FromMilliseconds(50), IdleLimit = TimeSpan.FromSeconds(2) };
+        Everything = new UpdateEverything(Engines, Updater, () => { }, TimeProvider.System) { PollInterval = TimeSpan.FromMilliseconds(20), HostUpdateLimit = TimeSpan.FromSeconds(5), ReadyLimit = TimeSpan.FromSeconds(1) };
         everything = Everything;
         Services = new DeviceServices(Platform, Settings, ssh, Links, Updater, Everything, Engines);
     }
@@ -187,6 +211,18 @@ public sealed class FakeDevice : IAsyncDisposable
 
     public ConcurrentDictionary<string, FakeSshTransport> Transports { get; } = new();
 
+    /// <summary>The key each VM's link dials with.</summary>
+    public ConcurrentDictionary<string, string> LinkKeys { get; } = new();
+
+    /// <summary>The VMs the device key was tried on.</summary>
+    public ConcurrentQueue<string> KeyProbes { get; } = new();
+
+    /// <summary>What the device-key probes ran on the VMs.</summary>
+    public ConcurrentQueue<string> ProbeScripts { get; } = new();
+
+    /// <summary>Whether the device key logs in on the VMs.</summary>
+    public bool DeviceKeyWorks { get; set; }
+
     public VmLinks Links { get; }
 
     public AgentInstall Install { get; }
@@ -198,6 +234,9 @@ public sealed class FakeDevice : IAsyncDisposable
     public DeviceServices Services { get; }
 
     public int Stopped { get; private set; }
+
+    /// <summary>What the agent is busy with, as the updater sees it; null: idle.</summary>
+    public string? Busy { get; set; }
 
     public async ValueTask DisposeAsync()
     {

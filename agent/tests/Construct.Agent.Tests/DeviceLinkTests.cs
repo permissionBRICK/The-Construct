@@ -72,6 +72,98 @@ public sealed class DeviceLinkTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task A_vm_being_reinstalled_loses_its_link_and_a_rebuilt_one_gets_a_new_link_after_the_old_tunnels_ended()
+    {
+        // Finding 40: the tunnels to the VM from before its reinstall held their ports and the new ones failed.
+        await _device.Links.RefreshAsync(CancellationToken.None);
+        await FakeDevice.WaitAsync(() => _device.Transports["e1/work"].Tunnels.Count == 1, "the tunnel");
+        var before = _device.Transports["e1/work"];
+        var tunnel = before.Tunnels[0];
+
+        _device.Engines.On("e1", "GET vms", """[{"name":"work","owner":"alice","kind":"primary","state":"running","deleting":false,"created":"2026-11-21T15:00:00Z","currentOperation":{"jobId":"j1","kind":"reinstall"}}]""");
+        await _device.Links.RefreshAsync(CancellationToken.None);
+        Assert.False(_device.Links.Connections().Single().Linked);
+        Assert.True(tunnel.Process.Stopped);
+
+        _device.Engines.On("e1", "GET vms", """[{"name":"work","owner":"alice","kind":"primary","state":"running","deleting":false,"created":"2026-11-21T15:00:00Z"}]""");
+        await _device.Links.RefreshAsync(CancellationToken.None);
+        Assert.True(_device.Links.Connections().Single().Linked);
+        Assert.NotSame(before, _device.Transports["e1/work"]);
+
+        // The same name as another machine (deleted and created again between two reads): the old link goes first.
+        await FakeDevice.WaitAsync(() => _device.Transports["e1/work"].Tunnels.Count == 1, "the second tunnel");
+        var second = _device.Transports["e1/work"];
+        _device.Engines.On("e1", "GET vms", """[{"name":"work","owner":"alice","kind":"primary","state":"running","deleting":false,"created":"2026-11-21T17:30:00Z"}]""");
+        await _device.Links.RefreshAsync(CancellationToken.None);
+        Assert.True(second.Tunnels[0].Process.Stopped);
+        Assert.NotSame(second, _device.Transports["e1/work"]);
+    }
+
+    private const string DeviceKeyBlob = "AAAAC3NzaC1lZDI1NTE5AAAAIDeviceKeyForTheProbeTest0000000000000000";
+
+    [Fact]
+    public async Task An_alias_with_the_old_clients_key_switches_to_the_device_key_once_that_key_logs_in()
+    {
+        // Finding 38: after the move the alias kept the old key, and a rebuilt VM accepts only the device key.
+        var ssh = Path.Combine(_device.Platform.Home, ".ssh");
+        Directory.CreateDirectory(ssh);
+        var old = Path.Combine(ssh, "agent_vm_ed25519");
+        File.WriteAllText(old, "old");
+        File.WriteAllText(Path.Combine(ssh, "construct_ed25519"), "device");
+        File.WriteAllText(Path.Combine(ssh, "construct_ed25519.pub"), $"ssh-ed25519 {DeviceKeyBlob} construct-agent\n");
+        File.WriteAllText(Path.Combine(ssh, "config"), $"Host work\n    HostName host.example\n    User root\n    IdentityFile {old}\n    IdentitiesOnly yes\n    Port 2201\n");
+
+        // Not on the VM yet: the link dials with the old key, and the device key is not tried again at once.
+        await _device.Links.RefreshAsync(CancellationToken.None);
+        Assert.Equal(old, _device.LinkKeys["e1/work"]);
+        await _device.Links.RefreshAsync(CancellationToken.None);
+        Assert.Equal(["work"], _device.KeyProbes);
+        Assert.Contains(old, File.ReadAllText(Path.Combine(ssh, "config")), StringComparison.Ordinal);
+
+        // The VM came back as another machine with the device key only: tried at once, the alias switches, the link follows.
+        _device.DeviceKeyWorks = true;
+        _device.Engines.On("e1", "GET vms", """[{"name":"work","owner":"alice","kind":"primary","state":"running","deleting":false,"created":"2026-11-21T17:30:00Z"}]""");
+        await _device.Links.RefreshAsync(CancellationToken.None);
+
+        var device = Path.Combine(ssh, "construct_ed25519");
+        Assert.Equal(device, _device.LinkKeys["e1/work"]);
+        var config = File.ReadAllText(Path.Combine(ssh, "config"));
+        Assert.Contains("IdentityFile " + device, config, StringComparison.Ordinal);
+        Assert.DoesNotContain(old, config, StringComparison.Ordinal);
+        Assert.Equal(["work", "work"], _device.KeyProbes);
+        // The probe asks whether the VM accepts the device key itself, not just whether some login worked (a shared
+        // connection or another configured key could make that one).
+        Assert.All(_device.ProbeScripts, script => Assert.Contains($"grep -qsF -- '{DeviceKeyBlob}'", script, StringComparison.Ordinal));
+        // From now on nothing is tried: the alias names the device key.
+        await _device.Links.RefreshAsync(CancellationToken.None);
+        Assert.Equal(2, _device.KeyProbes.Count);
+    }
+
+    [Fact]
+    public async Task A_vm_back_from_its_reinstall_is_tried_with_the_device_key_at_once()
+    {
+        var ssh = Path.Combine(_device.Platform.Home, ".ssh");
+        Directory.CreateDirectory(ssh);
+        var old = Path.Combine(ssh, "agent_vm_ed25519");
+        File.WriteAllText(old, "old");
+        File.WriteAllText(Path.Combine(ssh, "construct_ed25519"), "device");
+        File.WriteAllText(Path.Combine(ssh, "construct_ed25519.pub"), $"ssh-ed25519 {DeviceKeyBlob} construct-agent\n");
+        File.WriteAllText(Path.Combine(ssh, "config"), $"Host work\n    HostName host.example\n    User root\n    IdentityFile {old}\n    IdentitiesOnly yes\n    Port 2201\n");
+        await _device.Links.RefreshAsync(CancellationToken.None);
+        Assert.Single(_device.KeyProbes);
+
+        // A reinstall keeps the VM's record (same creation time); the machine it builds has the device key only.
+        _device.Engines.On("e1", "GET vms", """[{"name":"work","owner":"alice","kind":"primary","state":"running","deleting":false,"currentOperation":{"jobId":"j1","kind":"reinstall"}}]""");
+        await _device.Links.RefreshAsync(CancellationToken.None);
+        _device.DeviceKeyWorks = true;
+        _device.Engines.On("e1", "GET vms", """[{"name":"work","owner":"alice","kind":"primary","state":"running","deleting":false}]""");
+        await _device.Links.RefreshAsync(CancellationToken.None);
+
+        Assert.Equal(2, _device.KeyProbes.Count);
+        Assert.Equal(Path.Combine(ssh, "construct_ed25519"), _device.LinkKeys["e1/work"]);
+    }
+
+    [Fact]
     public async Task Closing_a_forward_deletes_it_at_the_engine()
     {
         await _device.Links.RefreshAsync(CancellationToken.None);
@@ -150,6 +242,21 @@ public sealed class DeviceLinkTests : IAsyncDisposable
         ssh.ScriptHandler = (_, _) => Task.FromResult(new ProcessResult(7));
         var failure = await Assert.ThrowsAsync<AgentFailure>(() => actions.OpenAsync("e1", "work", "t3", CancellationToken.None));
         Assert.Equal("t3-forward-not-ready", failure.Code);
+    }
+
+    [Fact]
+    public async Task T3_code_opens_the_patched_desktop_app_where_construct_installed_one_and_mints_no_link()
+    {
+        // Finding 28: the button opened the web UI with a fresh pairing link although the desktop app was there.
+        await _device.Links.RefreshAsync(CancellationToken.None);
+        _device.Platform.T3Desktop = true;
+        var actions = new VmActions(_device.Links, _device.Platform);
+
+        var opened = await actions.OpenAsync("e1", "work", "t3", CancellationToken.None);
+
+        Assert.Equal("desktop", opened.Kind);
+        Assert.Equal(["t3-desktop"], _device.Platform.Opened);
+        Assert.Empty(_device.Transports["e1/work"].Scripts);
     }
 
     [Fact]

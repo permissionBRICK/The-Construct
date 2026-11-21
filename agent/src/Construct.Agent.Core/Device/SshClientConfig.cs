@@ -146,11 +146,12 @@ public sealed class SshClientConfig(IDevicePlatform platform)
     }
 
     /// <summary>Writes the alias block when it differs from what the file has.</summary>
-    public ConfigWrite WriteAlias(string alias, string host, int port, bool ipv4)
+    /// <param name="key">The identity the block names; null keeps the one it names now (<see cref="KeyFor"/>).</param>
+    public ConfigWrite WriteAlias(string alias, string host, int port, bool ipv4, string? key = null)
     {
         if (!SshConfigText.IsUsableAlias(alias)) throw new AgentFailure(400, "invalid-alias", "Not a usable SSH alias.");
         var existing = Read(ConfigPath);
-        var block = SshConfigText.Block(alias, host, port, "root", KeyFor(alias), ipv4, SshConfigText.NewlineOf(existing));
+        var block = SshConfigText.Block(alias, host, port, "root", key ?? KeyFor(alias), ipv4, SshConfigText.NewlineOf(existing));
         var (text, replaced) = SshConfigText.Upsert(existing, alias, block);
         if (text == existing) return new("ssh-config", "unchanged", ConfigPath);
         WriteKeepingFile(ConfigPath, text);

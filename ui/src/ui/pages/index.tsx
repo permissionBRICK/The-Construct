@@ -1,5 +1,6 @@
 import { useApp } from '../ctx';
-import { VaultCards } from '../blocks';
+import { SignInCards, VaultCards } from '../blocks';
+import { lostSignIns } from '../../model/signin';
 import { Backups, Connections, Overview, Project, ProjectFile, Projects, Settings } from './vm';
 import { Access, Devices, History, Pair, Revoke, Secrets } from './vault';
 import { HostPage, Hosts } from './hosts';
@@ -11,7 +12,8 @@ export function PageView() {
   if (s.firstRun) return <FirstRun />;
   if (s.upgrade) return <Upgrade />;
   const p = route.page;
-  const asks = p !== 'home' && s.vaultRequests.length > 0 ? <div class="pg asks"><VaultCards /></div> : null;
+  // What asks for the user (a vault request, a lost sign-in) shows on every page; the overview has its own.
+  const asks = p !== 'home' && (s.vaultRequests.length > 0 || lostSignIns(s.vms).length > 0) ? <div class="pg asks"><VaultCards /><SignInCards /></div> : null;
   const needVm = ['home', 'projects', 'project', 'file', 'connections', 'backups', 'settings'].includes(p);
   if (needVm && !vm) return <CreateVm />;
   const body = (() => {

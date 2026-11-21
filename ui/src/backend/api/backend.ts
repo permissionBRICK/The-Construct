@@ -10,7 +10,7 @@ import { openExternal } from '../../ui/shell';
 import { agentList, agentSwitches, DEFAULT_AGENTS } from '../../model/settings';
 import {
   updateRunning, allowanceOf, codeGroups, hostVersion, jobKey, problemText, splitJobKey, toCert, toConfig, toDevice, toHostJob, toHostUser, toHostVm, toJob,
-  toMedia, toStatus, toUpdates, toUsage, toVm, toWindows, vmKey, toSecret, toLeases, toVaultEvent, toApproval, toEntryRequest, toProfile, splitRequestKey, VM_JOB_KINDS,
+  toMedia, toStatus, toUpdates, toUsage, toVm, toWindows, vmKey, toSecret, toLeases, toVaultEvent, toApproval, toEntryRequest, toProfile, splitRequestKey, requestKey, VM_JOB_KINDS,
   settingsFields, withDesired, codingAgents, toLink, toEverything, hostKind, toIsos, toRepair, REPAIRABLE, upgradeStep, toUpgradeItem,
   type RepairSession, type RepairLine, type UpgradeView, type AgentSignIn,
   type DeviceItem, type ProfileResponse, type AuditEntry, type EngineView, type Health, type HostUpdateStatus, type HttpsStatus, type JobResponse, type MediaItem, type TokenSummary,
@@ -37,7 +37,6 @@ const WINDOWS_GAPS = API_GAPS.filter(f => f !== 'windows-sign-in');
 const NA = 'Not available yet';
 const RESTART_LINE = 'Windows has to restart to turn on Hyper-V.';
 const PREFS_KEY = 'construct.prefs';
-const DISMISSED_KEY = 'construct.dismissed';
 
 interface Started { kind: JobKind; from?: string; to?: string; freshImage?: boolean; backupId?: string }
 
@@ -154,7 +153,10 @@ export class ApiBackend implements Backend {
   private clients = new Map<string, EngineClient>();
   private slices = new Map<string, Slice>();
   private seq = 1;
-  private dismissed = new Set<string>(store.get<string[]>(DISMISSED_KEY, []));
+  /** Notices put away on this device, as the agent keeps them for every surface (finding 45). */
+  private dismissed = new Set<string>();
+  /** Job starts this page asked for that the engine has not answered yet, by VM: shown as working at once (finding 15). */
+  private starting = new Map<string, JobKind>();
   /** Jobs this UI started, with the kind it shows them as, the version an update goes from and to, and how a reinstall was asked for. */
   private started = new Map<string, Started>();
   private transit = new Map<string, { power: Vm['power']; until: number }>();
@@ -331,7 +333,7 @@ export class ApiBackend implements Backend {
         else this.slices.set(e.id, newSlice(e));
       }
       this.compose();
-      await Promise.all([this.loadDevices(), ...st.engines.map(e => this.refreshEngine(e.id)), this.loadVault(), this.loadProfiles(),
+      await Promise.all([this.loadDevices(), this.loadDismissed(), ...st.engines.map(e => this.refreshEngine(e.id)), this.loadVault(), this.loadProfiles(),
         // The share is read only where this device can map one: its features first.
         this.loadDevice().then(() => this.loadConnections())]);
       // After the VMs, so a request names the VM the screens know.
@@ -339,6 +341,15 @@ export class ApiBackend implements Backend {
     } catch (e) {
       this.note(errText(e));
     }
+  }
+
+  /** The notices put away on this device; the agent keeps them, so the pop-out and the window hide the same ones.
+      Added to what this page put away: a dismissal still on its way to the agent stays away. */
+  private async loadDismissed() {
+    try {
+      for (const key of await ok(this.agent.GET('/api/notices/dismissed'))) this.dismissed.add(key);
+      this.compose();
+    } catch { /* the notices stay as they were */ }
   }
 
   private async loadDevices() {
@@ -648,6 +659,12 @@ export class ApiBackend implements Backend {
           if (job) this.withRepair(sl, r.name, newest, job);
           if (job && !this.dismissed.has(key)) jobs.push({ ...job, from: st?.from, to: st?.to, at: newest.created });
         }
+        // A start asked for here and not answered yet: working at once, after whatever the VM showed.
+        const pending = this.starting.get(vmKey(engine, r.name.toLowerCase()));
+        if (pending) {
+          jobs.push({ id: `starting:${id}`, vmId: id, kind: pending, state: 'running', step: 'Starting', stepIndex: 0, stepCount: 1, pct: 0, log: [], error: null,
+            repair: null, pending: true, at: '9999' });
+        }
       }
       hosts.push(this.host(engine, sl));
     }
@@ -726,8 +743,11 @@ export class ApiBackend implements Backend {
     switch (type) {
       case 'agent': case 'reset': void this.load(); return;
       case 'update': void this.loadDevice(); return;
+      case 'notices': void this.loadDismissed(); return;
       case 'connections': void this.loadConnections(); return;
       case 'vault.approval.added': case 'vault.approval.ended': case 'vault.entry-request.added': case 'vault.entry-request.ended':
+        // Answered on another surface (or at the engine): it leaves this one at once, also where the engine is not read.
+        if (type.endsWith('ended') && engine && id) this.ended(requestKey(engine, id));
         void this.loadRequests();
         if (type.endsWith('ended')) void this.loadVault();
         return;
@@ -1293,18 +1313,38 @@ export class ApiBackend implements Backend {
   }
 
   /** A provision or reinstall job of a primary, through the agent, which adds this device's git clone credentials.
-      Without stored settings (the first job) the engine's defaults go along. */
+      Without stored settings (the first job) the engine's defaults go along. The VM shows it working at once: the
+      agent gathers the credentials before the engine answers. */
   private async vmJob(engine: string, name: string, kind: 'provision' | 'reinstall', extra: Loose, as?: Started) {
     const path = { params: { path: { engine, vm: name } } };
     const post = (desired?: object) => ok(this.agent.POST('/api/engines/{engine}/vms/{vm}/jobs', { ...path, body: { kind, requestId: crypto.randomUUID(), ...extra, ...(desired ? { desired } : {}) } as never }));
-    await this.run(async () => {
+    await this.whileStarting(engine, name, as?.kind ?? (kind === 'reinstall' ? 'reinstall' : 'reprovision'), () => this.run(async () => {
       let r;
       try { r = await post(); } catch (e) {
         if (!(e instanceof ApiError) || e.code !== 'desired-state-missing') throw e;
         r = await post({ projects: [], settings: {} });
       }
       await this.track(engine, r.jobId, as);
-    });
+    }));
+  }
+
+  /** Shows the VM working from the click until the start answered (and its job is read) or failed. */
+  private async whileStarting<T>(engine: string, vm: string, kind: JobKind, work: () => Promise<T>): Promise<T> {
+    const key = vmKey(engine, vm.toLowerCase());
+    this.starting.set(key, kind);
+    this.compose();
+    try {
+      return await work();
+    } finally {
+      this.starting.delete(key);
+      this.compose();
+    }
+  }
+
+  /** A vault request that ended elsewhere leaves the screen; a read under way does not bring it back. */
+  private ended(key: string) {
+    this.answeredKeys.add(key);
+    if (this.s.vaultRequests.some(r => r.id === key)) this.emit({ vaultRequests: this.s.vaultRequests.filter(r => r.id !== key) });
   }
 
   /** T3 Code, VS Code or an SSH terminal on this device, through the agent. */
@@ -1313,6 +1353,13 @@ export class ApiBackend implements Backend {
     if (!ref) return;
     void this.run(() => ok(this.agent.POST('/api/connections/{engine}/{vm}/open', { params: { path: { engine: ref.engine, vm: ref.name } }, body: { what } })),
       `${{ t3: 'T3 Code', vscode: 'VS Code', ssh: 'SSH' }[what]} opens`);
+  }
+
+  /** A one-time pairing link for T3 Code on another machine; the caller copies it. */
+  async t3Link(vmId: string): Promise<string> {
+    const ref = this.vmRef(vmId);
+    if (!ref) throw new Error('No such VM');
+    return (await ok(this.agent.POST('/api/connections/{engine}/{vm}/t3-pairing', { params: { path: { engine: ref.engine, vm: ref.name } } }))).pairUrl;
   }
 
   /** A forward's link in the browser. */
@@ -1396,16 +1443,17 @@ export class ApiBackend implements Backend {
     }
     if (raw.kind === 'create-vm') { void this.provision(ref.engine, ref.name); return; }
     const st = this.started.get(key);
-    void this.run(async () => {
+    void this.whileStarting(engine, ref.name, st?.kind ?? job.kind, () => this.run(async () => {
       const r = await ok(this.agent.POST('/api/engines/{engine}/jobs/{id}/retry', { params: { path: { engine, id } }, body: {} as never }));
       await this.track(engine, r.jobId, st ? { ...st, backupId: undefined } : undefined);
-    }, undefined, engine);
+    }, undefined, engine));
   }
 
+  /** Put away here and on every other surface of this device: the agent keeps it and tells them. */
   dismissJob(key: string) {
     this.dismissed.add(key);
-    store.set(DISMISSED_KEY, [...this.dismissed].slice(-200));
     this.compose();
+    void this.agent.POST('/api/notices/dismissed', { body: { key } }).catch(() => { /* hidden here; the others keep it */ });
   }
 
   saveSettings(vmId: string, patch: SettingsPatch, when?: 'now' | 'later') {
@@ -1534,12 +1582,12 @@ export class ApiBackend implements Backend {
   }
 
   private restore(engine: string, vm: string, backupId: string) {
-    return this.run(async () => {
+    return this.whileStarting(engine, vm, 'restore', () => this.run(async () => {
       const r = await ok(this.agent.POST('/api/engines/{engine}/vms/{vm}/backups/{backup}/restore', {
         params: { path: { engine, vm, backup: backupId } }, body: { requestId: crypto.randomUUID() },
       }));
       await this.track(engine, r.jobId, { kind: 'restore', backupId });
-    }, undefined, engine);
+    }, undefined, engine));
   }
 
   deleteBackup(vmId: string, backupId: string) {

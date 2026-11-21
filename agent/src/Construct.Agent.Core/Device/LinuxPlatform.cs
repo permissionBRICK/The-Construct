@@ -78,8 +78,9 @@ public sealed class LinuxPlatform : IDevicePlatform, IAgentLauncher
     /// <summary>
     /// Starts an installed version. Under the systemd unit the unit is pointed at it and restarted (a
     /// child started here would end with the unit's process group); otherwise it starts in its own session.
+    /// The console host has no surfaces to open again.
     /// </summary>
-    public Task LaunchAsync(string executable, CancellationToken ct)
+    public Task LaunchAsync(string executable, IReadOnlyList<string> surfaces, CancellationToken ct)
     {
         if (Environment.GetEnvironmentVariable("INVOCATION_ID") is { Length: > 0 } && File.Exists(UnitPath) && Find("systemctl") is { } systemctl)
         {

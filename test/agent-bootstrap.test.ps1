@@ -238,6 +238,10 @@ $world = New-World 'handover' @{ agentRunning = $true; companion = $true }
 $run = Invoke-World $world (Join-Path $repo 'install.ps1')
 Assert ($run.Code -eq 0) "hand-over succeeds: $($run.Output)"
 Assert ($run.Calls -contains 'rest Post http://127.0.0.1:5555/api/update/check' -and $run.Calls -contains 'rest Post http://127.0.0.1:5555/api/update/install') 'the running agent updates itself'
+# The window opens before the update: the agent opens it again in the new version (finding 5), not after, in the one that exits.
+$open = [array]::IndexOf(@($run.Calls), 'rest Post http://127.0.0.1:5555/api/shell/open')
+$install = [array]::IndexOf(@($run.Calls), 'rest Post http://127.0.0.1:5555/api/update/install')
+Assert ($open -ge 0 -and $open -lt $install) "hand-over opens the window before the update starts: $($run.Calls -join ' | ')"
 Assert (-not ($run.Calls | Where-Object { $_ -like 'web *' -or $_ -like '*v1/quit' })) 'nothing is downloaded, the Companion is left alone'
 
 # ---- hand-over with VS Code: the installed version's extension replaces an old one; a refusal fails ----

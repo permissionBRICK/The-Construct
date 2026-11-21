@@ -1,4 +1,5 @@
-// Moved unchanged from companion/src/Construct.Companion.Host/Runtime/RuntimeProcessRunner.cs (plan 11.1: kept); only the namespace differs.
+// Moved from companion/src/Construct.Companion.Host/Runtime/RuntimeProcessRunner.cs (plan 11.1: kept); since then a stop ends the
+// child even when part of its tree cannot be ended, and waits for it only a while.
 using System.Diagnostics;
 using System.Text;
 using System.Threading.Channels;
@@ -95,10 +96,18 @@ public sealed class RuntimeProcessRunner : IProcessRunner
         private void Kill()
         {
             stop.Cancel();
-            try { if (!process.HasExited) process.Kill(entireProcessTree: true); } catch (InvalidOperationException) { }
+            try { if (!process.HasExited) process.Kill(entireProcessTree: true); }
+            catch (Exception ex) when (ex is not InvalidOperationException)
+            {
+                // A part of the tree that cannot be ended must not keep the child itself alive.
+                try { if (!process.HasExited) process.Kill(); } catch { }
+            }
+            catch (InvalidOperationException) { }
         }
+        // A stop never reports the child's failure, and never waits on a child that would not end for longer than a while:
+        // a stuck tunnel must not hold up the link that replaces it.
         public async Task StopAsync(CancellationToken cancellationToken = default)
-        { Kill(); try { await completion.ConfigureAwait(false); } catch { } } // a stop never reports the child's failure
+        { Kill(); try { await completion.WaitAsync(TimeSpan.FromSeconds(10), cancellationToken).ConfigureAwait(false); } catch { } }
         public async ValueTask DisposeAsync()
         {
             await StopAsync().ConfigureAwait(false);

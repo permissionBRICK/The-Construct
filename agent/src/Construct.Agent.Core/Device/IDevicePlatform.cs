@@ -36,6 +36,12 @@ public interface IDevicePlatform
     /// <summary>Opens a terminal running <c>ssh &lt;alias&gt;</c>.</summary>
     Task OpenTerminalAsync(string alias, CancellationToken ct);
 
+    /// <summary>
+    /// Starts the T3 Code desktop app, or brings it to the front, when Construct installed its patched build on this
+    /// device; false when there is none (the T3 Code web UI is opened instead).
+    /// </summary>
+    Task<bool> OpenT3DesktopAsync(CancellationToken ct) => Task.FromResult(false);
+
     /// <summary>Whether the agent starts with the user's session; null when this platform cannot say.</summary>
     bool? StartWithOs { get; }
 

@@ -120,6 +120,25 @@ public sealed class LocalApiTests
     }
 
     [Fact]
+    public async Task A_notice_put_away_on_one_surface_is_away_on_every_surface_and_the_others_hear_of_it()
+    {
+        // Finding 45: a failed job's notice closed in the window stayed in the pop-out.
+        await using var agent = await TestAgent.StartAsync();
+        Assert.Empty((await agent.GetAsync("api/notices/dismissed")).AsArray());
+        using var events = agent.Host.Agent.Events.Subscribe(long.MaxValue - 1);
+
+        await agent.PostAsync("api/notices/dismissed", new { key = "e1/job-1" });
+        await agent.PostAsync("api/notices/dismissed", new { key = "e1/job-1" });
+        await agent.PostAsync("api/notices/dismissed", new { key = "" }, HttpStatusCode.BadRequest);
+
+        Assert.Equal(["e1/job-1"], (await agent.GetAsync("api/notices/dismissed")).AsArray().Select(n => n!.GetValue<string>()));
+        Assert.True(events.Live.TryRead(out var heard));
+        Assert.Equal("notices", heard!.Type);
+        // Kept with the device's settings: a restarted agent still hides it.
+        Assert.Contains("e1/job-1", File.ReadAllText(Path.Combine(agent.Directory, "device.json")), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task The_event_stream_carries_the_engines_changes_and_a_jobs_end_once()
     {
         using var engine = new EngineHost();

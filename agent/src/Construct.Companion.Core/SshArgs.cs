@@ -93,7 +93,8 @@ public static partial class SshArgs
     }
     private static string[] Finish(List<string> args, SshConfiguration cfg, string? keyPath) => keyPath is null
         ? [.. args, cfg.HostAlias]
-        : ["-i", keyPath, "-o", "IdentitiesOnly=yes", .. args, $"{cfg.User}@{cfg.VmHost}"];
+        // A connection of its own with exactly this key: never a shared (ControlMaster) connection of the user's.
+        : ["-i", keyPath, "-o", "IdentitiesOnly=yes", "-o", "ControlMaster=no", "-o", "ControlPath=none", .. args, $"{cfg.User}@{cfg.VmHost}"];
 
     [GeneratedRegex(@"^[0-9a-zA-Z\-.:]+$")]
     private static partial Regex Zone();

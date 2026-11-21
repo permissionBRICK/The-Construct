@@ -73,6 +73,28 @@ public sealed class EngineHost : WebApplicationFactory<Program>
         if (_services is not null) builder.ConfigureTestServices(_services);
     }
 
+    public const string Commit = "c0ffee0000000000000000000000000000000001";
+
+    /// <summary>The release this engine runs, and its source in the fake release source, so a provision job has something to copy.</summary>
+    public EngineHost WithSource()
+    {
+        ((Constructd.Fakes.FakeReleaseInfo)Services.GetRequiredService<IReleaseInfo>()).Installed = new InstalledRelease(Commit, "1.0.0-test", null, "test");
+        using var bytes = new MemoryStream();
+        using (var zip = new System.IO.Compression.ZipArchive(bytes, System.IO.Compression.ZipArchiveMode.Create, true))
+        {
+            var entry = zip.CreateEntry("repo-main/bin/provision.sh", System.IO.Compression.CompressionLevel.NoCompression);
+            entry.ExternalAttributes = 0x81ed << 16;
+            using var s = entry.Open();
+            s.Write("#!/bin/bash\n"u8);
+        }
+
+        var uri = new Uri("https://github.com/test/repo/" + Commit);
+        var releases = Services.GetRequiredService<Constructd.Fakes.FakeReleaseSource>();
+        releases.SourceAssets[Commit] = new(Commit, "host-" + Commit, uri, bytes.Length, Convert.ToHexStringLower(SHA256.HashData(bytes.ToArray())));
+        releases.Assets[uri] = bytes.ToArray();
+        return this;
+    }
+
     /// <summary>Adds a user and returns an API token for them: the sign-in the first device uses.</summary>
     public async Task<string> AddUserAsync(string name, Role role = Role.User)
     {

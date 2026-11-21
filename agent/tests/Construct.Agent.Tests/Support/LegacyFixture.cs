@@ -84,6 +84,12 @@ public sealed class AdoptableGuest : ISshRunner
     /// <summary>How many switch-overs fail (exit 1) before one succeeds.</summary>
     public int FailSwitches { get; set; }
 
+    /// <summary>How many provision runs fail (exit 2, a critical failure) before one succeeds.</summary>
+    public int FailProvisions { get; set; }
+
+    /// <summary>The provision runs that reached provision.sh.</summary>
+    public int Provisions { get; private set; }
+
     public Task<int> RunAsync(SshTarget target, string command, string? standardInput, IProgress<string>? lines, TimeSpan timeout, CancellationToken ct)
     {
         lock (Commands) Commands.Add(command);
@@ -115,6 +121,26 @@ public sealed class AdoptableGuest : ISshRunner
             return Task.FromResult(0);
         }
 
+        // A provision job (the reprovision that ends the move): provision.sh reports its result block.
+        if (command.Contains("bin/provision.sh", StringComparison.Ordinal) || command.Contains("PROVISION_PHASE", StringComparison.Ordinal))
+        {
+            var failed = false;
+            lock (Commands)
+            {
+                if (!command.Contains("PROVISION_PHASE", StringComparison.Ordinal)) Provisions++;
+                if (FailProvisions > 0 && !command.Contains("PROVISION_PHASE", StringComparison.Ordinal)) { FailProvisions--; failed = true; }
+            }
+
+            foreach (var line in new[] { "===CONSTRUCT-PROVISION-RESULT===", "errors=0", "===END-CONSTRUCT-PROVISION-RESULT===" }) lines?.Report(line);
+            return Task.FromResult(failed ? 2 : 0);
+        }
+
+        if (command.Contains("reboot-required", StringComparison.Ordinal))
+        {
+            lines?.Report("no");
+            return Task.FromResult(0);
+        }
+
         if (FailSwitches > 0)
         {
             FailSwitches--;
@@ -124,7 +150,7 @@ public sealed class AdoptableGuest : ISshRunner
         return Task.FromResult(0);
     }
 
-    public Task CopyAsync(SshTarget target, string localPath, string remotePath, CancellationToken ct) => throw new InvalidOperationException();
+    public Task CopyAsync(SshTarget target, string localPath, string remotePath, CancellationToken ct) => Task.CompletedTask;
 }
 
 /// <summary>

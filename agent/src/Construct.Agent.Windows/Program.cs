@@ -7,9 +7,10 @@ using Construct.Companion.Windows;
 namespace Construct.Agent.Windows;
 
 /// <summary>
-/// <c>construct-agent.exe [--background | construct://... | open | repair | version]</c>: the device agent
-/// as the Windows tray app. One instance per user; a second start hands its request (open the window)
-/// to the running one over the local API and ends.
+/// <c>construct-agent.exe [--background [--open pop,win] | construct://... | open | repair | version]</c>: the device
+/// agent as the Windows tray app. One instance per user; a second start hands its request (open the window)
+/// to the running one over the local API and ends. <c>--open</c> names the surfaces to show at start: a self-update
+/// opens again what was open.
 /// </summary>
 internal static class Program
 {
@@ -69,7 +70,7 @@ internal static class Program
         upgrade.HoldCompanionMutex();
         try
         {
-            return Run(executable, platformOptions, install, running, background);
+            return Run(executable, platformOptions, install, running, background, Surfaces(args));
         }
         finally
         {
@@ -77,7 +78,16 @@ internal static class Program
         }
     }
 
-    private static int Run(string executable, AgentOptions defaults, AgentInstall install, string? running, bool background)
+    /// <summary>The surfaces <c>--open</c> names (<c>pop</c>, <c>win</c>), in order.</summary>
+    internal static string[] Surfaces(string[] args)
+    {
+        var at = Array.IndexOf(args, "--open");
+        return at >= 0 && at + 1 < args.Length
+            ? args[at + 1].Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Where(s => s is "pop" or "win").Distinct().ToArray()
+            : [];
+    }
+
+    private static int Run(string executable, AgentOptions defaults, AgentInstall install, string? running, bool background, string[] surfaces)
     {
         var log = Path.Combine(defaults.DataDirectory, "shell.log");
         void Log(Exception ex)
@@ -119,6 +129,7 @@ internal static class Program
         host.Device.Shell = tray;
         host.App.Lifetime.ApplicationStopping.Register(tray.Quit);
         if (!background) tray.Open("win", null);
+        foreach (var surface in surfaces) tray.Open(surface, null);
         try
         {
             Application.Run(tray);

@@ -330,7 +330,7 @@ export function Upgrade() {
             it.state === 'done' || it.state === 'skipped' ? 'ok' : it.state === 'waiting' ? 'wait' : ''))}
         </div>
       )}
-      {u.oldHosts.length > 0 && <div class="line d">Not moved yet: {u.oldHosts.join(', ')}</div>}
+      {u.oldHosts.length > 0 && <div class="line d">{u.oldHosts.join(', ')} {u.oldHosts.length === 1 ? 'runs' : 'run'} the old Construct and {u.oldHosts.length === 1 ? 'stays' : 'stay'} as {u.oldHosts.length === 1 ? 'it is' : 'they are'}; this PC keeps its sign-in there.</div>}
       {problem}
       <div class="wft"><span class="d"><Icon n="power" />VMs keep running</span>{next('Move over')}</div>
     </div>

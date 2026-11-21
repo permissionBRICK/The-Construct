@@ -11,6 +11,9 @@ public interface IAgentShell
     /// <param name="surface"><c>pop</c>, <c>win</c> or <c>alone</c> (the UI's <c>surf</c> parameter).</param>
     /// <param name="route">The UI route for the window (<c>#/vault</c>), or null.</param>
     void Open(string surface, string? route);
+
+    /// <summary>The surfaces shown now (<c>pop</c>, <c>win</c>, <c>alone</c>); a self-update opens them again in the new version.</summary>
+    IReadOnlyList<string> Visible();
 }
 
 /// <summary>
@@ -67,22 +70,24 @@ public sealed class DeviceServices : IAsyncDisposable
         var probe = new SocketPortProbe();
         var engines = new AgentEngines(agent);
         var links = new VmLinks(engines, platform, ssh, settings,
-            target => new ProcessSshTransport(runner, probe,
-                new SshConfiguration(target.Address!.Host, target.Alias, "root", "", target.Address.Port, 12, target.Ipv4), platform.SshExecutable, ssh.KeyFor(target.Alias)),
+            (target, key) => new ProcessSshTransport(runner, probe,
+                new SshConfiguration(target.Address!.Host, target.Alias, "root", "", target.Address.Port, 12, target.Ipv4), platform.SshExecutable, key),
             new SshProcessSupervisor(clock), new LoopbackAudioServerFactory(), clock, agent.Events);
         var install = new AgentInstall(options.DataDirectory, OperatingSystem.IsWindows() ? "construct-agent.exe" : "construct-agent");
         var running = install.RunningVersion(Environment.ProcessPath);
         UpdateEverything? everything = null;
         var updater = new AgentUpdater(options, install, settings, new HttpClient { Timeout = TimeSpan.FromMinutes(10) },
             OperatingSystem.IsWindows() ? "agentWindows" : "agentLinux",
-            () => everything?.Running != true && agent.Pairing() is null,
+            () => everything?.Running == true ? "the update of hosts and VMs" : agent.Pairing() is not null ? "a device pairing" : null,
             platform as IAgentLauncher ?? throw new InvalidOperationException("The platform cannot start an agent."), stop, () => agent.Events.Publish("update"))
         { Running = running };
         everything = new UpdateEverything(engines, updater, () => agent.Events.Publish("update"), options.Time);
-        return new DeviceServices(platform, settings, ssh, links, updater, everything, engines)
+        var services = new DeviceServices(platform, settings, ssh, links, updater, everything, engines)
         {
             StartExecutable = running is not null ? install.ExecutableOf(running) : Environment.ProcessPath,
         };
+        updater.OpenSurfaces = () => services.Shell?.Visible() ?? [];
+        return services;
     }
 
     public void Start()

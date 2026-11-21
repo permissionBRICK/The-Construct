@@ -2190,6 +2190,82 @@
         }
       }
     },
+    "/api/notices/dismissed": {
+      "get": {
+        "tags": [
+          "device"
+        ],
+        "description": "The notices (a failed job's, by the UI's key) put away on this device, newest last.",
+        "operationId": "ListDismissedNotices",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentProblem"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "device"
+        ],
+        "description": "Puts a notice away on every surface of this device; the others hear a `notices` event.",
+        "operationId": "DismissNotice",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DismissNoticeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentProblem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/shell/open": {
       "post": {
         "tags": [
@@ -2545,7 +2621,7 @@
         "tags": [
           "device"
         ],
-        "description": "Opens the VM: `t3` (T3 Code's pairing link in the browser), `vscode` (Remote-SSH), `ssh` (a terminal).",
+        "description": "Opens the VM: `t3` (the patched T3 Code desktop app Construct installed here, else T3 Code's pairing link in the browser), `vscode` (Remote-SSH), `ssh` (a terminal).",
         "operationId": "OpenVm",
         "parameters": [
           {
@@ -3458,6 +3534,17 @@
           },
           "recoveryUnconfirmed": {
             "type": "boolean"
+          }
+        }
+      },
+      "DismissNoticeRequest": {
+        "required": [
+          "key"
+        ],
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string"
           }
         }
       },
@@ -4417,6 +4504,12 @@
               "string"
             ],
             "format": "date-time"
+          },
+          "waiting": {
+            "type": [
+              "null",
+              "string"
+            ]
           }
         }
       },

@@ -13,12 +13,15 @@ public sealed record AgentPackage(string Version, Uri Url, string Sha256);
 /// <param name="Available">The version on offer, or null.</param>
 /// <param name="State"><c>idle</c>, <c>checking</c>, <c>waiting</c> (for the agent to be idle), <c>downloading</c>, <c>installing</c>, <c>failed</c>.</param>
 /// <param name="Installed">False for a build that does not run from an installed package: it cannot update itself.</param>
-public sealed record UpdateView(string Version, string Channel, string? Available, string State, string? Error, bool Installed, DateTimeOffset? CheckedAt);
+/// <param name="Waiting">While <c>waiting</c>: what the install waits for to end (<c>the update of hosts and VMs</c>, <c>a device pairing</c>).</param>
+public sealed record UpdateView(string Version, string Channel, string? Available, string State, string? Error, bool Installed, DateTimeOffset? CheckedAt,
+    string? Waiting = null);
 
 /// <summary>Starts an installed agent executable detached from this one (the switch and the way back).</summary>
 public interface IAgentLauncher
 {
-    Task LaunchAsync(string executable, CancellationToken ct);
+    /// <param name="surfaces">The shell surfaces the new process opens (<c>pop</c>, <c>win</c>); none starts it in the background.</param>
+    Task LaunchAsync(string executable, IReadOnlyList<string> surfaces, CancellationToken ct);
 }
 
 /// <summary>
@@ -39,7 +42,7 @@ public sealed class AgentUpdater : IAsyncDisposable
     private readonly HttpClient _http;
     private readonly string _packageKey;
     private readonly string _repository;
-    private readonly Func<bool> _idle;
+    private readonly Func<string?> _busy;
     private readonly IAgentLauncher _launcher;
     private readonly Action _stop;
     private readonly Action _changed;
@@ -49,21 +52,22 @@ public sealed class AgentUpdater : IAsyncDisposable
     private string _state = "idle";
     private string? _error;
     private DateTimeOffset? _checkedAt;
+    private string? _waiting;
     private Task _work = Task.CompletedTask;
     private Task _loop = Task.CompletedTask;
 
     /// <param name="packageKey">This build's key in the manifest's <c>packages</c>: <c>agentWindows</c> or <c>agentLinux</c>.</param>
-    /// <param name="idle">True when nothing the user started is in flight (a pairing, "update everything").</param>
+    /// <param name="busy">What the user started that is still in flight (a pairing, "update everything"), in words; null when the agent is idle.</param>
     /// <param name="stop">Stops this agent after the switch.</param>
     public AgentUpdater(AgentOptions options, AgentInstall install, DeviceSettings settings, HttpClient http, string packageKey,
-        Func<bool> idle, IAgentLauncher launcher, Action stop, Action changed, string repository = DefaultRepository)
+        Func<string?> busy, IAgentLauncher launcher, Action stop, Action changed, string repository = DefaultRepository)
     {
         _options = options;
         _install = install;
         _settings = settings;
         _http = http;
         _packageKey = packageKey;
-        _idle = idle;
+        _busy = busy;
         _launcher = launcher;
         _stop = stop;
         _changed = changed;
@@ -73,9 +77,21 @@ public sealed class AgentUpdater : IAsyncDisposable
     /// <summary>The installed version this process runs as; null for a development build.</summary>
     public string? Running { get; init; }
 
+    /// <summary>How long the install waits for the agent to be idle before it goes ahead anyway (finding 21).</summary>
+    public TimeSpan IdleLimit { get; init; } = TimeSpan.FromMinutes(10);
+
+    /// <summary>How often the install asks again whether the agent is idle.</summary>
+    public TimeSpan IdlePoll { get; init; } = TimeSpan.FromSeconds(5);
+
+    /// <summary>How long a check counts as fresh for <see cref="CheckIfStale"/>.</summary>
+    public TimeSpan FreshFor { get; init; } = TimeSpan.FromMinutes(15);
+
+    /// <summary>The surfaces of the desktop shell that are open (<c>pop</c>, <c>win</c>); the new version opens them again.</summary>
+    public Func<IReadOnlyList<string>>? OpenSurfaces { get; set; }
+
     public UpdateView View()
     {
-        lock (_gate) return new(_options.Version, _settings.Read().Channel, _offer?.Version, _state, _error, Running is not null, _checkedAt);
+        lock (_gate) return new(_options.Version, _settings.Read().Channel, _offer?.Version, _state, _error, Running is not null, _checkedAt, _state == "waiting" ? _waiting : null);
     }
 
     public bool Available
@@ -105,6 +121,26 @@ public sealed class AgentUpdater : IAsyncDisposable
         }
     }
 
+    /// <summary>
+    /// A check in the background unless one ran in the last <see cref="FreshFor"/> or one is under way: the pop-out
+    /// asks for it when it opens, so a new release shows without waiting for the six-hourly check (finding 16).
+    /// </summary>
+    public void CheckIfStale()
+    {
+        lock (_gate)
+        {
+            if (_state is "checking" or "waiting" or "downloading" or "installing") return;
+            if (_checkedAt is { } at && _options.Time.GetUtcNow() - at < FreshFor) return;
+        }
+
+        _ = Task.Run(async () =>
+        {
+            try { await CheckAsync(_lifetime.Token).ConfigureAwait(false); }
+            catch (AgentFailure) { /* shown as the check's error */ }
+            catch (OperationCanceledException) { }
+        });
+    }
+
     /// <summary>Reads the channel's manifest; a different version than this one is on offer.</summary>
     public async Task<UpdateView> CheckAsync(CancellationToken ct)
     {
@@ -131,6 +167,8 @@ public sealed class AgentUpdater : IAsyncDisposable
             {
                 _state = "failed";
                 _error = failure.Message;
+                // A failed check counts as one: the pop-out does not ask the network again on every open.
+                _checkedAt = _options.Time.GetUtcNow();
             }
 
             throw;
@@ -170,7 +208,7 @@ public sealed class AgentUpdater : IAsyncDisposable
     {
         try
         {
-            while (!_idle()) await Task.Delay(TimeSpan.FromSeconds(5), _options.Time, ct).ConfigureAwait(false);
+            await WaitUntilIdleAsync(ct).ConfigureAwait(false);
             Set("downloading");
             var target = _install.DirectoryOf(package.Version);
             if (!Directory.Exists(target))
@@ -196,9 +234,11 @@ public sealed class AgentUpdater : IAsyncDisposable
             }
 
             Set("installing");
-            while (!_idle()) await Task.Delay(TimeSpan.FromSeconds(5), _options.Time, ct).ConfigureAwait(false);
+            await WaitUntilIdleAsync(ct).ConfigureAwait(false);
             _install.Write(new InstallState(package.Version, Running, Pending: true));
-            await _launcher.LaunchAsync(_install.ExecutableOf(package.Version), ct).ConfigureAwait(false);
+            // The surfaces open now open again in the new version (finding 5), the window first so the pop-out shows over it.
+            var surfaces = (OpenSurfaces?.Invoke() ?? []).Where(s => s is "pop" or "win").ToArray();
+            await _launcher.LaunchAsync(_install.ExecutableOf(package.Version), surfaces, ct).ConfigureAwait(false);
             _stop();
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -223,6 +263,36 @@ public sealed class AgentUpdater : IAsyncDisposable
     {
         lock (_gate) _state = state;
         _changed();
+    }
+
+    /// <summary>
+    /// Waits while something the user started is in flight, saying what (finding 21), and no longer than
+    /// <see cref="IdleLimit"/>: then the install goes ahead.
+    /// </summary>
+    private async Task WaitUntilIdleAsync(CancellationToken ct)
+    {
+        var until = _options.Time.GetUtcNow() + IdleLimit;
+        string before;
+        lock (_gate) before = _state;
+        var waited = false;
+        while (_busy() is { } what && _options.Time.GetUtcNow() < until)
+        {
+            lock (_gate)
+            {
+                _state = "waiting";
+                _waiting = what;
+            }
+
+            waited = true;
+            _changed();
+            await Task.Delay(IdlePoll, _options.Time, ct).ConfigureAwait(false);
+        }
+
+        lock (_gate)
+        {
+            _waiting = null;
+            if (waited) _state = before;
+        }
     }
 
     /// <summary>Downloads to <paramref name="path"/> and compares its SHA-256 with the manifest's; a mismatch deletes it.</summary>
@@ -323,7 +393,7 @@ public sealed class AgentUpdater : IAsyncDisposable
         catch (Exception) when (trial && state.Previous is not null)
         {
             install.Write(new InstallState(state.Previous, null));
-            await launcher.LaunchAsync(install.ExecutableOf(state.Previous), ct).ConfigureAwait(false);
+            await launcher.LaunchAsync(install.ExecutableOf(state.Previous), [], ct).ConfigureAwait(false);
             return false;
         }
 

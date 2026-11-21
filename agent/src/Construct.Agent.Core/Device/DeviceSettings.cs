@@ -13,6 +13,9 @@ public sealed record DeviceSettingsValue
 
     /// <summary>The VMs (<c>engine/vm</c>) whose microphone passthrough is on.</summary>
     public IReadOnlyList<string> Mic { get; init; } = [];
+
+    /// <summary>The notices put away on this device (a failed job's, by the UI's key), so every surface hides them; the newest 200.</summary>
+    public IReadOnlyList<string> Dismissed { get; init; } = [];
 }
 
 /// <summary>The device's own settings in <c>device.json</c> next to the state (0600).</summary>

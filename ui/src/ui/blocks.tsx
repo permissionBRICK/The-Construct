@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
 import type { AgentId, Everything, Job, SignIn, VaultRequest, Vm } from '../backend/types';
 import { spanChoices, spanText } from '../backend/api/map';
-import { failedTitle, jobWord, mainAction } from '../model/vm';
+import { failedTitle, jobWord, mainAction, repairWhen } from '../model/vm';
 import { AGENTS } from '../model/settings';
 import { linkParts, lostSignIns } from '../model/signin';
 import { openExternal } from './shell';
@@ -117,7 +117,7 @@ function Repair({ job }: { job: Job }) {
   const send = () => { if (asking && text.trim()) { be.replyRepair(job.id, text); setText(''); } };
   return (
     <div class="repair" aria-label="Repair agent">
-      <div class="bh"><Icon n="fix" /><b>{r.agent}</b>
+      <div class="bh"><Icon n="fix" /><b>{r.agent}</b><span class="d">{repairWhen(r)}</span>
         {r.t3Thread && <Btn sm icon="open" onClick={() => be.open(job.vmId, 't3')}>T3 Code</Btn>}
         {(r.state === 'working' || asking) && <Btn sm onClick={() => be.stopRepair(job.id)}>Stop</Btn>}
       </div>
@@ -150,7 +150,7 @@ export function JobBlock({ job, vm }: { job: Job; vm: Vm }) {
         {(log || !job.repair) && <LogView job={job} />}
         {pop && (job.repair || job.canRepair) && (
           <Btn icon="fix" onClick={() => { if (!job.repair || job.canRepair) be.startRepair(job.id); shell.openWindow({ page: 'home', arg: vm.id }); }}>
-            {job.repair && !job.canRepair ? job.repair.agent : 'Let an agent fix it'}
+            {job.repair && !job.canRepair ? `${job.repair.agent} · ${repairWhen(job.repair)}` : 'Let an agent fix it'}
           </Btn>
         )}
         {!pop && job.repair && <Repair job={job} />}
@@ -170,11 +170,11 @@ export function JobBlock({ job, vm }: { job: Job; vm: Vm }) {
       <div class="bh">
         <Icon n={job.kind === 'update' ? 'up' : job.kind === 'reinstall' ? 'wipe' : 'repro'} />
         <b>{word}</b>
-        <span class="m">{job.kind === 'update' ? `${job.from} → ${job.to}` : `${job.stepIndex + 1} / ${job.stepCount} · ${job.pct}%`}</span>
+        <span class="m">{job.pending ? '' : job.kind === 'update' ? `${job.from} → ${job.to}` : `${job.stepIndex + 1} / ${job.stepCount} · ${job.pct}%`}</span>
       </div>
       <Bar pct={job.pct} />
       {job.repair?.state === 'done' && <div class="msg okc">{job.repair.agent}: {job.repair.outcome}</div>}
-      <div class="bf"><span>{job.step}</span><Btn sm onClick={() => setLog(!log)}>Log</Btn><Btn sm onClick={() => be.stopJob(job.id)}>Stop</Btn></div>
+      <div class="bf"><span>{job.step}</span>{!job.pending && <><Btn sm onClick={() => setLog(!log)}>Log</Btn><Btn sm onClick={() => be.stopJob(job.id)}>Stop</Btn></>}</div>
       {log && <LogView job={job} />}
     </div>
   );
