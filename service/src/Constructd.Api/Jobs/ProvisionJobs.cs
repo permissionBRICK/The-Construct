@@ -250,11 +250,14 @@ public sealed class ProvisionJobs(IJobStore jobs, IJobQueryStore history, IPersi
                 : async (progress, token) =>
                 {
                     var dial = target;
-                    if (startFirst)
+                    var failed = new ProvisionJobResult(commit, "", state.Hash, channel, false, null, null, [], [], false, null);
+                    try
                     {
-                        try { dial = await starter.RunAsync(id, vm, new ProvisionJobResult(commit, "", state.Hash, channel, false, null, null, [], [], false, null), progress, token); }
-                        catch { request.Secrets.Clear(); throw; }
+                        if (startFirst) dial = await starter.RunAsync(id, vm, failed, progress, token);
+                        // A VM the user started a moment ago may still be booting: the job waits for it instead of failing its copy.
+                        else if (request.StartStopped) dial = await starter.AnswerAsync(id, vm, dial!, failed, progress, token);
                     }
+                    catch { request.Secrets.Clear(); throw; }
 
                     return await job.RunAsync(new ProvisionRun(id, vm, dial!, commit, state, channel, request.DeferProjectCommands,
                         options.Iso.SeedUser, dial!.IsRoot ? targets.BootstrapPublicKey() : null, request.Secrets), progress, token);

@@ -120,6 +120,55 @@ public sealed class ProvisionStartTests
     }
 
     [Fact]
+    public async Task A_manual_provision_waits_for_a_running_vm_that_does_not_answer_yet()
+    {
+        // FatPC 2026-11-22: the user started the VM by hand while the host updated; the reprovision found it running but
+        // still booting and failed its copy within seconds.
+        await using var h = await StartAsync();
+        var calls = 0;
+        h.Ssh.Reachable = _ => Interlocked.Increment(ref calls) > 1;
+
+        var job = await h.RunAsync("second");
+
+        Assert.Equal(JobState.Succeeded, job.State);
+        var steps = job.Progress.Where(p => p.Step is not null).Select(p => p.Step).Distinct().ToArray();
+        Assert.Equal("start", steps[0]);
+        Assert.Contains(job.Progress, p => p is { Step: "start", State: "succeeded" });
+        Assert.Contains(job.Progress, p => p.Label == "Waiting for the VM");
+        Assert.Equal(0, Starts(h.App, ProvisionHarness.Vm));
+    }
+
+    [Fact]
+    public async Task A_running_vm_that_never_answers_fails_the_manual_provision_after_the_wait()
+    {
+        await using var h = await StartAsync(sshWaitSeconds: 1);
+        h.Ssh.Reachable = _ => false;
+
+        var job = await h.RunAsync("second");
+
+        Assert.Equal(JobState.Failed, job.State);
+        Assert.Equal("guest-unreachable: The VM runs but did not answer over SSH within 1 second. Retry once it is up.", job.Error);
+        Assert.Equal("start", ProvisionHarness.Result(job).FailedStep);
+        Assert.Equal(0, Starts(h.App, ProvisionHarness.Vm));
+    }
+
+    [Fact]
+    public async Task The_engines_own_reprovision_does_not_wait_for_a_running_vm_that_does_not_answer()
+    {
+        await using var h = await StartAsync(sshWaitSeconds: 60);
+        using var admin = await h.App.CreateUserClientAsync("root", Role.Admin);
+        h.Ssh.Reachable = _ => false;
+
+        var started = DateTime.UtcNow;
+        Assert.Equal(HttpStatusCode.Accepted, (await admin.PostAsync("/api/v1/host/vms/reprovision", null)).StatusCode);
+        var job = await WaitForJobsAsync(h.App, ProvisionHarness.Vm, 2);
+
+        Assert.Equal(JobState.Failed, job.State);
+        Assert.Equal("copy", ProvisionHarness.Result(await h.Client.WaitForJobAsync(job.Id)).FailedStep);
+        Assert.True(DateTime.UtcNow - started < TimeSpan.FromSeconds(30), "The engine's own reprovision waited.");
+    }
+
+    [Fact]
     public async Task My_vms_reprovision_starts_each_of_my_vms_that_is_off()
     {
         await using var h = await StartAsync();
