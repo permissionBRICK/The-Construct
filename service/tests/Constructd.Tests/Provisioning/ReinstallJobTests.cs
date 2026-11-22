@@ -416,6 +416,55 @@ public sealed class ReinstallJobTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task A_reinstall_with_warnings_is_repaired_by_hand_and_followed_by_a_provision_never_a_second_reinstall()
+    {
+        Constructd.Api.Repair.RepairSessions.RebootProbeDelay = TimeSpan.FromMilliseconds(20);
+        var guest = new FakeBackupGuest { Provision = _ => (3, FakeSshRunner.WithErrors(("Installing SDKs", 2, "/var/log/construct/provision/step-0.log"))) };
+        var h = await HostAsync(guest);
+        JobRetryTests.Installed(h);
+        var reinstall = await ReinstallAsync(h, "reinstall-1");
+        Assert.True(reinstall.State == JobState.Succeeded, reinstall.Error);
+        Assert.Equal(["Installing SDKs"], reinstall.Warnings);
+
+        var started = await h.Client.PostAsync($"/api/v1/vms/{ProvisionHarness.Vm}/repair", null);
+        Assert.Equal(HttpStatusCode.Accepted, started.StatusCode);
+        var session = await started.ReadAsync<RepairSessionResponse>();
+        Assert.Equal((reinstall.Id, JobKinds.Reinstall), (session.JobId, session.JobKind));
+        async Task<RepairSessionResponse> InState(string state)
+        {
+            var until = DateTime.UtcNow.AddSeconds(20);
+            while (DateTime.UtcNow < until)
+            {
+                var read = await h.Client.GetAsync($"/api/v1/vms/{ProvisionHarness.Vm}/repair");
+                if (read.StatusCode == HttpStatusCode.OK && await read.ReadAsync<RepairSessionResponse>() is { } s && s.State == state) return s;
+                await Task.Delay(25);
+            }
+
+            throw new TimeoutException("repair " + state);
+        }
+
+        await InState("waiting");
+        var command = Assert.Single(h.App.Service<Constructd.Fakes.FakeGuestSessionRunner>().Sessions).Command;
+        Assert.EndsWith(" --via t3 --kind reinstall --warned' 2>&1", command, StringComparison.Ordinal);
+        var prompt = Encoding.UTF8.GetString(Convert.FromBase64String(command.Split("--prompt-b64 ")[1].Split('\'', ' ')[0]));
+        Assert.Contains("it does not reinstall it, so a fix inside this VM stays", prompt, StringComparison.Ordinal);
+        Assert.DoesNotContain("builds this VM anew", prompt, StringComparison.Ordinal);
+
+        guest.Provision = _ => (0, FakeSshRunner.Clean);
+        var creates = h.App.Driver.Calls.Count(c => c.StartsWith("create:", StringComparison.Ordinal));
+        (await h.Client.PostJsonAsync($"/api/v1/vms/{ProvisionHarness.Vm}/repair/{session.Id}/reply", new { text = "A" })).EnsureSuccessStatusCode();
+        var ended = await InState("ended");
+        Assert.Equal("fixed", ended.Outcome);
+
+        // A provision with the stored settings: no new VM, no second backup or restore, which would undo the fix.
+        var after = await h.Client.WaitForJobAsync(ended.RetryJobId!);
+        Assert.Equal((JobKinds.Provision, JobState.Succeeded), (after.Kind, after.State));
+        Assert.Equal(creates, h.App.Driver.Calls.Count(c => c.StartsWith("create:", StringComparison.Ordinal)));
+        Assert.Single(guest.Made.Keys);
+        Assert.Single(guest.Restored);
+    }
+
+    [Fact]
     public async Task Retrying_a_reinstall_whose_restore_started_never_deletes_the_VM_again()
     {
         var guest = new FakeBackupGuest { RestoreExit = 10 };

@@ -51,15 +51,17 @@ public static partial class RepairScript
     /// <summary>
     /// Runs the script as root. The prompt goes base64-encoded, the session id is checked, and
     /// nothing a user typed is on this command line: replies go on stdin. <paramref name="inT3"/> asks for a
-    /// T3 Code thread named after the job's <paramref name="kind"/> (<c>--via t3</c>); without it the script
-    /// runs the agent directly, as every guest's script does.
+    /// T3 Code thread named after the job's <paramref name="kind"/> (<c>--via t3</c>), and after its warnings when
+    /// it succeeded (<paramref name="warned"/>, <c>--warned</c>); without it the script runs the agent directly, as
+    /// every guest's script does.
     /// </summary>
-    public static string StartCommand(string sessionId, string jobPrompt, bool connectedAsRoot, bool inT3 = false, string? kind = null)
+    public static string StartCommand(string sessionId, string jobPrompt, bool connectedAsRoot, bool inT3 = false, string? kind = null, bool warned = false)
     {
         if (!IsSessionId(sessionId)) throw new ArgumentException("Invalid session id.", nameof(sessionId));
         if (inT3 && (kind is null || !KindPattern().IsMatch(kind))) throw new ArgumentException("Invalid job kind.", nameof(kind));
         var prompt = Convert.ToBase64String(Encoding.UTF8.GetBytes(jobPrompt));
-        return AsRoot($"bash {ScriptPath} --session {sessionId} --prompt-b64 {prompt}" + (inT3 ? $" --via t3 --kind {kind}" : ""), connectedAsRoot);
+        return AsRoot($"bash {ScriptPath} --session {sessionId} --prompt-b64 {prompt}" + (inT3 ? $" --via t3 --kind {kind}" + (warned ? " --warned" : "") : ""),
+            connectedAsRoot);
     }
 
     /// <summary>Ends a session's processes on the guest, whatever became of its connection.</summary>
@@ -79,9 +81,11 @@ public static partial class RepairScript
     /// <summary>
     /// The job's part of the prompt (the rules come from <c>config/repair-prompt.md</c> on the guest),
     /// or null when the job did not fail in a way an agent on the VM can repair: a provision or a
-    /// reinstall with failed guest steps, or a restore whose guest side failed.
+    /// reinstall with failed guest steps, or a restore whose guest side failed. <paramref name="warned"/>: the job
+    /// succeeded and only optional steps failed (its warnings); after the fix the engine provisions the VM, so the
+    /// text says neither that the job failed nor that it runs again.
     /// </summary>
-    public static string? JobPrompt(string kind, JsonElement? result, IReadOnlyList<JobProgressLine> log)
+    public static string? JobPrompt(string kind, JsonElement? result, IReadOnlyList<JobProgressLine> log, bool warned = false)
     {
         if (result is not { ValueKind: JsonValueKind.Object } r) return null;
         var lines = new List<string>();
@@ -89,11 +93,21 @@ public static partial class RepairScript
         {
             case JobKinds.Provision:
                 lines.AddRange(FixPrompt(r));
+                if (warned && lines.Count > 0)
+                {
+                    lines.Insert(0, "The provision of this VM finished; only the optional steps below failed.");
+                    lines.Add("When the cause is fixed, the engine provisions this VM again.");
+                }
                 break;
             case JobKinds.Reinstall:
                 if (r.TryGetProperty("provision", out var provision) && provision.ValueKind == JsonValueKind.Object)
                     lines.AddRange(FixPrompt(provision));
-                if (lines.Count > 0)
+                if (lines.Count > 0 && warned)
+                {
+                    lines.Insert(0, "This VM was just reinstalled from a fresh image; only the optional steps below failed.");
+                    lines.Add("When the cause is fixed, the engine provisions this VM again; it does not reinstall it, so a fix inside this VM stays.");
+                }
+                else if (lines.Count > 0)
                 {
                     lines.Insert(0, "This VM was just reinstalled from a fresh image and is being provisioned again.");
                     lines.Add("Running the reinstall again builds this VM anew from the same backup: a fix inside this VM is lost then. "

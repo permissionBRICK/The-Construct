@@ -2,13 +2,13 @@
 # construct-repair-agent.sh -- the repair agent without a terminal (design 11.5).
 #
 # The Construct engine starts it over SSH, as root, when a provision, reinstall or restore
-# job fails. It runs an AI coding agent on the fix prompt and reports what the agent says
-# and does as JSON lines on stdout; each line on stdin is a reply from the user, which
-# continues the same conversation. bin/construct-agent-fix.sh stays the interactive
-# counterpart for the old client's console.
+# job fails, or by request for one that succeeded with failed optional steps. It runs an AI
+# coding agent on the fix prompt and reports what the agent says and does as JSON lines on
+# stdout; each line on stdin is a reply from the user, which continues the same conversation.
+# bin/construct-agent-fix.sh stays the interactive counterpart for the old client's console.
 #
 #   bash /opt/construct/repo/bin/construct-repair-agent.sh --session ID --prompt-b64 B64 \
-#     [--agent claude|codex|opencode] [--via direct|t3] [--kind provision|reinstall|restore]
+#     [--agent claude|codex|opencode] [--via direct|t3] [--kind provision|reinstall|restore] [--warned]
 #   bash /opt/construct/repo/bin/construct-repair-agent.sh --stop --session ID
 #
 # --via t3 (the engine's default) starts the repair as a T3 Code thread in the VM (`t3 thread
@@ -16,8 +16,10 @@
 # follows and answers it in T3 Code; the script then follows the thread's runs with `t3 thread
 # show` and reports them as below. A reply on stdin goes to the thread with `t3 thread send`.
 # The t3 CLI cannot stop a thread: ending the session (stdin, --stop) ends the following, and
-# the thread itself goes on in T3 Code until the user stops it there. When T3 Code is not
-# installed or running, or cannot start the thread, a note says so and the agent runs directly.
+# the thread itself goes on in T3 Code until the user stops it there. The thread is named after
+# the job's --kind and how it ended (--warned: it succeeded with failed optional steps). When
+# T3 Code is not installed or running, or cannot start the thread, a note says so and the agent
+# runs directly.
 #
 # The prompt is config/repair-prompt.md followed by the job's part (what failed, which
 # logs), which arrives base64-encoded so no shell between the engine and this script
@@ -72,6 +74,7 @@ prompt_b64=""
 agent=""
 via=""
 kind=""
+warned=""
 stop=0
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -80,6 +83,7 @@ while [ "$#" -gt 0 ]; do
     --agent) [ "$#" -ge 2 ] || usage; agent="$2"; shift 2 ;;
     --via) [ "$#" -ge 2 ] || usage; via="$2"; shift 2 ;;
     --kind) [ "$#" -ge 2 ] || usage; kind="$2"; shift 2 ;;
+    --warned) warned="--warned"; shift ;;
     --stop) stop=1; shift ;;
     *) usage ;;
   esac
@@ -113,7 +117,7 @@ fi
 # process the agent started, whatever the connection does.
 if [ -z "${CONSTRUCT_REPAIR_LEADER:-}" ]; then
   CONSTRUCT_REPAIR_LEADER=1 exec setsid -w bash "${BASH_SOURCE[0]}" --session "${session}" --prompt-b64 "${prompt_b64}" \
-    ${agent:+--agent "${agent}"} ${via:+--via "${via}"} ${kind:+--kind "${kind}"}
+    ${agent:+--agent "${agent}"} ${via:+--via "${via}"} ${kind:+--kind "${kind}"} ${warned}
 fi
 
 if ! command -v jq >/dev/null 2>&1; then
@@ -393,6 +397,7 @@ T3_THREAD=""
 # Starts the thread and says so in the start line; fails with a note when T3 Code cannot take it.
 start_t3() {
   local title="Construct repair${kind:+: ${kind} failed}" launched env why
+  [ -z "${warned}" ] || title="Construct repair${kind:+: ${kind} warnings}"
   if ! command -v t3 >/dev/null 2>&1; then
     emit note "T3 Code is not installed on this VM; the repair runs here instead."
     return 1

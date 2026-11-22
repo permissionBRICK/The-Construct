@@ -318,6 +318,88 @@ public sealed class RepairAgentTests
         Assert.Contains("repair-running", await twice.Content.ReadAsStringAsync(), StringComparison.Ordinal);
     }
 
+    // Only an optional step fails: the job ends succeeded, with the step as its warning.
+    private static FakeSshRunner Warning() => new() { Provision = _ => (3, FakeSshRunner.WithErrors(("Installing SDKs", 2, Log))) };
+
+    [Fact]
+    public async Task A_provision_with_warnings_is_repaired_only_by_hand_and_its_fix_provisions_the_vm_again()
+    {
+        await using var h = await ProvisionHarness.StartAsync(Warning());
+        JobRetryTests.Installed(h);
+        var admin = await h.App.CreateUserClientAsync("root", Role.Admin);
+        Assert.True((await (await admin.GetAsync("/api/v1/host/config")).ReadAsync<JsonElement>()).GetProperty("repair").GetProperty("auto").GetBoolean());
+        var warned = await h.RunAsync("click-1");
+        Assert.Equal(JobState.Succeeded, warned.State);
+        Assert.Equal(["Installing SDKs"], warned.Warnings);
+
+        // Never by itself, although the host repairs failed jobs by itself.
+        await Task.Delay(500);
+        Assert.Empty(Guests(h).Sessions);
+        Assert.Equal(HttpStatusCode.NotFound, (await h.Client.GetAsync($"/api/v1/vms/{ProvisionHarness.Vm}/repair")).StatusCode);
+
+        var started = await h.Client.PostAsync($"/api/v1/vms/{ProvisionHarness.Vm}/repair", null);
+        Assert.Equal(HttpStatusCode.Accepted, started.StatusCode);
+        var session = await started.ReadAsync<RepairSessionResponse>();
+        Assert.Equal((warned.Id, JobKinds.Provision, false), (session.JobId, session.JobKind, session.Automatic));
+        // The run rebooted the VM: the agent starts once it answers again.
+        await InState(h.Client, "waiting");
+        var guest = Assert.Single(Guests(h).Sessions);
+        Assert.EndsWith(" --via t3 --kind provision --warned' 2>&1", guest.Command, StringComparison.Ordinal);
+        var prompt = Encoding.UTF8.GetString(Convert.FromBase64String(guest.Command.Split("--prompt-b64 ")[1].Split('\'', ' ')[0]));
+        Assert.StartsWith("The provision of this VM finished; only the optional steps below failed.\n", prompt, StringComparison.Ordinal);
+        Assert.Contains("Step 'Installing SDKs' failed (exit 2); log: " + Log, prompt, StringComparison.Ordinal);
+        Assert.Contains("When the cause is fixed, the engine provisions this VM again.", prompt, StringComparison.Ordinal);
+
+        h.App.Clock.Advance(TimeSpan.FromMinutes(1));
+        // The provision after the fix fails: as the fix's one run it starts no repair by itself.
+        h.Ssh.Provision = Failing().Provision;
+        (await h.Client.PostAsJsonAsync($"/api/v1/vms/{ProvisionHarness.Vm}/repair/{session.Id}/reply", new { text = "A" })).EnsureSuccessStatusCode();
+        var ended = await InState(h.Client, "ended");
+        Assert.Equal("fixed", ended.Outcome);
+        Assert.Contains(ended.Lines, l => l.Kind == "retry" && l.Text == $"The VM is provisioned again (job {ended.RetryJobId}).");
+        var retry = await h.Client.WaitForJobAsync(ended.RetryJobId!);
+        Assert.Equal((JobKinds.Provision, JobState.Failed), (retry.Kind, retry.State));
+        var stored = (await h.App.Service<Constructd.Core.Abstractions.IJobQueryStore>().ListAsync(default)).Single(j => j.Id == retry.Id);
+        Assert.Equal("retry:" + warned.Id, stored.OperationKey);
+        await Task.Delay(300);
+        Assert.Single(Guests(h).Sessions);
+    }
+
+    [Fact]
+    public async Task Only_the_latest_job_with_warnings_is_repaired_and_a_clean_one_is_not()
+    {
+        await using var h = await ProvisionHarness.StartAsync(Warning());
+        JobRetryTests.Installed(h);
+        var first = await h.RunAsync("click-1");
+        h.App.Clock.Advance(TimeSpan.FromMinutes(1));
+        var second = await h.RunAsync("click-2");
+        Assert.Equal(["Installing SDKs"], second.Warnings);
+
+        var started = await h.Client.PostAsync($"/api/v1/vms/{ProvisionHarness.Vm}/repair", null);
+        Assert.Equal(HttpStatusCode.Accepted, started.StatusCode);
+        var session = await started.ReadAsync<RepairSessionResponse>();
+        Assert.Equal(second.Id, session.JobId);
+        await InState(h.Client, "waiting");
+        Assert.Equal(HttpStatusCode.NoContent, (await h.Client.DeleteAsync($"/api/v1/vms/{ProvisionHarness.Vm}/repair/{session.Id}")).StatusCode);
+        await InState(h.Client, "ended");
+
+        // The earlier job is no longer the VM's latest one.
+        var repairs = h.App.Service<RepairSessions>();
+        var vm = (await h.App.Vms.GetAsync(ProvisionHarness.Vm, default))!;
+        var job = (await h.App.Service<Constructd.Core.Abstractions.IJobStore>().GetAsync(first.Id, default))!;
+        var refused = await Assert.ThrowsAsync<RepairRefusedException>(() => repairs.StartAsync(vm, job, automatic: false, null, default));
+        Assert.Equal("job-superseded", refused.Code);
+
+        // A job that succeeded without warnings has nothing to repair.
+        h.App.Clock.Advance(TimeSpan.FromMinutes(1));
+        h.Ssh.Provision = _ => (0, FakeSshRunner.Clean);
+        Assert.Null((await h.RunAsync("click-3")).Warnings);
+        var clean = await h.Client.PostAsync($"/api/v1/vms/{ProvisionHarness.Vm}/repair", null);
+        Assert.Equal(HttpStatusCode.Conflict, clean.StatusCode);
+        Assert.Contains("no-failed-job", await clean.Content.ReadAsStringAsync(), StringComparison.Ordinal);
+        Assert.Single(Guests(h).Sessions);
+    }
+
     [Fact]
     public async Task A_failure_outside_the_guest_steps_is_not_repaired()
     {

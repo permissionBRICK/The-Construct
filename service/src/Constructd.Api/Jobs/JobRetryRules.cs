@@ -14,12 +14,17 @@ public static class JobRetryRules
     /// <summary>The request id of the one retry a failed job gets; a repeat finds the retry it started.</summary>
     public static string RequestId(Job failed) => "retry:" + failed.Id;
 
-    /// <summary>Why <paramref name="failed"/> cannot be retried on <paramref name="vm"/>, as (status, code, message), or null.</summary>
-    public static (int Status, string Code, string Message)? Refusal(Job failed, Vm vm, IEnumerable<Job> all)
+    /// <summary>
+    /// Why <paramref name="failed"/> cannot be retried on <paramref name="vm"/>, as (status, code, message), or null.
+    /// <paramref name="orSucceeded"/>: a job that succeeded passes too. The repair agent works on a job that succeeded with
+    /// failed optional steps (its warnings) under the same rules, and only a provision follows its fix.
+    /// </summary>
+    public static (int Status, string Code, string Message)? Refusal(Job failed, Vm vm, IEnumerable<Job> all, bool orSucceeded = false)
     {
         if (!IsLifecycleKind(failed.Kind) || failed.VmName is null)
             return (409, "not-retryable", $"A {failed.Kind} job cannot be retried.");
-        if (failed.State != JobState.Failed) return (409, "job-not-failed", "Only a failed job can be retried.");
+        if (failed.State != JobState.Failed && !(orSucceeded && failed.State == JobState.Succeeded))
+            return (409, "job-not-failed", "Only a failed job can be retried.");
         // The same VM: one created again under the name, by anybody, is not the one the job ran on.
         if (!Ownership.SameName(vm.Name, failed.VmName) || !Ownership.SameName(vm.Owner, failed.Owner) || vm.Created > failed.Created)
             return (409, "vm-changed", "The VM this job ran on no longer exists.");

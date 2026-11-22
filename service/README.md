@@ -441,7 +441,9 @@ When a `provision`, `reinstall` or `restore` job fails in a guest step (a provis
 S26) unless the host setting `repair.auto` (`PUT /host/config`, default `true`) is off. It runs
 `bin/construct-repair-agent.sh` as root over SSH with the job's part of the prompt (the `fixPrompt`, the end of
 the job's log); the script adds `config/repair-prompt.md` and reports JSON lines. When the
-failed run rebooted the VM, the repair waits up to five minutes for SSH first.
+failed run rebooted the VM, the repair waits up to five minutes for SSH first. A `provision` or `reinstall` that
+succeeded although optional guest steps failed (its `warnings`) is repaired only by hand (owner, 2026-11-22): the
+prompt says the job finished and which steps failed, and the T3 Code thread is named after the warnings (`--warned`).
 
 By default (owner, 2026-11-21) the script starts the repair as a T3 Code thread in the VM (`--via t3`: `t3 thread
 start` in the project "Construct repair", folder `/var/lib/construct/repair`) and follows its runs with `t3 thread
@@ -457,8 +459,8 @@ user answers in Construct's chat under the failed job.
   reply, `ended`), `outcome` (`fixed`, `stopped`, `superseded`, `error`), the agent (`agent`, `via`: `t3`/`t3` or
   `claude`, `codex`, `opencode`/`direct`), the T3 Code thread (`t3Thread`), and its kept `lines` after `SEQ` (the last 400: `start`, `note`, `text`,
   `tool`, `error`, `turn`, `run`, `end`, `reply`, `retry`, `log`). `GET /vms/{name}/repair/{id}` reads one session.
-- `POST /vms/{name}/repair` starts one for the VM's latest failed lifecycle job (`409 no-failed-job`,
-  `not-repairable`, `repair-running`, `operation-in-progress`).
+- `POST /vms/{name}/repair` starts one for the VM's latest lifecycle job when it failed or succeeded with warnings
+  (`409 no-failed-job`, `not-repairable`, `repair-running`, `operation-in-progress`).
 - `POST /vms/{name}/repair/{id}/reply` `{text}` writes one line to the agent's stdin; the agent continues the
   same conversation (a T3 Code thread gets it with `t3 thread send`). `409 repair-ended` once it is over. The text
   never reaches a command line.
@@ -479,7 +481,8 @@ a delete) ends the repair first and waits until its processes on the VM are gone
 background passes that only look at the VM do not. When the agent ends saying it fixed the cause, the engine
 retries the failed job once by the retry route's rules (`retryJobId`, or `retryRefused` with the reason: a
 restore needs its backup's key from a device), and a retry that fails starts no second repair; a repair by
-hand still can. The output can hold what the VM holds: it lives in the engine's memory only, never in the
+hand still can. After the fix of a job with warnings the engine runs a `provision` of the VM with its stored
+settings instead, under the same rules and marking, never the reinstall again (it would undo a fix made inside the VM). The output can hold what the VM holds: it lives in the engine's memory only, never in the
 database or a log, and an engine restart ends every session.
 
 ### Signing in to the coding agents

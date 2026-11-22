@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { FakeBackend, SCENES } from '../../src/backend/fake';
-import { activeJob } from '../../src/model/vm';
+import { activeJob, warnedJob } from '../../src/model/vm';
 
 beforeEach(() => vi.useFakeTimers());
 afterEach(() => vi.useRealTimers());
@@ -356,6 +356,23 @@ describe('FakeBackend', () => {
     run(100);
     expect(be.snapshot().signIn).toBeNull();
     expect(be.snapshot().vms[0].agents.find(a => a.id === 'codex')!.signedIn).toBe(true);
+  });
+
+  it('repairs a job with warnings only when asked, then reprovisions', () => {
+    const be = new FakeBackend({ scene: 'warned', tick: 10 });
+    be.setRepairChat(be.snapshot().vms.find(v => v.id === 'atlas')!.hostId, true);
+    run(500);
+    let j = warnedJob(be.snapshot(), 'atlas')!;
+    expect(j).toMatchObject({ canRepair: true, repair: null });
+    be.startRepair(j.id);
+    run(500);
+    j = warnedJob(be.snapshot(), 'atlas')!;
+    expect(j).toMatchObject({ canRepair: false, repair: { state: 'asking' } });
+    be.replyRepair(j.id, 'stop them');
+    run(40);
+    expect(warnedJob(be.snapshot(), 'atlas')!.repair!.state).toBe('done');
+    run(40);
+    expect(activeJob(be.snapshot(), 'atlas')).toMatchObject({ kind: 'reprovision', state: 'running' });
   });
 
   it('starts the repair agent by hand where the host does not, and stops it', () => {

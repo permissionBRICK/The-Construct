@@ -11,7 +11,7 @@ import { agentList, agentSwitches, DEFAULT_AGENTS } from '../../model/settings';
 import {
   updateRunning, allowanceOf, codeGroups, hostVersion, jobKey, problemText, splitJobKey, toCert, toConfig, toDevice, toHostJob, toHostUser, toHostVm, toJob,
   toMedia, toStatus, toUpdates, toUsage, toVm, toWindows, vmKey, toSecret, toLeases, toVaultEvent, toApproval, toEntryRequest, toProfile, splitRequestKey, requestKey, VM_JOB_KINDS,
-  settingsFields, withDesired, codingAgents, toLink, toEverything, hostKind, toIsos, toRepair, REPAIRABLE, upgradeStep, toUpgradeItem, toUpstream,
+  settingsFields, withDesired, codingAgents, toLink, toEverything, hostKind, toIsos, toRepair, repairable, upgradeStep, toUpgradeItem, toUpstream,
   type RepairSession, type UpstreamView, type RepairLine, type UpgradeView, type AgentSignIn,
   type DeviceItem, type ProfileResponse, type AuditEntry, type EngineView, type Health, type HostUpdateStatus, type HttpsStatus, type JobResponse, type MediaItem, type TokenSummary,
   type UsageSummary, type UserDetail, type VmParts, type VmResponse, type WhoAmI, type HostStatus, type HostConfig, type HostWindows, type HostCapabilities, type IsoCatalog,
@@ -606,11 +606,11 @@ export class ApiBackend implements Backend {
         problems,
       });
     }));
-    // A failed job's VM is asked once for its repair session, which may have run before this page opened; events
-    // follow it from there.
+    // A failed job's VM (or one whose job has warnings) is asked once for its repair session, which may have run
+    // before this page opened; events follow it from there.
     for (const v of sl.mine) {
       const newest = this.newestJob(sl, v.name);
-      if (newest?.state === 'failed' && REPAIRABLE.has(newest.kind) && !sl.repairChecked.has(newest.id)) {
+      if (newest && repairable(newest) && !sl.repairChecked.has(newest.id)) {
         sl.repairChecked.add(newest.id);
         void this.readRepair(id, v.name);
       }
@@ -727,14 +727,14 @@ export class ApiBackend implements Backend {
     return own.sort((a, b) => a.created.localeCompare(b.created)).at(-1);
   }
 
-  /** The repair session of this VM that belongs to the job: the one on a failed job, or, on the job the engine
-      retried after a fix, the fix. A session of another job or VM is never shown here. */
+  /** The repair session of this VM that belongs to the job: the one on a failed job or a job with warnings, or, on
+      the job the engine started after a fix, the fix. A session of another job or VM is never shown here. */
   private withRepair(sl: Slice, vm: string, raw: JobResponse, job: Job) {
     const rep = sl.repairs.get(vm.toLowerCase());
-    if (raw.state === 'failed') {
+    if (raw.state === 'failed' || job.warnings?.length) {
       const own = rep && rep.sess.jobId === raw.id ? rep : null;
       job.repair = own ? toRepair(own.sess, own.lines, sl.replying.has(own.sess.id)) : null;
-      job.canRepair = REPAIRABLE.has(raw.kind) && !sl.repairStarting.has(raw.id) && (!own || (own.sess.state === 'ended' && own.sess.outcome !== 'fixed'));
+      job.canRepair = repairable(raw) && !sl.repairStarting.has(raw.id) && (!own || (own.sess.state === 'ended' && own.sess.outcome !== 'fixed'));
     } else if (rep && rep.sess.retryJobId === raw.id && rep.sess.state === 'ended' && rep.sess.outcome === 'fixed') {
       job.repair = toRepair(rep.sess, rep.lines);
     }
@@ -1097,11 +1097,11 @@ export class ApiBackend implements Backend {
     return { job, engine, sl, vm: ref.name, raw, rep: rep && rep.sess.jobId === raw.id ? rep : null };
   }
 
-  /** "Let an agent fix it": the engine starts the agent on the VM's latest failed job. One the host started
-      meanwhile is followed instead. */
+  /** "Let an agent fix it": the engine starts the agent on the VM's latest failed job, or its job with warnings. One the
+      host started meanwhile is followed instead. */
   startRepair(key: string) {
     const x = this.repairOf(key);
-    if (!x || x.raw.state !== 'failed' || !x.job.canRepair) return;
+    if (!x || !repairable(x.raw) || !x.job.canRepair) return;
     x.sl.repairStarting.add(x.raw.id);
     this.compose();
     const c = this.engine(x.engine);

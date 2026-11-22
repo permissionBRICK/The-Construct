@@ -467,8 +467,16 @@ export const codeGroups = (code: string) => code.split(/[\s-]+/).filter(Boolean)
 
 export type RepairSession = E['schemas']['RepairSessionResponse'];
 export type RepairLine = E['schemas']['RepairLineResponse'];
-/** Engine job kinds the repair agent works on. */
-export const REPAIRABLE = new Set(['provision', 'reinstall', 'restore']);
+/** Engine job kinds the repair agent works on when they failed. */
+const REPAIRABLE = new Set(['provision', 'reinstall', 'restore']);
+/** Kinds whose warnings (optional steps that failed) it works on, asked for by hand only: a restore's are not its. */
+const WARNINGS_REPAIRABLE = new Set(['provision', 'reinstall']);
+
+/** Whether the repair agent can work on a job: one that failed, or one that succeeded with warnings. */
+export function repairable(j: JobResponse): boolean {
+  if (j.state === 'failed') return REPAIRABLE.has(j.kind);
+  return j.state === 'succeeded' && !!(j as JobResponse & JobExtras).warnings?.length && WARNINGS_REPAIRABLE.has(j.kind);
+}
 const AGENT_NAMES: Record<string, string> = { claude: 'Claude Code', codex: 'Codex', opencode: 'OpenCode', t3: 'T3 Code' };
 
 /** One line of a session as the chat shows it, or null for lines that are not shown (the start, a turn's end, the retry: the outcome says it). */

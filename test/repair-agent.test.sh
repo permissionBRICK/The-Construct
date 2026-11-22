@@ -242,7 +242,8 @@ ok "ends fixed" [ "$(jq -sr 'last | .outcome' "${out}")" = fixed ]
 echo "T3 Code: the end of stdin ends following the thread"
 state run-1 run-1 0 >"${T3STATES}"
 rm -f "${T3CALLS}"
-( sleep 1 ) | PATH="$(only t3):/usr/bin:/bin" timeout 30 bash "${SCRIPT}" --session sess7 --prompt-b64 "${prompt_b64}" --via t3 --kind reinstall >"${out}" 2>/dev/null
+( sleep 1 ) | PATH="$(only t3):/usr/bin:/bin" timeout 30 bash "${SCRIPT}" --session sess7 --prompt-b64 "${prompt_b64}" --via t3 --kind reinstall --warned >"${out}" 2>/dev/null
+ok "a job that succeeded with warnings names its thread after them" [ "$(count '.type=="start" and .title=="Construct repair: reinstall warnings"')" = 1 ]
 ok "ends stopped" [ "$(jq -sr 'last | .type + ":" + .outcome' "${out}")" = "end:stopped" ]
 # The reader removes the pid file once the rest of the session's group is gone.
 for _ in $(seq 80); do [ -e "${CONSTRUCT_REPAIR_RUN_DIR}/sess7.pid" ] || break; sleep 0.1; done
