@@ -311,7 +311,10 @@ one read per session at a time; a failed read is tried again on the session's ne
 here opens T3 Desktop on its `t3Thread` once per run of the agent, the same way as the open action with a thread,
 when the thread is first seen within 15 minutes of the session's `started`; without a thread yet it waits for the
 next event. Only the desktop app opens: without Construct's T3 Desktop on this PC, or for a thread without its
-environment, nothing does, and the failed job's button still opens T3 Code.
+environment, nothing does, and the failed job's button still opens T3 Code. The engine's stream repeats nothing
+from before the agent connected (`engine.reset`), so then each VM's latest repair is read once: a repair that started
+while the agent restarted and has gone quiet still opens. A session is remembered for 30 minutes after it was first
+seen, past its window, so it opens only once.
 
 ## Repair
 

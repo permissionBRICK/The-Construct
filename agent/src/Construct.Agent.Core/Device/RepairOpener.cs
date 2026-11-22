@@ -18,14 +18,17 @@ namespace Construct.Agent.Device;
 /// without it here, or for a thread without its environment, nothing opens and the failed job's button stays.</item>
 /// <item>Started here without a thread yet: it waits for the next event.</item>
 /// </list>
+/// The stream repeats nothing from before the agent connected (<c>engine.reset</c>): then each of the engine's VMs is
+/// asked for its latest repair once, so a repair that started while the agent restarted and has gone quiet still opens.
+/// A session is remembered for <see cref="Forget"/> after it was first seen, past its window, so it opens only once.
 /// </summary>
 public sealed class RepairOpener(AgentEvents events, IDeviceEngines engines, VmActions actions, TimeProvider time) : IAsyncDisposable
 {
     /// <summary>How long after a session's start its thread may still open (a failed job may wait five minutes for its rebooted VM first).</summary>
     public static readonly TimeSpan Window = TimeSpan.FromMinutes(15);
 
-    /// <summary>The sessions remembered; older ones are forgotten first (the window has long passed for them).</summary>
-    private const int Kept = 200;
+    /// <summary>How long a session is remembered after it was first seen: past its window, when it can no longer open.</summary>
+    public static readonly TimeSpan Forget = Window * 2;
 
     private readonly CancellationTokenSource _stopping = new();
     private readonly Dictionary<string, Session> _sessions = new(StringComparer.Ordinal);
@@ -53,17 +56,31 @@ public sealed class RepairOpener(AgentEvents events, IDeviceEngines engines, VmA
 
     private void Consider(AgentEvent item)
     {
+        if (item.Type == "engine.reset" && item.Engine is { } reset)
+        {
+            _ = Task.Run(() => DiscoverAsync(reset));
+            return;
+        }
+
         if (item.Type is not ("repair.started" or "repair.output") || item.Engine is not { } engine || item.Data is not JsonObject data ||
             Text(data["id"]) is not { } id || Text(data["vm"]) is not { } vm) return;
+        Consider(engine, vm, id);
+    }
+
+    private void Consider(string engine, string vm, string id)
+    {
         Session session;
         lock (_sessions)
         {
+            var now = time.GetUtcNow();
+            // Oldest first; one still being read stays, and with it the ones after it until the next pass.
+            while (_order.TryPeek(out var oldest) && _sessions[oldest] is { Reading: false } old && now - old.Seen > Forget)
+                _sessions.Remove(_order.Dequeue());
             var key = engine + "\n" + id;
             if (!_sessions.TryGetValue(key, out session!))
             {
-                _sessions[key] = session = new Session();
+                _sessions[key] = session = new Session { Seen = now };
                 _order.Enqueue(key);
-                while (_order.Count > Kept) _sessions.Remove(_order.Dequeue());
             }
 
             if (session.Decided) return;
@@ -112,6 +129,39 @@ public sealed class RepairOpener(AgentEvents events, IDeviceEngines engines, VmA
         }
     }
 
+    /// <summary>
+    /// After the engine's stream started over: each of its primary VMs is asked for its latest repair, which is then
+    /// considered as if an event had named it. A VM without one (or not readable now) is skipped.
+    /// </summary>
+    private async Task DiscoverAsync(string engine)
+    {
+        try
+        {
+            if (await engines.GetAsync(engine, "vms", _stopping.Token).ConfigureAwait(false) is not JsonArray vms) return;
+            foreach (var item in vms)
+            {
+                if (item is not JsonObject vm || Text(vm["name"]) is not { } name || Text(vm["kind"]) is { } kind && kind != "primary") continue;
+                try
+                {
+                    if (await engines.GetAsync(engine, $"vms/{Uri.EscapeDataString(name)}/repair?after={long.MaxValue}", _stopping.Token)
+                            .ConfigureAwait(false) is JsonObject latest && Text(latest["id"]) is { } id)
+                        Consider(engine, name, id);
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException || !_stopping.IsCancellationRequested)
+                {
+                    // No repair on this VM since the engine started, or not readable now.
+                }
+            }
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException || !_stopping.IsCancellationRequested)
+        {
+            // The engine's VMs are not readable now: nothing is opened from this reset.
+        }
+        catch (OperationCanceledException)
+        {
+        }
+    }
+
     private static string? Text(JsonNode? node) => node is JsonValue value && value.TryGetValue<string>(out var text) ? text : null;
 
     /// <summary>Reads the session and opens its thread when it should; true when nothing is left to do for it.</summary>
@@ -138,6 +188,7 @@ public sealed class RepairOpener(AgentEvents events, IDeviceEngines engines, VmA
     /// <summary>What is known of one session; guarded by the sessions' lock.</summary>
     private sealed class Session
     {
+        public DateTimeOffset Seen;
         public bool Decided;
         public bool Reading;
         public bool Again;

@@ -17,6 +17,15 @@ public sealed class RepairOpenerTests : IAsyncDisposable
     private readonly AgentEvents _events = new();
     private readonly FakeDevice _device;
     private readonly RepairOpener _opener;
+    private readonly ShiftedTime _time = new();
+
+    /// <summary>The system clock moved on by <see cref="Shift"/>.</summary>
+    private sealed class ShiftedTime : TimeProvider
+    {
+        public TimeSpan Shift;
+
+        public override DateTimeOffset GetUtcNow() => base.GetUtcNow() + Shift;
+    }
 
     public RepairOpenerTests()
     {
@@ -27,7 +36,7 @@ public sealed class RepairOpenerTests : IAsyncDisposable
             .On("e1", "GET vms/work/forwards", "[]")
             .On("e1", "GET vms/work/forwards?via=work", "[]");
         _device = new FakeDevice(_directory, engines, new FakePlatform { T3Desktop = true });
-        _opener = new RepairOpener(_events, _device.Engines, new VmActions(_device.Links, _device.Platform), TimeProvider.System);
+        _opener = new RepairOpener(_events, _device.Engines, new VmActions(_device.Links, _device.Platform), _time);
     }
 
     private async Task StartAsync()
@@ -201,6 +210,52 @@ public sealed class RepairOpenerTests : IAsyncDisposable
         await SettledAsync();
         Assert.Equal(2, Reads("s1"));
         lock (release) Assert.Equal(1, most);
+    }
+
+    [Fact]
+    public async Task A_repair_under_way_when_the_stream_starts_over_opens_from_the_reset()
+    {
+        await StartAsync();
+        // The agent connected after the repair started and it has gone quiet: no event names it.
+        _device.Engines.On("e1", $"GET vms/work/repair{After}", _ => Session("s1", ago: TimeSpan.FromMinutes(3)));
+        Answer("s1", () => Session("s1", ago: TimeSpan.FromMinutes(3)));
+        _events.Publish("engine.reset", "e1");
+        await FakeDevice.WaitAsync(() => Opened.Length > 0, "T3 Desktop");
+        Assert.Equal(["t3-desktop t3code://threads/env-1/thread-s1"], Opened);
+
+        // A later reset finds the same session decided.
+        _events.Publish("engine.reset", "e1");
+        await FakeDevice.WaitAsync(() => _device.Engines.CallsTo("e1").Count(c => c == $"GET vms/work/repair{After}") >= 2, "second reset");
+        await SettledAsync();
+        Assert.Single(Opened);
+        Assert.Equal(1, Reads("s1"));
+    }
+
+    [Fact]
+    public async Task An_opened_session_is_remembered_past_its_window_however_many_others_come()
+    {
+        await StartAsync();
+        Answer("s1", () => Session("s1"));
+        Event("repair.started", "s1");
+        await FakeDevice.WaitAsync(() => Opened.Length > 0, "T3 Desktop");
+
+        for (var i = 0; i < 250; i++)
+        {
+            var other = "other-" + i;
+            Answer(other, () => Session(other, startedHere: false));
+            Event("repair.started", other);
+        }
+        Event("repair.output", "s1");
+        await SettledAsync();
+        Assert.Equal(1, Reads("s1"));
+
+        // Forgotten only once it can no longer open: read again then, and still not opened twice.
+        _time.Shift = RepairOpener.Forget + TimeSpan.FromMinutes(1);
+        await SettledAsync();
+        Event("repair.output", "s1");
+        await ReadAsync("s1", 2);
+        await SettledAsync();
+        Assert.Single(Opened);
     }
 
     public async ValueTask DisposeAsync()
