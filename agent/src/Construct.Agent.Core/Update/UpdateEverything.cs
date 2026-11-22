@@ -142,7 +142,8 @@ public sealed class UpdateEverything(IDeviceEngines engines, AgentUpdater self, 
                 continue;
             }
 
-            Set("vms", engine.Id, "running", host == HostResult.Updated ? "Waits for the host to come back." : null);
+            // Said plainly: the engine restarts now, and the reprovision then starts a VM that is off by itself.
+            Set("vms", engine.Id, "running", host == HostResult.Updated ? "Next, once the host has restarted. A VM that is off is started first." : null);
             try
             {
                 if (host == HostResult.Updated && await HealthyAsync(engine.Id, expected).ConfigureAwait(false) is { } problem)

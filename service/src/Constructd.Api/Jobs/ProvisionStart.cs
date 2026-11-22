@@ -10,7 +10,8 @@ namespace Constructd.Api.Jobs;
 /// The <c>start</c> step of a provision a user asked for (design 12.1): a VM that is off, saved or paused is started
 /// first with the Start button's rules (<see cref="LifecycleStart"/>: the VM's pending settings, admission and capacity),
 /// under the VM gate the provision job already holds, and the job then waits a bounded time for the guest to answer over
-/// SSH. The VM stays running afterwards. A provision the engine starts by itself never starts a VM: its chain skips a
+/// SSH. The VM stays running afterwards. A VM that runs but does not answer yet (it is still booting) is waited for the
+/// same way (<see cref="AnswerAsync"/>). A provision the engine starts by itself never starts a VM: its chain skips a
 /// stopped VM before it submits anything (<see cref="VmUpdates"/>).
 /// </summary>
 public sealed class ProvisionStart(LifecycleStart starts, IVmRepository vms, IHypervisorDriver driver, IProvisionTargets targets,
@@ -65,7 +66,38 @@ public sealed class ProvisionStart(LifecycleStart starts, IVmRepository vms, IHy
         if (code is not null) throw Failure(progress, failed, "start-refused", Refusal(code, decision));
         ct.ThrowIfCancellationRequested();
         Report(progress, "running", "the VM runs; waiting for it to answer over SSH");
+        return await WaitAsync(current, failed, progress, "The VM started but did not answer over SSH within {0}. It keeps running; retry once it is up.", ct);
+    }
 
+    /// <summary>
+    /// A provision a user asked for, of a VM that runs: when the guest does not answer over SSH yet (it is still booting,
+    /// started by hand a moment ago or by the host), the job waits for it in the <c>start</c> step the same bounded time
+    /// instead of failing its copy at once. A guest that answers goes straight on, with no extra step.
+    /// </summary>
+    public async Task<SshTarget> AnswerAsync(string jobId, Vm vm, SshTarget target, ProvisionJobResult failed, IProgress<string> progress, CancellationToken ct)
+    {
+        if (await AnswersAsync(target, ct)) return target;
+        JobProgressTracker.Current?.Begin(Step, WaitLabel, planned: false);
+        await phases.SetPhaseAsync(jobId, Step, CancellationToken.None);
+        Report(progress, "running", "the VM runs but does not answer over SSH yet; waiting for it");
+        var current = await vms.GetAsync(vm.Name, ct);
+        if (current is null || current.Deleting || current.Created != vm.Created)
+            throw Failure(progress, failed, "vm-deleting", "The VM is being deleted.");
+        return await WaitAsync(current, failed, progress, "The VM runs but did not answer over SSH within {0}. Retry once it is up.", ct);
+    }
+
+    /// <summary>The bar's words while the job waits for a VM that already runs.</summary>
+    public const string WaitLabel = "Waiting for the VM";
+
+    private async Task<bool> AnswersAsync(SshTarget target, CancellationToken ct)
+    {
+        try { return await ssh.RunAsync(target, "true", null, null, ProbeTimeout, ct) == 0; }
+        catch (Exception ex) when (ex is not OperationCanceledException) { return false; }
+    }
+
+    /// <summary>Waits until the VM answers over SSH, within the configured wait; <paramref name="late"/> says why it failed ({0}: the wait).</summary>
+    private async Task<SshTarget> WaitAsync(Vm current, ProvisionJobResult failed, IProgress<string> progress, string late, CancellationToken ct)
+    {
         // One deadline bounds the whole wait, the endpoint's resolution and each probe included.
         var wait = TimeSpan.FromSeconds(Math.Max(1, options.StartedVmSshWaitSeconds));
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
@@ -93,8 +125,7 @@ public sealed class ProvisionStart(LifecycleStart starts, IVmRepository vms, IHy
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
-            throw Failure(progress, failed, "guest-unreachable",
-                $"The VM started but did not answer over SSH within {Span(wait)}. It keeps running; retry once it is up.");
+            throw Failure(progress, failed, "guest-unreachable", string.Format(System.Globalization.CultureInfo.InvariantCulture, late, Span(wait)));
         }
     }
 
