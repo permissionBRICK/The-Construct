@@ -65,6 +65,7 @@ if [[ "$group" == service || "$group" == all ]]; then
   bash test/browser-console-pull.test.sh
   bash test/provision-deferred-checkout.test.sh
   bash test/install-sdks.test.sh
+  bash test/apt-wait.test.sh
   bash test/docker-registry-mirrors.test.sh
   bash test/oom-guard.test.sh
   bash test/setup-swap.test.sh

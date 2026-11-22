@@ -244,9 +244,11 @@ EOF
 if [[ -n "${host_packages}" ]]; then
   if [[ "${ALLOW_HOST_PACKAGES}" == "true" ]]; then
     step "Installing selected host packages: ${host_packages}"
-    apt-get update
+    # apt-get that waits out apt's locks: Ubuntu's apt-daily timer may hold them right after a boot.
+    . "$(dirname "${BASH_SOURCE[0]}")/apt-wait.sh"
+    apt_get update
     # shellcheck disable=SC2086
-    apt-get install -y ${host_packages}
+    apt_get install -y ${host_packages}
   else
     warn "Host packages requested but not installed because ALLOW_HOST_PACKAGES=false: ${host_packages}"
   fi
