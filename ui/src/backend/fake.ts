@@ -209,12 +209,24 @@ export class FakeBackend implements Backend {
 
   /* --- jobs --- */
 
-  private newJob(vmId: string, kind: JobKind, stepIndex = 0, pct = 0): Job {
-    const steps = kind === 'reinstall' ? REINSTALL_STEPS : kind === 'update' ? UPDATE_STEPS : kind === 'create' ? CREATE_STEPS : kind === 'restore' ? RESTORE_STEPS : REPROVISION_STEPS;
+  private newJob(vmId: string, kind: JobKind, stepIndex = 0, pct = 0, steps = stepsOf(kind)): Job {
+    const id = 'j' + this.seq++;
+    if (steps !== stepsOf(kind)) this.jobSteps.set(id, steps);
     return {
-      id: 'j' + this.seq++, vmId, kind, state: 'running', step: steps[stepIndex], stepIndex, stepCount: steps.length, pct,
+      id, vmId, kind, state: 'running', step: steps[stepIndex], stepIndex, stepCount: steps.length, pct,
       log: steps.slice(0, stepIndex + 1).map((s, i) => (i < stepIndex ? `ok   ${s}` : `run  ${s}`)), error: null, repair: null,
     };
+  }
+
+  /** Jobs whose steps differ from their kind's: a reprovision or update that starts its VM first. */
+  private jobSteps = new Map<string, string[]>();
+
+  /** A reprovision or update the user asked for starts a VM that is off first, right before its reprovision (the engine's start step). */
+  private stepsFor(vmId: string, kind: JobKind): string[] {
+    const steps = stepsOf(kind);
+    if ((kind !== 'reprovision' && kind !== 'update') || this.s.vms.find(v => v.id === vmId)?.power !== 'off') return steps;
+    const at = kind === 'update' ? steps.indexOf('Reprovision') : 0;
+    return [...steps.slice(0, at), START_STEP, ...steps.slice(at)];
   }
 
   private failJob(j: Job) {
@@ -233,7 +245,7 @@ export class FakeBackend implements Backend {
 
   private startJob(vmId: string, kind: JobKind, extra?: Partial<Job>): string | null {
     if (activeJob(this.s, vmId)?.state === 'running') return null;
-    const j = { ...this.newJob(vmId, kind), ...extra };
+    const j = { ...this.newJob(vmId, kind, 0, 0, this.stepsFor(vmId, kind)), ...extra };
     const fail = this.failNext;
     this.failNext = false;
     this.set(d => {
@@ -275,8 +287,10 @@ export class FakeBackend implements Backend {
         if (fail && idx >= 3 && j.kind !== 'update') { this.failJob(j); return; }
         if (idx !== j.stepIndex) {
           j.log[j.log.length - 1] = `ok   ${j.step}`;
+          // The VM runs once its start step is done, and stays on.
+          if (j.step === START_STEP) this.powerOn(d, j.vmId);
           j.stepIndex = idx;
-          j.step = stepsOf(j.kind)[idx];
+          j.step = (this.jobSteps.get(j.id) ?? stepsOf(j.kind))[idx];
           j.log.push(`run  ${j.step}`);
           if (j.kind === 'update') this.updateStep(d, j);
         }
@@ -287,6 +301,13 @@ export class FakeBackend implements Backend {
       else if (after?.state === 'failed') { this.repairScript(jobId); this.drain(); }
       else if (after?.state === 'done') this.onDone(after);
     });
+  }
+
+  private powerOn(d: Draft, vmId: string) {
+    const v = this.vm(d, vmId);
+    v.power = 'on';
+    const hv = d.hosts.find(h => h.id === v.hostId)?.vms.find(x => x.name === v.name);
+    if (hv) hv.power = 'on';
   }
 
   private updateStep(d: Draft, j: Job) {
@@ -730,14 +751,15 @@ export class FakeBackend implements Backend {
     const h = this.s.hosts.find(x => x.id === hostId);
     if (!h) return;
     const own = new Set(this.s.vms.filter(x => x.hostId === hostId).map(v => v.name));
-    const others = h.vms.filter(v => !own.has(v.name) && v.role === 'primary').map(v => v.name);
+    // The host's every-VM reprovision never starts a VM: one that is off is skipped and keeps its update due.
+    const others = h.vms.filter(v => !own.has(v.name) && v.role === 'primary' && v.power === 'on').map(v => v.name);
     // other users' VMs run as host jobs; the user's own VMs show their job on their own pages
     const ids = others.map(() => 'j-' + this.seq++);
     this.hostSet(hostId, x => { others.forEach((vm, i) => x.jobs.unshift({ id: ids[i], kind: 'reprovision', vm, owner: x.vms.find(v => v.name === vm)!.owner, state: 'running', phase: 'queued', created: 'now' })); },
       `Reprovisioning every VM on ${h.name}, one after the other`);
     const finish = () => this.hostSet(hostId, x => { for (const j of x.jobs) if (ids.includes(j.id)) { j.state = 'done'; j.phase = 'done'; } });
     if (this.timers) this.after(8, finish); else finish();
-    this.queue.push(...this.s.vms.filter(x => x.hostId === hostId).map(v => ({ vmId: v.id, kind: 'reprovision' as const })));
+    this.queue.push(...this.s.vms.filter(x => x.hostId === hostId && x.power === 'on').map(v => ({ vmId: v.id, kind: 'reprovision' as const })));
     this.drain();
   }
 
@@ -918,6 +940,7 @@ export class FakeBackend implements Backend {
 const UPDATE_STEPS = ['Download', 'This device', 'Host', 'Reprovision'];
 const CREATE_STEPS = ['Reserving', 'Installing Ubuntu', 'Installing tools', 'Projects', 'Services'];
 const RESTORE_STEPS = ['Fetching the backup', 'Restoring', 'Reprovision'];
+const START_STEP = 'Starting the VM';
 const stepsOf = (k: JobKind) => (k === 'reinstall' ? REINSTALL_STEPS : k === 'update' ? UPDATE_STEPS : k === 'create' ? CREATE_STEPS : k === 'restore' ? RESTORE_STEPS : REPROVISION_STEPS);
 
 const REPAIR_SCRIPT = [

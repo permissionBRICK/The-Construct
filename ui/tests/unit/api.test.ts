@@ -228,6 +228,23 @@ describe('ApiBackend', () => {
     expect(warnedJob(be.snapshot(), 'atlas')).toMatchObject({ state: 'done', pct: 100, warnings: ['Requesting project port forwards'] });
   });
 
+  it('names the start of a VM that is off, while it runs and when it was refused', async () => {
+    const { be, on, settle } = world();
+    on('POST', `/api/engines/${E1}/vms/atlas/jobs`, { status: 202, json: { jobId: 'j9', kind: 'provision', replayed: false } });
+    on('GET', `/api/engines/${E1}/api/v1/jobs/j9`, { json: { ...job('j9', 'atlas', 'running', 'provision', [{ at: '', text: 'the VM is off; starting it first', step: 'start', state: 'running', percent: null }]), phase: 'start' } });
+    await be.start();
+    be.reprovision('atlas');
+    await settle();
+    expect(activeJob(be.snapshot(), 'atlas')).toMatchObject({ state: 'running', step: 'Starting the VM', pct: 0 });
+    const refused = 'start-refused: The host has too little free memory to start the VM (8 GB needed, 2 GB free). Stop another VM, then retry.';
+    const failed = { ...job('j9', 'atlas', 'failed', 'provision', [{ at: '', text: refused.slice(15), step: 'start', state: 'failed', percent: null }]), result: { failedStep: 'start', code: 'start-refused' }, error: refused };
+    on('GET', `/api/engines/${E1}/api/v1/jobs/j9`, { json: failed });
+    on('GET', `/api/engines/${E1}/api/v1/jobs`, { json: [failed] });
+    be.onEvent('job.ended', { seq: 3, type: 'job.ended', engine: E1, data: { id: 'j9', vm: 'atlas' } });
+    await settle();
+    expect(activeJob(be.snapshot(), 'atlas')).toMatchObject({ state: 'failed', step: 'Starting the VM', error: refused });
+  });
+
   it('shows a reprovision working at once, while the agent still gathers the clone credentials', async () => {
     // Finding 15: about five seconds passed between the click and any feedback.
     const { be, on, settle } = world();

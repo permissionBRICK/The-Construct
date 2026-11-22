@@ -211,6 +211,9 @@ const PROVISION_STEPS: [string, string][] = [
 const REINSTALL_STEPS: [string, string][] = [['media', 'Preparing image'], ['backup', 'Backing up'], ['delete', 'Deleting'], ['create', 'Creating'], ...PROVISION_STEPS];
 const RESTORE_STEPS: [string, string][] = [['restore', 'Restoring']];
 const STEPS: Record<string, [string, string][]> = { provision: PROVISION_STEPS, reinstall: REINSTALL_STEPS, restore: RESTORE_STEPS };
+/** A provision the user asked for starts a VM that is off first (ProvisionStart.Step). It comes before the first step and
+    stays out of the list, so the bar of an engine that sends no whole-job percentage is the same as before. */
+const START_STEP: [string, string] = ['start', 'Starting the VM'];
 
 const JOB_KINDS: Record<string, JobKind> = { provision: 'reprovision', 'create-vm': 'create', reinstall: 'reinstall', restore: 'restore' };
 /** Engine job kinds the VM pages show. */
@@ -234,7 +237,7 @@ export function toJob(key: string, vmId: string, j: JobResponse, as?: JobKind): 
   if (steps) {
     const name = failed ?? withStep?.step ?? j.phase ?? steps[0][0];
     const at = Math.max(0, steps.findIndex(s => s[0] === name));
-    step = steps[at][1];
+    step = name === START_STEP[0] ? START_STEP[1] : steps[at][1];
     stepIndex = at;
     stepCount = steps.length;
     // A step that counts itself moves the bar within its share.
