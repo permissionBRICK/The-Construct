@@ -423,8 +423,9 @@ command -v openssl >/dev/null 2>&1 || missing_pkgs+=(openssl)
 if (( ${#missing_pkgs[@]} > 0 )); then
   step "Installing ${missing_pkgs[*]}"
   export DEBIAN_FRONTEND=noninteractive
-  apt-get update || true
-  apt-get install -y "${missing_pkgs[@]}" || true
+  . "$(dirname "${BASH_SOURCE[0]}")/apt-wait.sh"
+  apt_get update || true
+  apt_get install -y "${missing_pkgs[@]}" || true
 fi
 for _need in nginx openssl; do
   if ! command -v "${_need}" >/dev/null 2>&1; then

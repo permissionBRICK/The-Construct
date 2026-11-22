@@ -24,6 +24,8 @@ note() { printf '%s%s%s\n'     "${_C_DIM}"  "$*" "${_C_RESET}"; }
 CONFIG_FILE="${CONFIG_FILE:-/etc/construct/config.env}"
 # shellcheck disable=SC1091
 . "$(dirname "${BASH_SOURCE[0]}")/t3code-patched.sh"
+# apt-get that waits out apt's locks (another apt run, Ubuntu's apt-daily timer).
+. "$(dirname "${BASH_SOURCE[0]}")/apt-wait.sh"
 _t3_patched_override="$(resolve_t3code_patched "${CONFIG_FILE}")"
 REPO_DIR="${REPO_DIR:-/opt/construct/repo}"
 # provision.sh invokes this once per selected tool. Preserve that override across
@@ -689,8 +691,8 @@ install_claude_code() {
   if ! dpkg -s sox >/dev/null 2>&1; then
     step "Installing SoX (voice dictation audio backend)"
     export DEBIAN_FRONTEND=noninteractive
-    apt-get update
-    apt-get install -y sox
+    apt_get update
+    apt_get install -y sox
   else
     note "SoX already installed"
   fi
@@ -1296,8 +1298,8 @@ install_t3code() {
     if ! command -v make >/dev/null 2>&1 || ! command -v g++ >/dev/null 2>&1 || ! command -v python3 >/dev/null 2>&1; then
       step "Installing build tools (node-pty compiles from source on Linux)"
       export DEBIAN_FRONTEND=noninteractive
-      apt-get update
-      apt-get install -y build-essential python3
+      apt_get update
+      apt_get install -y build-essential python3
     fi
 
     # node-pty (terminal support) and msgpackr-extract must run their build

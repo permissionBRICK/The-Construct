@@ -68,13 +68,16 @@ if [[ -r /etc/os-release ]]; then
 fi
 
 step "Installing base packages"
-apt-get update
+# apt-get that waits out apt's locks: Ubuntu's apt-daily timer may hold them right after a boot, and this runs on
+# every provision.
+. "$(dirname "${BASH_SOURCE[0]}")/bin/apt-wait.sh"
+apt_get update
 # inotify-tools: the host's notification watcher blocks on `inotifywait` over its
 # long-lived SSH connection, so an agent's `construct notify` reaches the desktop the
 # moment it is queued. Without it the watcher falls back to a slow sleep loop.
 # age, zstd, openssl: `construct backup` compresses and encrypts config backups
 # on the VM before they leave it.
-apt-get install -y ca-certificates curl git gh jq ripgrep unzip gnupg lsb-release inotify-tools age zstd openssl
+apt_get install -y ca-certificates curl git gh jq ripgrep unzip gnupg lsb-release inotify-tools age zstd openssl
 
 step "Installing Docker if needed"
 if ! command -v docker >/dev/null 2>&1; then
