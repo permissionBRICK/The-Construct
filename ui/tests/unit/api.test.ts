@@ -1280,6 +1280,38 @@ describe('ApiBackend repair agent', () => {
     expect(activeJob(be.snapshot(), 'atlas')).toMatchObject({ canRepair: true, repair: { state: 'stopped', outcome: 'Stopped' } });
   });
 
+  it('offers the start on a provision or reinstall with warnings, by hand only, and shows its run on that card', async () => {
+    const warned = (id: string, kind = 'provision') => ({ ...job(id, 'atlas', 'succeeded', kind), warnings: ['Generating runtime config'] });
+    const { be, calls, on, settle } = world();
+    on('GET', `${P}/jobs`, { json: [warned('w1')] });
+    await be.start();
+    await settle();
+    let j = warnedJob(be.snapshot(), 'atlas')!;
+    // Asked once for a session started elsewhere (none); nothing starts by itself.
+    expect(calls.filter(c => c.path === `${P}/vms/atlas/repair`).length).toBe(1);
+    expect(posts(calls)).toEqual([]);
+    expect(j).toMatchObject({ state: 'done', repair: null, canRepair: true });
+    on('POST', `${P}/vms/atlas/repair`, { status: 202, json: session({ jobId: 'w1', lines: [line(1, 'start', null), line(2, 'tool', 'Bash: tail log')] }) });
+    be.startRepair(j.id);
+    await settle();
+    expect(posts(calls).map(c => c.path)).toEqual([`${P}/vms/atlas/repair`]);
+    j = warnedJob(be.snapshot(), 'atlas')!;
+    expect(j).toMatchObject({ canRepair: false, repair: { state: 'working', messages: [{ from: 'tool', text: 'Bash: tail log' }] } });
+
+    // A reinstall's warnings too; a restore's have nothing for the agent, and a job without warnings nothing to fix.
+    for (const [raw, can] of [[warned('w2', 'reinstall'), true], [warned('w3', 'restore'), false], [job('w4', 'atlas', 'succeeded'), undefined]] as const) {
+      const w = world();
+      w.on('GET', `${P}/jobs`, { json: [raw] });
+      await w.be.start();
+      await w.settle();
+      const shown = w.be.snapshot().jobs.find(x => x.id.endsWith(raw.id))!;
+      expect(shown.canRepair).toBe(can);
+      w.be.startRepair(shown.id);
+      await w.settle();
+      expect(posts(w.calls).length).toBe(can ? 1 : 0);
+    }
+  });
+
   it('says when the run it shows started and whether the host started it by itself', async () => {
     // Finding 46: the pop-out's entry opened an analysis that had finished before the click.
     const { be, on, settle } = world();

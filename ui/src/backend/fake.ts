@@ -106,8 +106,8 @@ export class FakeBackend implements Backend {
           ],
         };
         break;
-      // A reprovision that succeeded although an optional step failed (finding 41).
-      case 'warned': d.jobs.push({ ...this.newJob('atlas', 'reprovision', REPROVISION_STEPS.length - 1, 100), state: 'done', warnings: ['Requesting project port forwards'] }); break;
+      // A reprovision that succeeded although an optional step failed (finding 41); an agent fixes it only when asked.
+      case 'warned': d.jobs.push({ ...this.newJob('atlas', 'reprovision', REPROVISION_STEPS.length - 1, 100), state: 'done', warnings: ['Generating runtime config'], canRepair: true }); break;
       // A guest from before the sign-in helper: it reports its agents but not their sign-in (finding 11).
       case 'old-guest': for (const a of d.vms[0].agents) a.signedIn = null; break;
       // Shared profiles from a company config repo (design 9.7), one changed here and upstream.
@@ -354,7 +354,7 @@ export class FakeBackend implements Backend {
     const say = (i: number, then?: () => void) => this.after(3, () => {
       this.set(d => {
         const j = this.job(d, jobId);
-        if (!j?.repair || j.state !== 'failed' || j.repair.state !== 'working') return;
+        if (!j?.repair || !repairsOn(j) || j.repair.state !== 'working') return;
         j.repair.messages.push({ from: 'agent', text: REPAIR_SCRIPT[i] });
         if (i === 3) j.repair.state = 'asking';
       });
@@ -445,7 +445,7 @@ export class FakeBackend implements Backend {
 
   startRepair(jobId: string) {
     const j = this.s.jobs.find(x => x.id === jobId);
-    if (!j || j.state !== 'failed' || !j.canRepair) return;
+    if (!j || !repairsOn(j) || !j.canRepair) return;
     this.set(d => { const x = this.job(d, jobId)!; x.repair = newRepair(false, this.hostOf(x.vmId)?.repairChat === true); x.canRepair = false; });
     this.repairScript(jobId);
   }
@@ -482,7 +482,13 @@ export class FakeBackend implements Backend {
         j.repair.state = 'done';
         j.repair.outcome = 'Fixed; the job runs again';
       });
-      this.after(3, () => { if (this.s.jobs.find(x => x.id === jobId)?.repair?.state === 'done') this.retryJob(jobId); });
+      // As the engine: a failed job runs again, after a job with warnings the VM is reprovisioned.
+      this.after(3, () => {
+        const j = this.s.jobs.find(x => x.id === jobId);
+        if (j?.repair?.state !== 'done') return;
+        if (j.state === 'failed') this.retryJob(jobId);
+        else this.startJob(j.vmId, 'reprovision');
+      });
     });
   }
 
@@ -986,6 +992,9 @@ function firstRun(extra: Partial<FirstRun> = {}): FirstRun {
 }
 
 /** The repair of a failed job: by default a T3 Code thread in the VM, with `repair.chat` the agent answered in Construct's chat. */
+/** The repair agent works on a failed job and, asked for by hand, on one that succeeded with warnings. */
+const repairsOn = (j: Job) => j.state === 'failed' || (j.state === 'done' && !!j.warnings?.length);
+
 const newRepair = (auto = true, chat = false): NonNullable<Job['repair']> => ({
   agent: chat ? 'Claude Code' : 'T3 Code', state: 'working', messages: [{ from: 'agent', text: REPAIR_SCRIPT[0] }],
   t3Thread: chat ? null : { environmentId: '6f1c0b9e-2d4a-4c55-9a41-0e2b7c1d5f60', threadId: 'thread-repair', title: 'Construct repair: provision failed' },

@@ -120,9 +120,9 @@ function LogView({ job }: { job: Job }) {
   );
 }
 
-/** The repair agent under a failed job: its output as plain text, Stop, and how it ended. By default it runs as a
-    T3 Code thread in the VM, which the user answers in T3 Code: the block opens it there. In Construct's chat
-    (`repair.chat`) it has one reply box while it waits for an answer. */
+/** The repair agent under a failed job or one with warnings: its output as plain text, Stop, and how it ended. By
+    default it runs as a T3 Code thread in the VM, which the user answers in T3 Code: the block opens it there. In
+    Construct's chat (`repair.chat`) it has one reply box while it waits for an answer. */
 function Repair({ job }: { job: Job }) {
   const { be } = useApp();
   const r = job.repair!;
@@ -158,29 +158,44 @@ function Repair({ job }: { job: Job }) {
   );
 }
 
+/** The repair agent on a failed job, or on a job with warnings: "Let an agent fix it" while none runs, and its chat. The
+    pop-out has no room for the chat: its button opens the window on this VM, where the chat is, or the T3 Code thread. */
+function RepairPart({ job, vm }: { job: Job; vm: Vm }) {
+  const { be, surf, shell } = useApp();
+  if (surf !== 'pop') {
+    return (
+      <>
+        {job.repair && <Repair key={job.id} job={job} />}
+        {job.canRepair && <Btn icon="fix" onClick={() => be.startRepair(job.id)}>Let an agent fix it</Btn>}
+      </>
+    );
+  }
+  return (
+    <>
+      {job.repair?.t3Thread && !job.canRepair && (
+        // The repair runs in T3 Code: the pop-out opens the thread there.
+        <Btn icon="open" onClick={() => be.open(job.vmId, 't3', job.repair!.t3Thread!)}>{`Repair in T3 Code · ${repairWhen(job.repair)}`}</Btn>
+      )}
+      {(job.repair || job.canRepair) && !(job.repair?.t3Thread && !job.canRepair) && (
+        <Btn icon="fix" onClick={() => { if (!job.repair || job.canRepair) be.startRepair(job.id); shell.openWindow({ page: 'home', arg: vm.id }); }}>
+          {job.repair && !job.canRepair ? `${job.repair.agent} · ${repairWhen(job.repair)}` : 'Let an agent fix it'}
+        </Btn>
+      )}
+    </>
+  );
+}
+
 export function JobBlock({ job, vm }: { job: Job; vm: Vm }) {
-  const { be, s, surf, shell } = useApp();
+  const { be, s } = useApp();
   const [log, setLog] = useState(false);
   if (job.state === 'failed') {
-    // The pop-out has no room for the chat: its button opens the window on this VM, where the chat is.
-    const pop = surf === 'pop';
     return (
       <div class="blk bad job">
         <div class="bh"><Icon n="x" /><b>{failedTitle(job)}</b><Btn sm icon="log" onClick={() => setLog(!log)}>Log</Btn>
           <Btn sm icon="x" title="Dismiss" onClick={() => be.dismissJob(job.id)} /></div>
         <div class="msg">{job.step}: {job.error}</div>
         {(log || !job.repair) && <LogView key={job.id} job={job} />}
-        {pop && job.repair?.t3Thread && !job.canRepair && (
-          // The repair runs in T3 Code: the pop-out opens the thread there.
-          <Btn icon="open" onClick={() => be.open(job.vmId, 't3', job.repair!.t3Thread!)}>{`Repair in T3 Code · ${repairWhen(job.repair)}`}</Btn>
-        )}
-        {pop && (job.repair || job.canRepair) && !(job.repair?.t3Thread && !job.canRepair) && (
-          <Btn icon="fix" onClick={() => { if (!job.repair || job.canRepair) be.startRepair(job.id); shell.openWindow({ page: 'home', arg: vm.id }); }}>
-            {job.repair && !job.canRepair ? `${job.repair.agent} · ${repairWhen(job.repair)}` : 'Let an agent fix it'}
-          </Btn>
-        )}
-        {!pop && job.repair && <Repair key={job.id} job={job} />}
-        {!pop && job.canRepair && <Btn icon="fix" onClick={() => be.startRepair(job.id)}>Let an agent fix it</Btn>}
+        <RepairPart job={job} vm={vm} />
         {job.kind === 'reinstall' || job.kind === 'restore'
           ? <Confirm label="Retry" icon="retry" verb={job.kind === 'reinstall' ? 'Reinstall again' : 'Restore again'} sm={false} onYes={() => be.retryJob(job.id)} />
           : <Btn icon="retry" onClick={() => be.retryJob(job.id)}>Retry</Btn>}
@@ -205,8 +220,8 @@ export function JobBlock({ job, vm }: { job: Job; vm: Vm }) {
 }
 
 /** A job that succeeded although optional steps failed (a forward that did not open): what failed, its log, put away
-    with the cross. Calm: nothing to fix before the VM is used. */
-export function WarnedBlock({ job }: { job: Job }) {
+    with the cross. Calm: nothing to fix before the VM is used; an agent fixes it when asked, never by itself. */
+export function WarnedBlock({ job, vm }: { job: Job; vm: Vm }) {
   const { be } = useApp();
   const [log, setLog] = useState(false);
   const n = job.warnings?.length ?? 0;
@@ -217,6 +232,7 @@ export function WarnedBlock({ job }: { job: Job }) {
         <Btn sm icon="x" title="Dismiss" onClick={() => be.dismissJob(job.id)} /></div>
       <div class="msg">{job.warnings?.join(' · ')}</div>
       {log && <LogView key={job.id} job={job} />}
+      <RepairPart job={job} vm={vm} />
     </div>
   );
 }

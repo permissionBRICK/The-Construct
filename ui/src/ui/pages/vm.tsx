@@ -86,7 +86,7 @@ export function Overview({ vm }: { vm: Vm }) {
           <ActionButtons vm={vm} busy={busy} onReinstall={() => setWipe(true)} />
         </div>
       </div>
-      {job ? <JobBlock job={job} vm={vm} /> : wipe ? <ReinstallConfirm vm={vm} onCancel={() => setWipe(false)} /> : warned && <WarnedBlock job={warned} />}
+      {job ? <JobBlock job={job} vm={vm} /> : wipe ? <ReinstallConfirm vm={vm} onCancel={() => setWipe(false)} /> : warned && <WarnedBlock job={warned} vm={vm} />}
       <div class="strip">
         {use.map(u => (
           <div><span class="sk">{u.k}</span><b>{u.big}<small>{u.u}</small></b><div class="bar"><i style={{ width: `${Math.min(100, u.p)}%` }} /></div></div>

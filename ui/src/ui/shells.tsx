@@ -70,7 +70,7 @@ export function Stack({ footer }: { footer: boolean }) {
         </>
       )}
       {job ? <JobBlock job={job} vm={vm} /> : wipe ? <ReinstallConfirm vm={vm} onCancel={() => setWipe(false)} /> : <Tiles vm={vm} onReinstall={() => setWipe(true)} />}
-      {warned && <WarnedBlock job={warned} />}
+      {warned && <WarnedBlock job={warned} vm={vm} />}
       {s.everything && (s.everything.running || s.everything.parts.some(p => p.state === 'failed')) && <EverythingBlock e={s.everything} />}
       {footer && (
         <nav class="sft">
