@@ -17,6 +17,7 @@ const SHOTS: [Surf, string, string, string?][] = [
   ['pop', 'update', 'update'],
   // A nightly's version with its whole commit: short, nothing scrolls sideways (finding 18).
   ['pop', 'update-nightly', 'update-nightly'],
+  ['pop', 'everything', 'everything'],
   ['pop', 'failed', 'failed-reinstall'],
   ['pop', 'warned', 'warned'],
   ['pop', 'change-waits', 'changed'],

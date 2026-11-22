@@ -86,6 +86,17 @@ public sealed class UpdateEverythingTests : IAsyncDisposable
         Assert.Equal(["done", "done"], _device.Everything.View().Parts.Where(p => p.Engine == "mine").Select(p => p.State));
     }
 
+    [Theory]
+    [InlineData("1.0.0+0d488a3b8a7f33413a6cb6dc8e2501888e78c716", "1.0.0 · 0d488a3")]
+    [InlineData("1.2.3", "1.2.3")]
+    [InlineData("1.2.3+abc", "1.2.3 · abc")]
+    [InlineData(null, "")]
+    public void A_host_version_is_shown_as_the_update_tile_shows_it(string? version, string shown)
+    {
+        // FatPC 2026-11-22: "Updating to 1.0.0+<40 characters>" ran over the block's border.
+        Assert.Equal(shown, UpdateEverything.ShortVersion(version));
+    }
+
     [Fact]
     public async Task A_host_update_that_fails_leaves_that_hosts_vms_alone()
     {

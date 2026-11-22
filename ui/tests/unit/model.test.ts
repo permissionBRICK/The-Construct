@@ -111,11 +111,11 @@ describe('update everything', () => {
     expect(updateDue(s)).toBe(false);
     s.release = '2.5.0';
     const parts = updateParts(s);
-    expect(parts[0]).toMatchObject({ name: 'This device', to: '2.5.0' });
+    expect(parts[0]).toMatchObject({ name: 'Construct app', to: '2.5.0' });
     expect(parts.find(p => p.name === 'orchard')).toMatchObject({ to: '2.5.0', note: null });
     expect(parts.find(p => p.name === 'lab')).toMatchObject({ to: null, note: 'channel' });
     expect(parts.find(p => p.name === 'kiln')).toMatchObject({ to: null, note: 'channel' });
-    expect(updatePlan(s)).toEqual(['This device', 'This PC', 'orchard', 'atlas', 'pebble', 'harbor']);
+    expect(updatePlan(s)).toEqual(['Construct app', 'This PC', 'orchard', 'atlas', 'pebble', 'harbor']);
   });
 
   it('marks a same-channel host the user does not administer', () => {

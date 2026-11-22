@@ -5,7 +5,7 @@ import { hostUpdateTarget, newer, vmUpdateTarget } from './vm';
     VMs. A host they do not administer, or on another channel, is listed and left alone. */
 export function updateParts(state: State): Part[] {
   const rel = state.release;
-  const parts: Part[] = [{ name: 'This device', version: state.version, to: rel && newer(rel, state.version) ? rel : null, note: null }];
+  const parts: Part[] = [{ name: 'Construct app', version: state.version, to: rel && newer(rel, state.version) ? rel : null, note: null }];
   for (const h of state.hosts) {
     if (h.updateTo !== undefined) parts.push({ name: h.name, version: h.version, to: hostUpdateTarget(state, h), note: null });
     else if (h.channel !== state.prefs.channel) parts.push({ name: h.name, version: h.version, to: null, note: 'channel' });
