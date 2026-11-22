@@ -62,9 +62,20 @@ run LOCKED=0 FAIL_WITH="E: Unable to locate package nosuchpackage"
 ok "another failure is not retried" test "${rc}" -eq 100
 ok "  (one attempt)" test "${calls}" -eq 1
 
-# Every apt-get the guest's install scripts run goes through apt_get (a message naming apt-get is fine).
-plain="$(grep -nE '^\s*apt-get\s+(update|install|upgrade|dist-upgrade|full-upgrade)\b' \
-  "${ROOT}/bootstrap.sh" "${ROOT}"/bin/*.sh | grep -v '/bin/apt-wait.sh:' || true)"
+# Every apt-get the guest's install scripts run goes through apt_get: also after variable assignments
+# (`DEBIAN_FRONTEND=noninteractive apt-get ...`), `;`, `&&`, `|`, `$(` and with options before the verb. A comment, or a
+# message that names apt-get inside quotes, is fine.
+APT_CALL='(^|[;&|]|\$\(|[[:space:]])([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+)*apt-get([[:space:]]+-[^[:space:]]+)*[[:space:]]+(update|install|upgrade|dist-upgrade|full-upgrade)([[:space:]]|$)'
+plain_calls() {
+  grep -nE "${APT_CALL}" "$@" | grep -vE '^([^:]+:)?[0-9]+:[[:space:]]*#' | grep -vE "[\"'][^\"']*apt-get" | grep -v '/bin/apt-wait.sh:' || true
+}
+cat >"${tmp}/calls.sh" <<'CALLS'
+    DEBIAN_FRONTEND=noninteractive apt-get install -y nodejs || return 1
+x && apt-get -qq update
+apt-get -y install sox
+CALLS
+ok "the guard finds apt-get after an assignment, after && and with options first" test "$(plain_calls "${tmp}/calls.sh" | wc -l)" -eq 3
+plain="$(plain_calls "${ROOT}/bootstrap.sh" "${ROOT}"/bin/*.sh)"
 ok "no guest script calls apt-get without waiting for its locks" test -z "${plain}"
 [[ -z "${plain}" ]] || printf '%s\n' "${plain}"
 

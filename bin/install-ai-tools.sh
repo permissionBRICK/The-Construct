@@ -259,7 +259,7 @@ opencode_npm_fallback() {
   if ! command -v npm >/dev/null 2>&1; then
     step "Installing Node.js 22.x (required for the opencode npm fallback)"
     curl -fsSL https://deb.nodesource.com/setup_22.x | bash - || return 1
-    DEBIAN_FRONTEND=noninteractive apt-get install -y nodejs || return 1
+    DEBIAN_FRONTEND=noninteractive apt_get install -y nodejs || return 1
   fi
   # OpenCode 1 from npm owns the same `opencode` command, which npm hands over only
   # with --force. OpenCode 1 is removed once OpenCode 2 is installed, so a failed
@@ -845,7 +845,7 @@ install_codex() {
       if ! command -v npm >/dev/null 2>&1; then
         step "Installing Node.js 22.x (required for the Codex npm fallback)"
         curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
-        DEBIAN_FRONTEND=noninteractive apt-get install -y nodejs
+        DEBIAN_FRONTEND=noninteractive apt_get install -y nodejs
       fi
       npm install -g @openai/codex
     fi
@@ -1288,7 +1288,7 @@ install_t3code() {
     if ! command -v npm >/dev/null 2>&1 || ! t3_node_ok; then
       step "Installing Node.js 22.x (t3 requires Node ^22.16 || ^23.11 || >=24.10)"
       curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
-      DEBIAN_FRONTEND=noninteractive apt-get install -y nodejs
+      DEBIAN_FRONTEND=noninteractive apt_get install -y nodejs
     fi
 
     # node-pty (t3's terminal backend) ships prebuilt binaries only for macOS and
