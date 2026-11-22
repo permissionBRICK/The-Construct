@@ -1,5 +1,6 @@
 using System.Drawing.Drawing2D;
 using Construct.Agent.Device;
+using Construct.Agent.Update;
 using Construct.Companion.Core.Desktop;
 using Construct.Companion.Windows;
 
@@ -18,6 +19,7 @@ internal sealed class TrayShell : ApplicationContext, IAgentShell
     private readonly ContextMenuStrip _menu = new();
     private readonly System.Windows.Forms.Timer _clickTimer = new() { Interval = SystemInformation.DoubleClickTime };
     private readonly System.Windows.Forms.Timer _vaultTimer = new() { Interval = 10_000 };
+    private readonly System.Windows.Forms.Timer _placeTimer = new() { Interval = 2_000 };
     private readonly PopupGesture _gesture = new();
     private readonly Dictionary<string, AgentWindow> _windows = [];
     // The content height each floating surface last reported (CSS pixels): it opens at that size (finding 7).
@@ -275,6 +277,34 @@ internal sealed class TrayShell : ApplicationContext, IAgentShell
         }
     }
 
+    /// <summary>
+    /// Gives this version's icon the taskbar place the user chose for the previous one (<see cref="TrayIconCarryOver"/>):
+    /// asks every two seconds, for up to a minute, until Windows has an entry for the icon. When the entry changed, the
+    /// icon is added again so the taskbar reads it.
+    /// </summary>
+    public void KeepTrayPlace(Func<TrayIconCarryOver.Outcome> apply)
+    {
+        var left = 30;
+        _placeTimer.Tick += (_, _) =>
+        {
+            try
+            {
+                var outcome = apply();
+                if (outcome == TrayIconCarryOver.Outcome.NotYet && --left > 0) return;
+                _placeTimer.Stop();
+                if (outcome != TrayIconCarryOver.Outcome.Changed) return;
+                _tray.Visible = false;
+                _tray.Visible = true;
+            }
+            catch (Exception ex)
+            {
+                _placeTimer.Stop();
+                _log(ex);
+            }
+        };
+        _placeTimer.Start();
+    }
+
     /// <summary>Closes every window and ends the message loop; called on the UI thread or marshalled to it.</summary>
     public void Quit()
     {
@@ -290,6 +320,7 @@ internal sealed class TrayShell : ApplicationContext, IAgentShell
     protected override void ExitThreadCore()
     {
         _vaultTimer.Stop();
+        _placeTimer.Stop();
         _tray.Visible = false;
         foreach (var window in _windows.Values) window.Shutdown();
         base.ExitThreadCore();
@@ -305,6 +336,7 @@ internal sealed class TrayShell : ApplicationContext, IAgentShell
             _menu.Dispose();
             _clickTimer.Dispose();
             _vaultTimer.Dispose();
+            _placeTimer.Dispose();
             _dispatcher.Dispose();
         }
 

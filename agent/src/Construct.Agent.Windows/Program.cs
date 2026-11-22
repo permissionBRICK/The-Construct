@@ -127,6 +127,14 @@ internal static class Program
         var origin = new Uri(host.BaseUrl);
         using var tray = new TrayShell(host.Agent, host.Device, origin, host.Token, Path.Combine(defaults.DataDirectory, "webview2"), Log);
         host.Device.Shell = tray;
+        // An installed version runs from its own directory, which Windows 11 takes for a new tray icon (FatPC 2026-11-22).
+        if (running is not null)
+        {
+            var previous = install.Read().Previous;
+            tray.KeepTrayPlace(() => TrayIconCarryOver.Apply(new NotifyIconSettingsRegistry(), executable, install.VersionsDirectory,
+                previous is null ? null : install.ExecutableOf(previous), File.Exists));
+        }
+
         host.App.Lifetime.ApplicationStopping.Register(tray.Quit);
         if (!background) tray.Open("win", null);
         foreach (var surface in surfaces) tray.Open(surface, null);

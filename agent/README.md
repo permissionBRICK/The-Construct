@@ -261,7 +261,12 @@ there changes nothing, an older extension keeps working). When it fails,
 it writes the previous version back as current and starts it. Under the systemd unit the unit is
 pointed at the new version and restarted; on Windows the Run value follows the new executable. The
 install scripts mark a version installed over another one pending as well, so it self-tests too. An
-agent not running from `versions/` (a development build) does not update itself.
+agent not running from `versions/` (a development build) does not update itself. Windows 11 remembers a
+tray icon's taskbar place per executable path (`HKCU\Control Panel\NotifyIconSettings`), so each version
+copies the previous version's choice to its own entry once Windows has made it (or a taskbar place an
+earlier version or the old Companion had), unless the user chose for this version already, and removes
+the entries of versions no longer on disk. A fixed icon GUID would need every build signed by one
+publisher.
 
 **Update everything.** For each engine: when the user is its admin and it offers an update, `POST
 /host/updates/run`, then its job is followed through the engine's restart; then `POST
