@@ -107,6 +107,7 @@ public sealed class UpdateEverything(IDeviceEngines engines, AgentUpdater self, 
         {
             HostResult host;
             string? expected;
+            string? update = null;
             if (engine.EngineId is null && await OldStackAsync(engine.Id).ConfigureAwait(false))
             {
                 Set("engine", engine.Id, "running");
@@ -133,7 +134,7 @@ public sealed class UpdateEverything(IDeviceEngines engines, AgentUpdater self, 
             }
             else
             {
-                (host, expected) = await HostAsync(engine).ConfigureAwait(false);
+                (host, expected, update) = await HostAsync(engine).ConfigureAwait(false);
             }
 
             if (host == HostResult.Failed)
@@ -146,7 +147,7 @@ public sealed class UpdateEverything(IDeviceEngines engines, AgentUpdater self, 
             Set("vms", engine.Id, "running", host == HostResult.Updated ? "Next, once the host has restarted. A VM that is off is started first." : null);
             try
             {
-                if (host == HostResult.Updated && await HealthyAsync(engine.Id, expected).ConfigureAwait(false) is { } problem)
+                if (host == HostResult.Updated && await HealthyAsync(engine.Id, expected, update).ConfigureAwait(false) is { } problem)
                 {
                     Set("engine", engine.Id, "failed", problem);
                     Set("vms", engine.Id, "skipped", "The host update did not take effect; the VMs stay as they are.");
@@ -208,7 +209,7 @@ public sealed class UpdateEverything(IDeviceEngines engines, AgentUpdater self, 
     }
 
     /// <summary>The engine's own update, when the user administers it and it offers one.</summary>
-    private async Task<(HostResult Result, string? Commit)> HostAsync(EngineView engine)
+    private async Task<(HostResult Result, string? Commit, string? UpdateId)> HostAsync(EngineView engine)
     {
         Set("engine", engine.Id, "running");
         try
@@ -217,32 +218,33 @@ public sealed class UpdateEverything(IDeviceEngines engines, AgentUpdater self, 
             if (!string.Equals(who?["role"]?.GetValue<string>(), "admin", StringComparison.OrdinalIgnoreCase))
             {
                 Set("engine", engine.Id, "skipped", "Its admin updates this host.");
-                return (HostResult.Unchanged, null);
+                return (HostResult.Unchanged, null, null);
             }
 
             var status = await engines.GetAsync(engine.Id, "host/updates/status", CancellationToken.None).ConfigureAwait(false);
             if (status?["available"] is not JsonObject offer)
             {
                 Set("engine", engine.Id, "done", "Up to date.");
-                return (HostResult.Unchanged, null);
+                return (HostResult.Unchanged, null, null);
             }
 
             var started = await engines.PostAsync(engine.Id, "host/updates/run", null, CancellationToken.None).ConfigureAwait(false);
             if (started?["jobId"]?.GetValue<string>() is not { Length: > 0 } job)
             {
                 Set("engine", engine.Id, "done", started?["state"]?.GetValue<string>());
-                return (HostResult.Unchanged, null);
+                return (HostResult.Unchanged, null, null);
             }
 
             Set("engine", engine.Id, "running", "Updating to " + offer["version"]?.GetValue<string>());
             // The commit it updates to: the VMs follow only once the engine answers healthy with it (not after a rollback).
+            // The run reads the channel again, so it may install a newer release than this offer (HealthyAsync).
             var commit = offer["commit"]?.GetValue<string>();
-            return (await FollowAsync(engine.Id, job).ConfigureAwait(false) ? HostResult.Updated : HostResult.Failed, commit);
+            return (await FollowAsync(engine.Id, job).ConfigureAwait(false) ? HostResult.Updated : HostResult.Failed, commit, Text(started?["updateId"]));
         }
         catch (AgentFailure failure)
         {
             Set("engine", engine.Id, "failed", failure.Message);
-            return (HostResult.Failed, null);
+            return (HostResult.Failed, null, null);
         }
     }
 
@@ -251,7 +253,13 @@ public sealed class UpdateEverything(IDeviceEngines engines, AgentUpdater self, 
     /// it answers 503 (finding 20). Null once it answers ok with <paramref name="commit"/> (when known); otherwise
     /// what went wrong: no answer within <see cref="ReadyLimit"/>, or still the previous version (a rolled-back update).
     /// </summary>
-    private async Task<string?> HealthyAsync(string engine, string? commit)
+    /// <remarks>
+    /// The offer can be up to 15 minutes old (the engine reads its channel at most that often), while the update run reads
+    /// the channel again and installs its newest release: with two nightlies minutes apart the engine came back with the
+    /// newer one and was taken for rolled back (FatPC 2026-11-22). So a commit other than the offer's is checked against
+    /// the engine's own record of <paramref name="update"/>, which names what the run installed.
+    /// </remarks>
+    private async Task<string?> HealthyAsync(string engine, string? commit, string? update)
     {
         var until = time.GetUtcNow() + ReadyLimit;
         string? running = null;
@@ -265,6 +273,8 @@ public sealed class UpdateEverything(IDeviceEngines engines, AgentUpdater self, 
                     running = health["commit"]?.GetValue<string>();
                     // An engine that does not say its commit cannot be checked: its ok is taken.
                     if (commit is null || running is null || string.Equals(running, commit, StringComparison.OrdinalIgnoreCase)) return null;
+                    if (update is not null && await RecordedCommitAsync(engine, update).ConfigureAwait(false) is { } installed &&
+                        string.Equals(running, installed, StringComparison.OrdinalIgnoreCase)) return null;
                 }
             }
             catch (AgentFailure) { /* restarting: asked again */ }
@@ -276,6 +286,20 @@ public sealed class UpdateEverything(IDeviceEngines engines, AgentUpdater self, 
             await Task.Delay(PollInterval, time).ConfigureAwait(false);
         }
     }
+
+    /// <summary>The commit the engine's record of the update <paramref name="update"/> names; null when it cannot be read.</summary>
+    private async Task<string?> RecordedCommitAsync(string engine, string update)
+    {
+        try
+        {
+            var status = await engines.GetAsync(engine, "host/updates/status", CancellationToken.None).ConfigureAwait(false);
+            var rows = new[] { status?["current"] }.Concat(status?["history"] as JsonArray ?? []);
+            return Text(rows.FirstOrDefault(r => Text(r?["updateId"]) == update)?["commit"]);
+        }
+        catch (AgentFailure) { return null; }
+    }
+
+    private static string? Text(JsonNode? node) => node is JsonValue value && value.TryGetValue<string>(out var text) ? text : null;
 
     /// <summary>The user's VMs reprovisioned; an engine that answers 5xx (still starting) is asked again within <see cref="ReadyLimit"/>.</summary>
     private async Task<JsonNode?> ReprovisionAsync(string engine)
