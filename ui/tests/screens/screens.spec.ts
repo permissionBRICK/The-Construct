@@ -18,6 +18,7 @@ const SHOTS: [Surf, string, string, string?][] = [
   // A nightly's version with its whole commit: short, nothing scrolls sideways (finding 18).
   ['pop', 'update-nightly', 'update-nightly'],
   ['pop', 'everything', 'everything'],
+  ['pop', 'vm-off', 'off'],
   ['pop', 'failed', 'failed-reinstall'],
   ['pop', 'warned', 'warned'],
   ['pop', 'change-waits', 'changed'],
@@ -32,6 +33,7 @@ const SHOTS: [Surf, string, string, string?][] = [
   // A lost sign-in asks on every page of the window, as a vault request does (finding 43).
   ['win', 'signed-out-vault', 'signed-out', 'vault'],
   ['win', 'overview', 'calm'],
+  ['win', 'vm-off', 'off'],
   ['win', 'job', 'job'],
   ['win', 'warned', 'warned'],
   ['win', 'connections', 'calm', 'connections'],

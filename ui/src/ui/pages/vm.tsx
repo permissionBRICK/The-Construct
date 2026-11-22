@@ -7,7 +7,7 @@ import { aliasWritten } from '../../backend/api/map';
 import { Icon } from '../icons';
 import { Btn, Confirm, Dot, Field, Head, KV, NotYet, Page, Row, Sec, Seg, Switch, Table, Tabs, Tag, UpTag } from '../kit';
 import { copy, na, useApp } from '../ctx';
-import { ActionButtons, JobBlock, MovedNotes, PowerBtn, ReinstallConfirm, SignInBlock, SignInCards, VaultCards, WarnedBlock } from '../blocks';
+import { ActionButtons, JobBlock, MovedNotes, NEEDS_RUNNING, PowerBtn, ReinstallConfirm, SignInBlock, SignInCards, VaultCards, WarnedBlock, running } from '../blocks';
 import { signInState } from '../../model/signin';
 import { shortVersion } from '../../model/update';
 
@@ -79,9 +79,9 @@ export function Overview({ vm }: { vm: Vm }) {
           <PowerBtn vm={vm} />
         </div>
         <div class="vp2">
-          <Btn kind="pri" icon="open" onClick={() => be.open(vm.id, 't3')} disabled={na(s, 'open')}>T3 Code</Btn>
-          <Btn icon="code" onClick={() => be.open(vm.id, 'vscode')} disabled={na(s, 'open')}>VS Code</Btn>
-          <Btn icon="term" onClick={() => be.open(vm.id, 'ssh')} disabled={na(s, 'open')}>SSH</Btn>
+          <Btn kind="pri" icon="open" onClick={() => be.open(vm.id, 't3')} disabled={na(s, 'open') || !running(vm)} title={running(vm) ? undefined : NEEDS_RUNNING}>T3 Code</Btn>
+          <Btn icon="code" onClick={() => be.open(vm.id, 'vscode')} disabled={na(s, 'open') || !running(vm)} title={running(vm) ? undefined : NEEDS_RUNNING}>VS Code</Btn>
+          <Btn icon="term" onClick={() => be.open(vm.id, 'ssh')} disabled={na(s, 'open') || !running(vm)} title={running(vm) ? undefined : NEEDS_RUNNING}>SSH</Btn>
           <span class="grow" />
           <ActionButtons vm={vm} busy={busy} onReinstall={() => setWipe(true)} />
         </div>
@@ -276,7 +276,7 @@ export function Connections({ vm }: { vm: Vm }) {
       <Sec title="SSH" right={vm.link && (aliasOn
         ? <Btn sm onClick={() => be.setSshAlias(vm.id, false)}>Remove alias</Btn>
         : <Btn sm onClick={() => be.setSshAlias(vm.id, true)}>Write alias</Btn>)}>
-        <Row l={<>Terminal {vm.link && <span class="d m">{vm.link.alias}</span>}</>}><Btn sm icon="term" onClick={() => be.open(vm.id, 'ssh')} disabled={na(s, 'open')}>Connect</Btn></Row>
+        <Row l={<>Terminal {vm.link && <span class="d m">{vm.link.alias}</span>}</>}><Btn sm icon="term" onClick={() => be.open(vm.id, 'ssh')} disabled={na(s, 'open') || !running(vm)} title={running(vm) ? undefined : NEEDS_RUNNING}>Connect</Btn></Row>
         {vm.link?.sshConfig === 'failed' && <div class="line badc">The alias could not be written to the SSH config</div>}
       </Sec>
       <Sec title="Sharing">

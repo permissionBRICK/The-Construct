@@ -44,6 +44,8 @@ html[data-surf="alone"] body { background: transparent; }
 .app .upv svg { width: 15px; height: 15px; stroke-width: 2.5; }
 .app .ic { width: 34px; height: 34px; display: inline-grid; place-items: center; border: 1px solid var(--ln); border-radius: var(--rad); background: var(--pn); padding: 0; flex: none; }
 .app .ic.lit { color: var(--ok); border-color: var(--ok); }
+/* A VM that is off: its power button is the coloured Start. */
+.app .ic.go { width: auto; padding: 0 12px; display: inline-flex; gap: 6px; background: var(--pri); border-color: var(--pri); color: var(--prifg); font-weight: 600; }
 .app .dot { width: 9px; height: 9px; border-radius: 50%; flex: none; border: 2px solid var(--off); display: inline-block; }
 .app .dot.on { border-color: var(--ok); background: var(--ok); }
 /* a running job: a ring in the primary colour that blinks. Yellow is kept for updates and changes that wait. */

@@ -6,7 +6,7 @@ import { section, VM_PAGES, type Page, type Route } from '../model/route';
 import { Icon, type IconName } from './icons';
 import { Btn, Dot, Pip } from './kit';
 import { na, useApp } from './ctx';
-import { EverythingBlock, JobBlock, PowerBtn, ReinstallConfirm, SignInBlock, SignInCard, SignInCards, Tiles, VaultCard, VaultCards, WarnedBlock } from './blocks';
+import { EverythingBlock, JobBlock, NEEDS_RUNNING, PowerBtn, ReinstallConfirm, SignInBlock, SignInCard, SignInCards, Tiles, VaultCard, VaultCards, WarnedBlock, running } from './blocks';
 import { lostSignIns } from '../model/signin';
 import { PageView } from './pages';
 
@@ -55,17 +55,17 @@ export function Stack({ footer }: { footer: boolean }) {
         <>
           <Btn class="big" kind="pri" icon="gear" onClick={() => shell.openWindow({ page: 'home' })}>Control panel</Btn>
           <div class="three">
-            <Btn icon="open" onClick={() => be.open(vm.id, 't3')} disabled={na(s, 'open')}>T3 Code</Btn>
-            <Btn icon="code" onClick={() => be.open(vm.id, 'vscode')} disabled={na(s, 'open')}>VS Code</Btn>
-            <Btn icon="term" onClick={() => be.open(vm.id, 'ssh')} disabled={na(s, 'open')}>SSH</Btn>
+            <Btn icon="open" onClick={() => be.open(vm.id, 't3')} disabled={na(s, 'open') || !running(vm)} title={running(vm) ? undefined : NEEDS_RUNNING}>T3 Code</Btn>
+            <Btn icon="code" onClick={() => be.open(vm.id, 'vscode')} disabled={na(s, 'open') || !running(vm)} title={running(vm) ? undefined : NEEDS_RUNNING}>VS Code</Btn>
+            <Btn icon="term" onClick={() => be.open(vm.id, 'ssh')} disabled={na(s, 'open') || !running(vm)} title={running(vm) ? undefined : NEEDS_RUNNING}>SSH</Btn>
           </div>
         </>
       ) : (
         <>
-          <Btn kind="pri" icon="open" onClick={() => be.open(vm.id, 't3')} disabled={na(s, 'open')}>T3 Code</Btn>
+          <Btn kind="pri" icon="open" onClick={() => be.open(vm.id, 't3')} disabled={na(s, 'open') || !running(vm)} title={running(vm) ? undefined : NEEDS_RUNNING}>T3 Code</Btn>
           <div class="two">
-            <Btn icon="code" onClick={() => be.open(vm.id, 'vscode')} disabled={na(s, 'open')}>VS Code</Btn>
-            <Btn icon="term" onClick={() => be.open(vm.id, 'ssh')} disabled={na(s, 'open')}>SSH</Btn>
+            <Btn icon="code" onClick={() => be.open(vm.id, 'vscode')} disabled={na(s, 'open') || !running(vm)} title={running(vm) ? undefined : NEEDS_RUNNING}>VS Code</Btn>
+            <Btn icon="term" onClick={() => be.open(vm.id, 'ssh')} disabled={na(s, 'open') || !running(vm)} title={running(vm) ? undefined : NEEDS_RUNNING}>SSH</Btn>
           </div>
         </>
       )}
