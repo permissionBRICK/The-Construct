@@ -64,6 +64,9 @@ export interface Vm {
   name: string;
   hostId: string;
   power: Power;
+  /** False when the engine cannot tell whether the VM runs (an external machine it cannot reach, a state it could not
+      read): it shows as off, but what needs it running is not held back and Start is not offered as the way on. */
+  powerKnown?: boolean;
   address: string;
   /** The SSH port on `address`, when it is not 22. */
   sshPort?: number | null;

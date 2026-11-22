@@ -1,7 +1,7 @@
 import { useState } from 'preact/hooks';
 import type { AgentId, Everything, Job, SignIn, VaultRequest, Vm } from '../backend/types';
 import { spanChoices, spanText } from '../backend/api/map';
-import { doneWord, failedTitle, jobWord, mainAction, repairWhen } from '../model/vm';
+import { doneWord, failedTitle, jobWord, mainAction, repairWhen, running } from '../model/vm';
 import { shortVersion, versionParts } from '../model/update';
 import { AGENTS } from '../model/settings';
 import { linkParts, lostSignIns } from '../model/signin';
@@ -296,7 +296,8 @@ export function ReinstallConfirm({ vm, onCancel }: { vm: Vm; onCancel: () => voi
       <div class="bf"><span>Fresh image</span><Switch on={fresh} onChange={setFresh} label="Fresh image" /></div>
       <div class="two">
         <Btn onClick={onCancel}>Cancel</Btn>
-        <Btn kind="red" onClick={() => { be.reinstall(vm.id, fresh); onCancel(); }}>Reinstall</Btn>
+        {/* Asked while it ran, then shut down: the reinstall needs it running for its backup. */}
+        <Btn kind="red" onClick={() => { if (!running(vm)) return; be.reinstall(vm.id, fresh); onCancel(); }} disabled={!running(vm)} title={running(vm) ? undefined : NEEDS_RUNNING}>Reinstall</Btn>
       </div>
     </div>
   );
@@ -332,7 +333,7 @@ export function Tiles({ vm, onReinstall }: { vm: Vm; onReinstall: () => void }) 
           <Icon n="repro" /><span>Reprovision</span>{a.waits && <Pip />}
         </button>
       )}
-      <button type="button" class="b tile" onClick={onReinstall} disabled={na(s, 'reinstall')}><Icon n="wipe" /><span>Reinstall</span></button>
+      <button type="button" class="b tile" onClick={onReinstall} disabled={na(s, 'reinstall') || !running(vm)} title={running(vm) ? undefined : NEEDS_RUNNING}><Icon n="wipe" /><span>Reinstall</span></button>
     </div>
   );
 }
@@ -353,18 +354,23 @@ export function ActionButtons({ vm, busy, onReinstall }: { vm: Vm; busy: boolean
           <Icon n="repro" />Reprovision{a.waits && !busy && <Pip />}
         </button>
       )}
-      <Btn icon="wipe" onClick={onReinstall} disabled={busy || na(s, 'reinstall')}>Reinstall</Btn>
+      <Btn icon="wipe" onClick={onReinstall} disabled={busy || na(s, 'reinstall') || !running(vm)} title={running(vm) ? undefined : NEEDS_RUNNING}>Reinstall</Btn>
     </>
   );
 }
 
+/** The VM's power button; while the VM is off it is the coloured Start, the one thing to do first. */
 export function PowerBtn({ vm }: { vm: Vm }) {
   const { be } = useApp();
   const on = vm.power === 'on' || vm.power === 'starting';
   const busy = vm.power === 'starting' || vm.power === 'stopping';
+  const start = vm.power === 'off' && vm.powerKnown !== false;
   return (
-    <button type="button" class={`ic ${on ? 'lit' : ''}`} disabled={busy} title={on ? 'Shut down' : 'Start'} aria-label={on ? 'Shut down' : 'Start'} onClick={() => be.power(vm.id, !on)}>
-      <Icon n="power" />
+    <button type="button" class={`ic ${on ? 'lit' : ''} ${start ? 'go' : ''}`} disabled={busy} title={on ? 'Shut down' : 'Start'} aria-label={on ? 'Shut down' : 'Start'} onClick={() => be.power(vm.id, !on)}>
+      <Icon n="power" />{start && <span>Start</span>}
     </button>
   );
 }
+
+/** What a VM that does not run says on the actions that need it running. */
+export const NEEDS_RUNNING = 'Start the VM first';

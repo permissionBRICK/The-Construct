@@ -107,3 +107,7 @@ export function cmpVersion(a: string, b: string): number {
   return 0;
 }
 export const newer = (a: string, b: string) => cmpVersion(a, b) > 0;
+
+/** Whether the VM runs, as far as its engine can tell: opening it and a reinstall need that (an update starts it by
+    itself). A VM whose state is not known is not held back. */
+export const running = (vm: Vm) => vm.power === 'on' || vm.powerKnown === false;
