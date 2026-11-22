@@ -1,7 +1,7 @@
 import { useState } from 'preact/hooks';
 import type { AgentId, Everything, Job, SignIn, VaultRequest, Vm } from '../backend/types';
 import { spanChoices, spanText } from '../backend/api/map';
-import { doneWord, failedTitle, jobWord, mainAction, repairWhen } from '../model/vm';
+import { doneWord, failedTitle, jobWord, mainAction, repairWhen, running } from '../model/vm';
 import { shortVersion, versionParts } from '../model/update';
 import { AGENTS } from '../model/settings';
 import { linkParts, lostSignIns } from '../model/signin';
@@ -363,7 +363,7 @@ export function PowerBtn({ vm }: { vm: Vm }) {
   const { be } = useApp();
   const on = vm.power === 'on' || vm.power === 'starting';
   const busy = vm.power === 'starting' || vm.power === 'stopping';
-  const start = vm.power === 'off';
+  const start = vm.power === 'off' && vm.powerKnown !== false;
   return (
     <button type="button" class={`ic ${on ? 'lit' : ''} ${start ? 'go' : ''}`} disabled={busy} title={on ? 'Shut down' : 'Start'} aria-label={on ? 'Shut down' : 'Start'} onClick={() => be.power(vm.id, !on)}>
       <Icon n="power" />{start && <span>Start</span>}
@@ -373,6 +373,3 @@ export function PowerBtn({ vm }: { vm: Vm }) {
 
 /** What a VM that does not run says on the actions that need it running. */
 export const NEEDS_RUNNING = 'Start the VM first';
-
-/** Whether the VM runs: opening it and a reinstall need that (an update starts it by itself). */
-export const running = (vm: Vm) => vm.power === 'on';

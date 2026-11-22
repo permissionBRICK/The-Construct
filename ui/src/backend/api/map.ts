@@ -149,6 +149,7 @@ export function toVm(id: string, engine: string, r: VmResponse, all: VmResponse[
     name: r.name,
     hostId: engine,
     power: power(r.state),
+    powerKnown: r.state !== 'unknown' && r.state !== 'absent',
     address: r.publicHost,
     sshPort: r.sshForwardPort ?? null,
     os: '',

@@ -1,13 +1,13 @@
 import { useState } from 'preact/hooks';
 import type { Agent, Profile, SettingsPatch, Upstream, Vm, VmSettings } from '../../backend/types';
-import { activeJob, vmDot, vmWord, newer, vmUpdateTarget, warnedJob } from '../../model/vm';
+import { activeJob, running, vmDot, vmWord, newer, vmUpdateTarget, warnedJob } from '../../model/vm';
 import { AGENTS, groupApplies, hwChange, swapSize } from '../../model/settings';
 import { profileError } from '../../model/profile';
 import { aliasWritten } from '../../backend/api/map';
 import { Icon } from '../icons';
 import { Btn, Confirm, Dot, Field, Head, KV, NotYet, Page, Row, Sec, Seg, Switch, Table, Tabs, Tag, UpTag } from '../kit';
 import { copy, na, useApp } from '../ctx';
-import { ActionButtons, JobBlock, MovedNotes, NEEDS_RUNNING, PowerBtn, ReinstallConfirm, SignInBlock, SignInCards, VaultCards, WarnedBlock, running } from '../blocks';
+import { ActionButtons, JobBlock, MovedNotes, NEEDS_RUNNING, PowerBtn, ReinstallConfirm, SignInBlock, SignInCards, VaultCards, WarnedBlock } from '../blocks';
 import { signInState } from '../../model/signin';
 import { shortVersion } from '../../model/update';
 

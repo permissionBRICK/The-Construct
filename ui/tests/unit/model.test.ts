@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { sampleState } from '../../src/backend/sample';
-import { activeJob, cmpVersion, mainAction, vmDot, vmUpdateTarget, vmWord, warnedJob } from '../../src/model/vm';
+import { activeJob, cmpVersion, mainAction, running, vmDot, vmUpdateTarget, vmWord, warnedJob } from '../../src/model/vm';
 import { shortVersion, updateDue, updateParts, updatePlan } from '../../src/model/update';
 import { convertRows } from '../../src/model/upgrade';
 import { agentList, agentSwitches, applies, applyPatch, DEFAULT_AGENTS, hwChange, swapSize } from '../../src/model/settings';
@@ -11,6 +11,17 @@ import { profileError } from '../../src/model/profile';
 import { linkParts, lostSignIns, signedIn, signInState } from '../../src/model/signin';
 
 const job = (p: Partial<Job>): Job => ({ id: 'j', vmId: 'atlas', kind: 'reprovision', state: 'running', step: 's', stepIndex: 0, stepCount: 3, pct: 0, log: [], error: null, repair: null, ...p });
+
+describe('a VM that does not run', () => {
+  it('holds back what needs it running only when its engine says it is off', () => {
+    const vm = sampleState().vms[0];
+    expect(running({ ...vm, power: 'on' })).toBe(true);
+    expect(running({ ...vm, power: 'off' })).toBe(false);
+    expect(running({ ...vm, power: 'starting' })).toBe(false);
+    // An external machine the engine cannot reach, a state it could not read: shown as off, not held back.
+    expect(running({ ...vm, power: 'off', powerKnown: false })).toBe(true);
+  });
+});
 
 describe('versions', () => {
   it('compares dotted numbers', () => {

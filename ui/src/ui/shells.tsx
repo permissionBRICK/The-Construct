@@ -1,12 +1,12 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
 import type { ComponentChildren } from 'preact';
-import { activeJob, vmDot, warnedJob } from '../model/vm';
+import { activeJob, running, vmDot, warnedJob } from '../model/vm';
 import { shortVersion, updateDue } from '../model/update';
 import { section, VM_PAGES, type Page, type Route } from '../model/route';
 import { Icon, type IconName } from './icons';
 import { Btn, Dot, Pip } from './kit';
 import { na, useApp } from './ctx';
-import { EverythingBlock, JobBlock, NEEDS_RUNNING, PowerBtn, ReinstallConfirm, SignInBlock, SignInCard, SignInCards, Tiles, VaultCard, VaultCards, WarnedBlock, running } from './blocks';
+import { EverythingBlock, JobBlock, NEEDS_RUNNING, PowerBtn, ReinstallConfirm, SignInBlock, SignInCard, SignInCards, Tiles, VaultCard, VaultCards, WarnedBlock } from './blocks';
 import { lostSignIns } from '../model/signin';
 import { PageView } from './pages';
 
