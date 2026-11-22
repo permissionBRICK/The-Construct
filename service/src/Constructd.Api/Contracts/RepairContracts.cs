@@ -27,16 +27,19 @@ public sealed record RepairLineResponse(long Seq, DateTimeOffset At, string Kind
 /// thread <paramref name="T3Thread"/> in the VM, followed and answered in T3 Code; ending the session ends Construct's
 /// following and the retry, the thread goes on in T3 Code. After a fix the engine retries the job once: <paramref name="RetryJobId"/>, or
 /// <paramref name="RetryRefused"/> with the reason. <paramref name="Lines"/> are the kept lines after the
-/// requested <c>after</c> (the last 400 at most). Nothing of a session survives an engine restart.
+/// requested <c>after</c> (the last 400 at most). <paramref name="StartedHere"/> is true only for the device that
+/// started the repair, signed in with its device token: the one whose token asked for the failed job (an automatic
+/// repair) or for the repair; its device agent opens T3 Desktop on the thread. Nothing of a session survives an engine restart.
 /// </summary>
 public sealed record RepairSessionResponse(string Id, string Vm, string JobId, string JobKind, string State, string? Outcome,
     bool Automatic, DateTimeOffset Started, DateTimeOffset? Ended, string? Agent, string? Via, RepairT3ThreadResponse? T3Thread,
-    string? RetryJobId, string? RetryRefused, IReadOnlyList<RepairLineResponse> Lines)
+    string? RetryJobId, string? RetryRefused, IReadOnlyList<RepairLineResponse> Lines, bool StartedHere)
 {
-    public static RepairSessionResponse From(RepairSession s, long after) => new(s.Id, s.Vm, s.JobId, s.JobKind,
+    /// <param name="device">The caller's device id (null without a device token).</param>
+    public static RepairSessionResponse From(RepairSession s, long after, string? device) => new(s.Id, s.Vm, s.JobId, s.JobKind,
         s.State switch { RepairState.Working => "working", RepairState.Waiting => "waiting", _ => "ended" }, s.Outcome, s.Automatic,
         s.Started, s.Ended, s.Agent?.Agent, s.Agent?.Via, s.T3Thread is { } t ? new(t.Environment, t.Thread, t.Title) : null,
-        s.RetryJobId, s.RetryRefused, [.. s.LinesAfter(after).Select(RepairLineResponse.From)]);
+        s.RetryJobId, s.RetryRefused, [.. s.LinesAfter(after).Select(RepairLineResponse.From)], s.StartedOn(device));
 }
 
 /// <summary>

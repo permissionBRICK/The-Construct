@@ -95,10 +95,11 @@ public sealed class ProvisionRequestException(int status, string code, string me
 /// <summary>
 /// What a job request carries after validation (secrets already in their bag). <paramref name="Kind"/> is
 /// <c>provision</c>, <c>reinstall</c> (<paramref name="FreshImage"/>: new install media) or <c>restore</c>
-/// (<paramref name="BackupId"/>, its key in the bag).
+/// (<paramref name="BackupId"/>, its key in the bag). <paramref name="Device"/> is the device whose token asked for
+/// the job (<see cref="JobDevices"/>), null for any other caller and for the engine itself.
 /// </summary>
 public sealed record ProvisionSubmission(string RequestId, string? Commit, VmDesiredState? Desired, bool DeferProjectCommands, JobSecretBag Secrets,
-    string Kind = JobKinds.Provision, string? BackupId = null, bool FreshImage = false);
+    string Kind = JobKinds.Provision, string? BackupId = null, bool FreshImage = false, string? Device = null);
 
 /// <summary>
 /// Accepts <c>provision</c>, <c>reinstall</c> and <c>restore</c> jobs (design 7.1): a repeated <c>requestId</c> returns the job it started,
@@ -108,7 +109,7 @@ public sealed record ProvisionSubmission(string RequestId, string? Commit, VmDes
 public sealed class ProvisionJobs(IJobStore jobs, IJobQueryStore history, IPersistedJobRunner runner, IVmOperationGate gates,
     IMaintenanceGate maintenance, IVmDesiredStateSource desired, IProvisionTargets targets, IReleaseInfo release,
     IHostConfigStore config, ConstructdOptions options, ProvisionJob job, ReinstallJob reinstall, IHypervisorDriver driver,
-    BackupCoordinator backups, IClock clock)
+    BackupCoordinator backups, JobDevices devices, IClock clock)
 {
     // owner|vm|requestId → job id, the fast path; the stored jobs are the fallback.
     private readonly ConcurrentDictionary<string, string> _requests = new(StringComparer.OrdinalIgnoreCase);
@@ -237,6 +238,8 @@ public sealed class ProvisionJobs(IJobStore jobs, IJobQueryStore history, IPersi
             var queued = new Job(id, request.Kind, vm.Name, vm.Owner, JobState.Queued, [], null, null, clock.UtcNow, null,
                 actor, request.RequestId, request.Kind == JobKinds.Reinstall ? ReinstallJob.Steps[0] : ProvisionJob.Steps[0]);
             await jobs.UpsertAsync(queued, ct);
+            // Before it runs: a job that fails at once starts its repair from what is known here.
+            devices.Remember(id, request.Device);
             Func<IProgress<string>, CancellationToken, Task<JobOutcome>> work = request.Kind == JobKinds.Reinstall
                 ? (progress, token) => reinstall.RunAsync(new ReinstallRun(id, vm, commit, state, channel, options.Iso.SeedUser, request.FreshImage,
                     request.Secrets), progress, token)
@@ -281,6 +284,7 @@ public sealed class ProvisionJobs(IJobStore jobs, IJobQueryStore history, IPersi
             var queued = new Job(id, JobKinds.Restore, vm.Name, vm.Owner, JobState.Queued, [], null, null, clock.UtcNow, null,
                 actor, request.RequestId, "restore");
             await jobs.UpsertAsync(queued, ct);
+            devices.Remember(id, request.Device);
             // A restore uses no source: the run carries the VM, its address and the backup. A backup made for a reinstall
             // is restored into the VM built from it, whose project commands ran before the restore brought back what they
             // need (secrets, tokens): they run again after it, with the VM's stored settings (F39).

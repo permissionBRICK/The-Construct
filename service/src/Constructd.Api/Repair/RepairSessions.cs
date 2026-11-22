@@ -44,6 +44,9 @@ public sealed class RepairSession
     internal DateTimeOffset LastAnnounced;
     internal bool AnnouncePending;
 
+    // The device the repair opens on (the failed job's, or the one that asked for the repair); never shown.
+    internal string? Device;
+
     public string Id { get; }
     public string Vm { get; }
     public string Owner { get; }
@@ -72,6 +75,9 @@ public sealed class RepairSession
     /// <summary>Why there was no retry after a fix (a restore needs its key again, the job was superseded).</summary>
     public string? RetryRefused { get; internal set; }
 
+    /// <summary>Whether <paramref name="device"/> (a caller's device id, null without a device token) started this repair.</summary>
+    public bool StartedOn(string? device) => device is not null && string.Equals(Device, device, StringComparison.Ordinal);
+
     /// <summary>The lines after <paramref name="after"/>, oldest first.</summary>
     public IReadOnlyList<RepairLine> LinesAfter(long after)
     {
@@ -97,11 +103,13 @@ public sealed class RepairRefusedException(int status, string code, string messa
 /// (<c>repair.started</c>, <c>repair.output</c> at most once a second, <c>repair.ended</c>). A job that takes
 /// the VM's operation gate ends the session first (<see cref="RepairAwareVmOperationGate"/>), so a repair and
 /// a lifecycle job never run on one VM together. When the agent ends saying it fixed the cause, the failed job
-/// is retried once; a retry that fails again starts no repair.
+/// is retried once; a retry that fails again starts no repair. A session remembers the device it opens on: an
+/// automatic one the failed job's (<see cref="JobDevices"/>), one asked for the requester's; only that device reads
+/// <c>startedHere</c>, and its device agent opens T3 Desktop on the session's thread.
 /// </summary>
 public sealed class RepairSessions(IServiceProvider services, InMemoryVmOperationGate gates, IGuestSessionRunner guests,
     ISshRunner ssh, IProvisionTargets targets, IJobStore jobs, IJobQueryStore history, IVmRepository vms, IHostConfigStore config,
-    IClock clock, ChangeFeed changes, ILogger<RepairSessions> logger)
+    JobDevices devices, IClock clock, ChangeFeed changes, ILogger<RepairSessions> logger)
 {
     /// <summary>How long an automatic start waits for the failed job to let go of the VM's gate.</summary>
     public static TimeSpan GateWait { get; set; } = TimeSpan.FromSeconds(30);
@@ -139,7 +147,7 @@ public sealed class RepairSessions(IServiceProvider services, InMemoryVmOperatio
         if (job.OperationKey is { } key && key.StartsWith("retry:", StringComparison.Ordinal) && _retried.ContainsKey(key["retry:".Length..])) return;
         if (Prompt(job) is null || !await AutomaticAsync(ct)) return;
         if (await vms.GetAsync(name, ct) is not { Kind: VmKind.Primary } vm) return;
-        try { await StartAsync(vm, job, automatic: true, ct); }
+        try { await StartAsync(vm, job, automatic: true, devices.Of(job.Id), ct); }
         catch (RepairRefusedException ex) { logger.LogInformation("No repair for job {Job}: {Code}.", job.Id, ex.Code); }
     }
 
@@ -154,10 +162,11 @@ public sealed class RepairSessions(IServiceProvider services, InMemoryVmOperatio
     }
 
     /// <summary>
-    /// Starts a repair of <paramref name="failed"/> on <paramref name="vm"/>. The failed job must be the VM's
-    /// latest lifecycle job and no job may run on the VM; the VM's gate is held while the session is set up.
+    /// Starts a repair of <paramref name="failed"/> on <paramref name="vm"/>, to open on <paramref name="device"/> (or on
+    /// none). The failed job must be the VM's latest lifecycle job and no job may run on the VM; the VM's gate is held
+    /// while the session is set up.
     /// </summary>
-    public async Task<RepairSession> StartAsync(Vm vm, Job failed, bool automatic, CancellationToken ct)
+    public async Task<RepairSession> StartAsync(Vm vm, Job failed, bool automatic, string? device, CancellationToken ct)
     {
         if (Latest(vm.Name) is { State: not RepairState.Ended } running)
             throw new RepairRefusedException(409, "repair-running", "A repair already runs on this VM.", running.Id);
@@ -192,7 +201,7 @@ public sealed class RepairSessions(IServiceProvider services, InMemoryVmOperatio
             if (Latest(vm.Name) is { State: not RepairState.Ended } other)
                 throw new RepairRefusedException(409, "repair-running", "A repair already runs on this VM.", other.Id);
 
-            var session = new RepairSession(id, current, failed, automatic, clock.UtcNow) { Target = target };
+            var session = new RepairSession(id, current, failed, automatic, clock.UtcNow) { Target = target, Device = device };
             _byVm[vm.Name] = session;
             changes.Publish("repair.started", session.Id, session.Vm, session.Owner);
             var rebooted = RepairScript.Rebooted(failed.Result is null ? null : JsonSerializer.SerializeToElement(failed.Result, ApiJson.Options));

@@ -85,7 +85,8 @@ public static partial class ProvisionEndpoints
     {
         try
         {
-            var (job, replayed) = await provisioning.SubmitAsync(vm, http.User.Actor(), submission, ct);
+            // The device that asked opens the job's repair, if it gets one (design 11.5).
+            var (job, replayed) = await provisioning.SubmitAsync(vm, http.User.Actor(), submission with { Device = http.User.DeviceId() }, ct);
             CodedProblems.Audit(http, "vm.provision", vm.Owner, target: vm.Name, extra: $"kind={job.Kind}; job={job.Id}; replayed={replayed}");
             return Results.Accepted("/api/v1/jobs/" + job.Id, new VmJobAcceptedResponse(job.Id, job.Kind, replayed));
         }
