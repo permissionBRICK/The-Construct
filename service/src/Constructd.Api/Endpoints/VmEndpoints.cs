@@ -268,11 +268,10 @@ public static class VmEndpoints
             {
                 var supplied = http.Request.Headers["X-Construct-Operation-Key"].FirstOrDefault();
                 if (supplied is not null && !OperationFingerprint.ValidKey(supplied)) return CodedProblems.Validation("operationKey", "Invalid operation key.");
-                var key = new OperationKeyRecord(vm.Owner, "lifecycle-start", supplied ?? Guid.NewGuid().ToString("n"), "primary-power-start:" + vm.Name,
-                    vm.Name, null, OperationKeyState.InFlight, null, vm.PowerGeneration, null, services.GetRequiredService<IClock>().UtcNow);
+                var starts = services.GetRequiredService<LifecycleStart>();
                 try
                 {
-                    var reply = await services.GetRequiredService<LifecycleStart>().RunAsync(vm, null, null, key, cancellationToken);
+                    var reply = await starts.RunAsync(vm, null, null, starts.PrimaryKey(vm, supplied), cancellationToken);
                     if (reply.Code is not null) return LifecycleEndpoints.Problem(reply.Code);
                     state = reply.State;
                 }

@@ -66,6 +66,7 @@ public sealed class JobProgressTracker(Func<DateTimeOffset> now)
     private readonly List<string> _order = [];
     private readonly Dictionary<string, (string Label, double Seconds)> _measured = new(StringComparer.Ordinal);
     private readonly HashSet<string> _done = new(StringComparer.Ordinal);
+    private readonly HashSet<string> _unplanned = new(StringComparer.Ordinal);
     private string? _key;
     private string? _label;
     private DateTimeOffset _since;
@@ -103,13 +104,17 @@ public sealed class JobProgressTracker(Func<DateTimeOffset> now)
         }
     }
 
-    /// <summary>A sub-step starts; the one before it is done.</summary>
-    public void Begin(string key, string label)
+    /// <summary>
+    /// A sub-step starts; the one before it is done. <paramref name="planned"/> false: a sub-step only some runs have (a
+    /// provision that starts its stopped VM first) stays out of the next run's plan, so a run without it does not wait for it.
+    /// </summary>
+    public void Begin(string key, string label, bool planned = true)
     {
         lock (_gate)
         {
             var at = now();
             Close(at);
+            if (!planned) _unplanned.Add(key);
             if (!_weights.ContainsKey(key) && !_measured.ContainsKey(key) && _openPrefix is not null && _open > 0 && key.StartsWith(_openPrefix, StringComparison.Ordinal))
                 _open--;
             _done.Remove(key);
@@ -157,7 +162,8 @@ public sealed class JobProgressTracker(Func<DateTimeOffset> now)
         {
             Close(now());
             _key = null;
-            return _order.Count == 0 ? null : new ProgressPlan([.. _order.Select(k => new ProgressPlanStep(k, _measured[k].Label, Math.Round(_measured[k].Seconds, 1)))]);
+            var kept = _order.Where(k => !_unplanned.Contains(k)).ToArray();
+            return kept.Length == 0 ? null : new ProgressPlan([.. kept.Select(k => new ProgressPlanStep(k, _measured[k].Label, Math.Round(_measured[k].Seconds, 1)))]);
         }
     }
 

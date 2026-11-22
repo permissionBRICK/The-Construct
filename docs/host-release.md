@@ -143,7 +143,10 @@ itself; run it by hand after fixing the cause.
 
 After an update succeeded, the host reprovisions, one after the other, the VMs of users who
 turned on `autoReprovision` (`PUT /api/v1/me/updates`) and the VM that asked for the update
-through its token. See [the service README](../service/README.md#updates) for the VM routes.
+through its token. These reprovisions never start a VM: one that is off is skipped and its update
+stays due until someone starts it or updates it by hand. An update the user asks for (the pop-out's
+Update, a VM's Update or Reprovision, a Retry) starts a VM that is off first. See
+[the service README](../service/README.md#updates) for the VM routes.
 
 The old routes (`check`, `stage`, `apply`, `cancel`, `resolve`) and everything below about
 them stay as they are for old clients, including the automatic database restore of a

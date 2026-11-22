@@ -42,13 +42,18 @@ public static class VmUpdateEndpoints
         return Results.Ok(body);
     }
 
-    /// <summary>The device agent's "Update everything" calls this: each job carries the device that asked (design 11.5).</summary>
+    /// <summary>
+    /// The device agent's "Update everything" calls this: each job carries the device that asked (design 11.5). The user asked
+    /// for these VMs, so one that is off is started first.
+    /// </summary>
     private static async Task<IResult> MineAsync(HttpContext http, VmUpdates updates, CancellationToken ct) =>
-        Results.Accepted(null as string, new VmReprovisionResponse(updates.Start(await updates.PrimariesAsync(http.User.NameOrEmpty(), ct), http.User.Actor(),
-            http.User.DeviceId())));
+        Results.Accepted(null as string, new VmReprovisionResponse(updates.Start([.. (await updates.PrimariesAsync(http.User.NameOrEmpty(), ct)).Select(v => (v, true))],
+            http.User.Actor(), http.User.DeviceId())));
 
+    /// <summary>Every VM on the host, other users' too: none is started, so a VM that is off is skipped.</summary>
     private static async Task<IResult> AllAsync(HttpContext http, VmUpdates updates, CancellationToken ct) =>
-        Results.Accepted(null as string, new VmReprovisionResponse(updates.Start(await updates.PrimariesAsync(null, ct), http.User.Actor())));
+        Results.Accepted(null as string, new VmReprovisionResponse(updates.Start([.. (await updates.PrimariesAsync(null, ct)).Select(v => (v, false))],
+            http.User.Actor())));
 
     /// <summary>That primary's own token, or its owner. Not an admin for someone else's VM: S28.</summary>
     private static async Task<(Vm? Vm, IResult? Denied)> FindAsync(string name, HttpContext http, IVmRepository vms, CancellationToken ct)
@@ -93,19 +98,20 @@ public static class VmUpdateEndpoints
         try
         {
             // An admin's VM: the host's own update first; once it succeeded the host reprovisions this VM and the
-            // owner's other VMs on this host (S28: everything the user owns), never another user's.
+            // owner's other VMs on this host (S28: everything the user owns), never another user's. This VM is started
+            // first when it is off; the others follow when they run.
             if (await OwnerIsAdminAsync(vm, users, ct))
             {
                 var follow = (await updates.PrimariesAsync(vm.Owner, ct)).Select(v => v.Name).Where(n => !Ownership.SameName(n, vm.Name)).Prepend(vm.Name).ToArray();
                 await work.Acceptance.WaitAsync(ct);
                 try
                 {
-                    if (await work.RunAsync(http.User.Actor(), ct, follow, vm.Owner) is { } started)
+                    if (await work.RunAsync(http.User.Actor(), ct, new UpdateFollowers(follow, vm.Owner, [vm.Name])) is { } started)
                         return Results.Accepted("/api/v1/jobs/" + started.JobId, new VmUpdateResponse(null, started.UpdateId, started.JobId));
                 }
                 finally { work.Acceptance.Release(); }
             }
-            var job = await updates.SubmitAsync(vm, http.User.Actor(), http.User.DeviceId(), ct);
+            var job = await updates.SubmitAsync(vm, http.User.Actor(), http.User.DeviceId(), startStopped: true, ct);
             return Results.Accepted("/api/v1/jobs/" + job.Id, new VmUpdateResponse(job.Id, null, null));
         }
         catch (UpdateException ex) { return UpdateEndpoints.RunProblem(http, ex); }

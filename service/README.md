@@ -319,9 +319,21 @@ answers `202 {jobId, kind, replayed}`. The job does on the guest what `Provision
 turns the cached release source (`commit`, default the engine's installed commit) into the PowerShell's
 archive, uploads and unpacks it, runs `bin/provision.sh` with the PowerShell's environment for the same
 settings, parses the result block, runs the deferred project phase when asked, reads
-`/etc/construct/provisioned.env`, and applies the PowerShell's reboot rule. Steps: `source`, `copy`,
-`provision`, `restore` (only with a backup to restore), `project-commands`, `applied`, `finish`; progress lines carry `{step, state, percent?}`
-and the job's `phase` is the step it is in.
+`/etc/construct/provisioned.env`, and applies the PowerShell's reboot rule. Steps: `start` (only for a VM that was off,
+below), `source`, `copy`, `provision`, `restore` (only with a backup to restore), `project-commands`, `applied`, `finish`;
+progress lines carry `{step, state, percent?}` and the job's `phase` is the step it is in.
+
+A provision a user asks for starts a VM that is off, saved or paused first: `POST /vms/{name}/jobs`, `POST /jobs/{id}/retry`,
+`POST /vms/{name}/update` and each VM of `POST /me/vms/reprovision`. Its first step, `start` ("Starting the VM"), starts the VM
+with the Start button's rules (`LifecycleStart`: pending hardware settings, admission and capacity) under the VM gate the job
+already holds, then waits up to `StartedVmSshWaitSeconds` (5 minutes) for the guest to answer over SSH and provisions it as
+usual. The VM stays running afterwards. A start the engine refuses fails the job in that step with `start-refused` and the
+reason in plain words (for example too little free memory on the host); a guest that does not answer in time fails it with
+`guest-unreachable` ("The VM started but did not answer over SSH within 5 minutes"). Neither gets a repair agent, since
+there is nothing on the guest to repair. A VM that runs is provisioned without a start. The engine's own provisions never
+start a VM (*Updates*), and the repair agent's retry runs on a VM that was just running. A `reinstall` or `restore` job does
+not start a stopped VM: a reinstall fails in its `backup` step and a restore in its `restore` step when the VM is off (a
+restore of a VM with no address is refused with `vm-endpoint-unknown` before a job exists).
 
 One bar per job: a create, reinstall, provision or restore names its sub-steps as they start (the engine's steps,
 `Downloading ISO`, `Building image`, `Installing Ubuntu`, and every `provision.sh` section, which prints
@@ -1066,6 +1078,7 @@ Bound from the `Constructd` section of `appsettings.json`, from environment vari
 | `AppForwardPorts:Start` / `:End` | `2300` / `2999` | Range for `construct expose --to host`. Must not overlap the SSH range. |
 | `MaxForwardsPerVm` | `100` | Cap on extra forwards per VM, enforced inside the forward manager; `0` or negative means no per-VM cap. The forward port ranges bound the total either way. At the cap a request gets 403 `forward-limit`, which says how to make room (docs/expose.md). |
 | `VmReachableTimeoutMinutes` | `30` | How long creation waits for SSH. |
+| `StartedVmSshWaitSeconds` | `300` | How long a provision that started its stopped VM first waits for the guest to answer over SSH. |
 | `AuditQueryLimit` | `200` | Default page size of `GET /audit`. |
 | `Idle:SchedulerEnabled` | `true` | Run the background evaluator. |
 | `ForwardReconcileSeconds` | `30` | Retry host forward reconciliation after boot and VM IP changes; independent of idle/power settings. Minimum 5 s; `0` disables periodic passes. |
@@ -2519,15 +2532,18 @@ VMs follow with the existing `provision` job and their stored settings, one VM a
 
 | Route | Who | What |
 |---|---|---|
-| `POST /me/vms/reprovision` | an enrolled user | The caller's own primaries on this host. `202 {vms}`; each VM gets a `provision` job. |
-| `POST /host/vms/reprovision` | admin | Every primary on this host. |
+| `POST /me/vms/reprovision` | an enrolled user | The caller's own primaries on this host. `202 {vms}`; each VM gets a `provision` job, and one that is off is started first. |
+| `POST /host/vms/reprovision` | admin | Every primary on this host that runs: one that is off is skipped, since it may be another user's. |
 | `GET`, `PUT /me/updates` | an enrolled user | `{autoReprovision}` (default false): after this host updated itself, it reprovisions the user's VMs. |
 | `GET /vms/{name}/update` | that primary's token or its owner | `{newerPayload, availableCommit, appliedCommit, hostUpdate}`; `hostUpdate` (`{version, commit}`) only when the VM's owner is an admin of this host and a host release is out. |
-| `POST /vms/{name}/update` | that primary's token or its owner | Starts the VM's reprovision (`{jobId}`). When the owner is an admin and a host release is out, runs the host's update instead (`{hostUpdateId, hostJobId}`) and reprovisions this VM once that update succeeded. |
+| `POST /vms/{name}/update` | that primary's token or its owner | Starts the VM's reprovision (`{jobId}`), starting the VM first when it is off. When the owner is an admin and a host release is out, runs the host's update instead (`{hostUpdateId, hostJobId}`) and reprovisions this VM once that update succeeded (starting it first when it is off) and the owner's other VMs that run. |
 
-A VM that cannot start its job (stopped, no stored settings, another job running) is skipped and
-logged; a service restart ends a running sequence. Nothing here reprovisions another user's VM
-except the admin's every-VM route.
+A VM a user asked for is started first when it is off (*Provisioning from the engine*). The engine's own chains never
+start a VM: the reprovisions after an update the host ran by itself (`autoReprovision`), the owner's other VMs that follow
+an admin's VM update, and the admin's every-VM route skip a VM that is off before any job exists, with an information
+line in the engine's log. Its update stays due, and a later manual update starts and updates it. A VM that cannot start
+its job (no stored settings, another job running) is skipped and logged too; a service restart ends a running sequence.
+Nothing here reprovisions another user's VM except the admin's every-VM route.
 
 ### The release protocol of the old routes
 

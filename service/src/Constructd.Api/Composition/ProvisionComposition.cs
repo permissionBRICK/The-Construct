@@ -41,6 +41,7 @@ public static class ProvisionComposition
         services.AddSingleton<ProvisionJob>();
         services.AddSingleton<ReinstallJob>();
         services.AddSingleton<ProvisionJobs>();
+        services.AddSingleton<ProvisionStart>();
         return services;
     }
 }

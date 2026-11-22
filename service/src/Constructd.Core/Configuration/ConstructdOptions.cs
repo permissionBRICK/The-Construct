@@ -200,6 +200,9 @@ public sealed class ConstructdOptions
     /// <summary>How long VM creation waits for SSH to answer.</summary>
     public int VmReachableTimeoutMinutes { get; set; } = 30;
 
+    /// <summary>How long a provision that started its stopped VM first waits for the guest to answer over SSH.</summary>
+    public int StartedVmSshWaitSeconds { get; set; } = 300;
+
     /// <summary>Default page size of <c>GET /audit</c>.</summary>
     public int AuditQueryLimit { get; set; } = 200;
 

@@ -71,6 +71,7 @@ public sealed class ProvisionJob(ISshRunner ssh, ISourceCache sources, IVmApplie
     /// <summary>The bar's words for an engine step (1-3 words); <c>provision.sh</c> names its own sections.</summary>
     public static string Label(string step) => step switch
     {
+        ProvisionStart.Step => "Starting the VM",
         "source" => "Preparing source",
         "copy" => "Copying files",
         "provision" => "Provisioning",

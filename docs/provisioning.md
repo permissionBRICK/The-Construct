@@ -158,6 +158,14 @@ JSON lines. The agent fixes what it can and asks in plain text only for a real c
 a suspected Construct bug. When it says the cause is fixed, the engine runs the job again once. See
 `service/README.md`, *The repair agent*.
 
+A VM that is off is no failure on the engine. A reprovision or update the user asks for (the client's Update or
+Reprovision, a Retry) starts it first, in the job's first step *Starting the VM*, with the same rules as the Start button,
+waits up to five minutes for it to answer over SSH, provisions it and leaves it running. A start the host refuses (too
+little free memory, say) fails the job with that reason, and a VM that does not answer in time fails it with "The VM
+started but did not answer over SSH within 5 minutes"; no repair agent starts for either. The engine's own reprovisions,
+after an update the host ran by itself and an admin's reprovision of every VM on a host, never start a VM: one that is off
+is skipped and its update stays due. See `service/README.md`, *Provisioning from the engine*.
+
 Signing in to the coding agents works the same way, without a console: the client's Sign in has the engine run
 `bin/construct-agent-sign-in.py <agent>` on the VM, which starts the agent's own sign-in under a pseudo-terminal
 (`claude auth login`, `codex login --device-auth`, `opencode auth login`, `agy acp --login`) and reports the

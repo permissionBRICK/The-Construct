@@ -149,13 +149,29 @@ describe('FakeBackend', () => {
     expect(s.release).toBeNull();
   });
 
-  it('reprovisions every VM on a host, other users\' as host jobs', () => {
+  it('reprovisions every VM on a host that runs, other users\' as host jobs, and skips one that is off', () => {
     const be = new FakeBackend({ tick: 10 });
+    const orchard = () => be.snapshot().hosts.find(h => h.id === 'orchard')!;
+    // moss is off: the host's own reprovision of every VM never starts one.
     be.updateHostVms('orchard');
-    expect(be.snapshot().hosts.find(h => h.id === 'orchard')!.jobs.filter(j => j.state === 'running').map(j => j.vm)).toEqual(['moss']);
+    expect(orchard().jobs.some(j => j.vm === 'moss')).toBe(false);
     expect(activeJob(be.snapshot(), 'harbor')?.kind).toBe('reprovision');
     run(2000);
-    expect(be.snapshot().hosts.find(h => h.id === 'orchard')!.jobs.every(j => j.state !== 'running')).toBe(true);
+    be.hostVmAction('orchard', 'moss', 'start');
+    be.updateHostVms('orchard');
+    expect(orchard().jobs.filter(j => j.state === 'running').map(j => j.vm)).toEqual(['moss']);
+    run(2000);
+    expect(orchard().jobs.every(j => j.state !== 'running')).toBe(true);
+  });
+
+  it('starts a VM that is off first when the user reprovisions it, and leaves it running', () => {
+    const be = new FakeBackend({ tick: 10 });
+    expect(be.snapshot().vms.find(v => v.id === 'pebble')!.power).toBe('off');
+    be.reprovision('pebble');
+    expect(activeJob(be.snapshot(), 'pebble')).toMatchObject({ state: 'running', step: 'Starting the VM', stepIndex: 0 });
+    run(2000);
+    expect(be.snapshot().jobs.at(-1)).toMatchObject({ vmId: 'pebble', state: 'done' });
+    expect(be.snapshot().vms.find(v => v.id === 'pebble')!.power).toBe('on');
   });
 
   it('keeps host administration and the VM list in step', () => {

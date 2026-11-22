@@ -30,6 +30,25 @@ public sealed class JobProgressTrackerTests
     }
 
     [Fact]
+    public void A_sub_step_only_some_runs_have_shows_but_stays_out_of_the_next_plan()
+    {
+        var t = Tracker();
+        t.Expect(["start", "source", "provision"]);
+        t.Begin("start", "Starting the VM", planned: false);
+        Assert.Equal((0, "Starting the VM"), t.Snapshot());
+        Wait(60);
+        t.Begin("source", "Preparing source");
+        Assert.Equal(33, t.Snapshot()!.Value.Percent);
+        Wait(10);
+        t.Begin("provision", "Provisioning");
+        Wait(30);
+
+        // A next run of a VM that runs already does not wait for a start it will not have.
+        var plan = t.Measured()!;
+        Assert.Equal(["source", "provision"], plan.Steps.Select(s => s.Key));
+    }
+
+    [Fact]
     public void Open_sub_steps_stand_in_for_sections_named_only_as_they_come()
     {
         var t = Tracker();
