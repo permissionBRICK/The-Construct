@@ -82,6 +82,11 @@ html[data-surf="alone"] body { background: transparent; }
 .app .bf > span:first-child { flex: 1; }
 .app .bf > span.lbl { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .app .bf.pad { padding: 10px 0; }
+/* Update everything: each part's detail on its own line under the name, wrapped (a version or a host name is long). */
+.app .bf.ev { align-items: flex-start; }
+.app .bf.ev > span:first-child { display: flex; flex-direction: column; min-width: 0; }
+.app .bf.ev small.d { font-size: 12px; overflow-wrap: anywhere; }
+.app .bf.ev > span:last-child { flex: none; }
 .app .bf.check { cursor: pointer; color: var(--fg); }
 .app .bf.check span { flex: 1; }
 

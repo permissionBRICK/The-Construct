@@ -12,12 +12,12 @@ import { spanText } from './api/map';
    own, so a scene stays exactly as it is. */
 
 export type Scene =
-  | 'calm' | 'update' | 'update-nightly' | 'changed' | 'lease' | 'enter' | 'job' | 'failed' | 'failed-reinstall' | 'repair' | 'repair-chat' | 'updating' | 'restart'
+  | 'calm' | 'update' | 'update-nightly' | 'everything' | 'changed' | 'lease' | 'enter' | 'job' | 'failed' | 'failed-reinstall' | 'repair' | 'repair-chat' | 'updating' | 'restart'
   | 'pairing' | 'pair-confirm' | 'revoked' | 'handout' | 'creating' | 'created' | 'sign-in' | 'sign-in-failed' | 'sign-in-browser' | 'sign-in-key' | 'signed-out' | 'signed-out-two'
   | 'upgrade-intro' | 'upgrade-engine' | 'upgrade-name' | 'upgrade-code' | 'upgrade-close' | 'upgrade-convert' | 'upgrade-host' | 'upgrade-done' | 'upgrade-restart'
   | 'first-run' | 'first-run-restart' | 'warned' | 'old-guest' | 'upstream';
 
-export const SCENES: Scene[] = ['calm', 'update', 'update-nightly', 'changed', 'lease', 'enter', 'job', 'failed', 'failed-reinstall', 'repair', 'repair-chat', 'updating', 'restart', 'pairing', 'pair-confirm', 'revoked', 'handout', 'creating', 'created', 'sign-in', 'sign-in-failed', 'sign-in-browser', 'sign-in-key', 'signed-out', 'signed-out-two', 'upgrade-intro', 'upgrade-engine', 'upgrade-name', 'upgrade-code', 'upgrade-close', 'upgrade-convert', 'upgrade-host', 'upgrade-done', 'upgrade-restart', 'first-run', 'first-run-restart', 'warned', 'old-guest', 'upstream'];
+export const SCENES: Scene[] = ['calm', 'update', 'update-nightly', 'everything', 'changed', 'lease', 'enter', 'job', 'failed', 'failed-reinstall', 'repair', 'repair-chat', 'updating', 'restart', 'pairing', 'pair-confirm', 'revoked', 'handout', 'creating', 'created', 'sign-in', 'sign-in-failed', 'sign-in-browser', 'sign-in-key', 'signed-out', 'signed-out-two', 'upgrade-intro', 'upgrade-engine', 'upgrade-name', 'upgrade-code', 'upgrade-close', 'upgrade-convert', 'upgrade-host', 'upgrade-done', 'upgrade-restart', 'first-run', 'first-run-restart', 'warned', 'old-guest', 'upstream'];
 
 /** Things the preview frame can make happen, beside the user's own actions. */
 export type Demo = 'lease' | 'enter' | 'release' | 'fail-next' | 'change';
@@ -93,6 +93,19 @@ export class FakeBackend implements Backend {
       case 'update': d.release = NEXT_RELEASE; break;
       // A nightly build's version carries its whole commit (finding 18).
       case 'update-nightly': d.prefs.channel = 'nightly'; d.release = NIGHTLY_RELEASE; for (const h of d.hosts) h.channel = 'nightly'; break;
+      // Update everything while a host updates: each part's detail wraps under its name (FatPC 2026-11-22, a version ran
+      // over the border).
+      case 'everything':
+        d.everything = {
+          running: true,
+          parts: [
+            { part: 'engine', name: 'This PC', state: 'running', detail: 'Updating to 1.0.0 · 0d488a3' },
+            { part: 'vms', name: 'Your VMs on This PC', state: 'running', detail: 'Next, once the host has restarted. A VM that is off is started first.' },
+            { part: 'engine', name: 'construct.example-house.internal', state: 'skipped', detail: 'Old Construct, unchanged.' },
+            { part: 'device', name: 'Construct app', state: 'pending', detail: null },
+          ],
+        };
+        break;
       // A reprovision that succeeded although an optional step failed (finding 41).
       case 'warned': d.jobs.push({ ...this.newJob('atlas', 'reprovision', REPROVISION_STEPS.length - 1, 100), state: 'done', warnings: ['Requesting project port forwards'] }); break;
       // A guest from before the sign-in helper: it reports its agents but not their sign-in (finding 11).
@@ -397,7 +410,7 @@ export class FakeBackend implements Backend {
             { part: 'engine' as const, name: h.name, state: h.admin ? 'done' as const : 'skipped' as const, detail: h.admin ? null : 'Its admin updates this host.' },
             { part: 'vms' as const, name: `Your VMs on ${h.name}`, state: due.some(x => d.vms.find(v => v.id === x.vmId)?.hostId === h.id) ? 'running' as const : 'done' as const, detail: null },
           ]),
-          { part: 'device' as const, name: 'This device', state: due.length ? 'pending' as const : 'done' as const, detail: null },
+          { part: 'device' as const, name: 'Construct app', state: due.length ? 'pending' as const : 'done' as const, detail: null },
         ],
       };
     }, 'Updating everything');

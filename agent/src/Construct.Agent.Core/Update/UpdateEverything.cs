@@ -37,6 +37,16 @@ public sealed class UpdateEverything(IDeviceEngines engines, AgentUpdater self, 
 
     public const string OldStackNote = "Old Construct, unchanged.";
 
+    /// <summary>The device part's name: the app on this device updates itself (on a PC with its own engine "This PC" names the host).</summary>
+    public const string AppPart = "Construct app";
+
+    /// <summary><c>X.Y.Z+&lt;commit&gt;</c> as the update tile shows it: <c>X.Y.Z · &lt;7 characters&gt;</c>.</summary>
+    public static string ShortVersion(string? version) => version?.Split('+', 2) switch
+    {
+        [var number, var commit] when commit.Length > 0 => $"{number} · {commit[..Math.Min(7, commit.Length)]}",
+        _ => version ?? "",
+    };
+
     /// <summary>Connects this device at a host that just moved to the new stack (enrols it, as at a new host); set by the agent's host.</summary>
     public Func<string, CancellationToken, Task>? Connect { get; set; }
 
@@ -88,7 +98,7 @@ public sealed class UpdateEverything(IDeviceEngines engines, AgentUpdater self, 
             {
                 var list = engines.List();
                 _parts = [.. list.SelectMany(e => new[] { new UpdatePart("engine", e.Id, e.Name, "pending"), new UpdatePart("vms", e.Id, e.Name, "pending") }),
-                    new UpdatePart("device", null, "This device", "pending")];
+                    new UpdatePart("device", null, AppPart, "pending")];
                 _run = RunAsync(list);
                 started = true;
             }
@@ -235,7 +245,7 @@ public sealed class UpdateEverything(IDeviceEngines engines, AgentUpdater self, 
                 return (HostResult.Unchanged, null, null);
             }
 
-            Set("engine", engine.Id, "running", "Updating to " + offer["version"]?.GetValue<string>());
+            Set("engine", engine.Id, "running", "Updating to " + ShortVersion(Text(offer["version"])));
             // The commit it updates to: the VMs follow only once the engine answers healthy with it (not after a rollback).
             // The run reads the channel again, so it may install a newer release than this offer (HealthyAsync).
             var commit = offer["commit"]?.GetValue<string>();

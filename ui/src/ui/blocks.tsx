@@ -64,7 +64,7 @@ export function EverythingBlock({ e }: { e: Everything }) {
     <div class={`blk job ${e.parts.some(p => p.state === 'failed') ? 'bad' : ''}`} aria-label="Update everything">
       <div class="bh"><Icon n="up" /><b>{e.running ? 'Updating' : 'Update'}</b></div>
       {e.parts.map(p => (
-        <div class="bf"><span class="grow">{p.name}</span>{p.detail && <span class="d">{p.detail}</span>}<span class={p.state === 'failed' ? 'badc' : p.state === 'done' ? 'okc' : ''}>{word[p.state]}</span></div>
+        <div class="bf ev"><span class="grow">{p.name}{p.detail && <small class="d">{p.detail}</small>}</span><span class={p.state === 'failed' ? 'badc' : p.state === 'done' ? 'okc' : ''}>{word[p.state]}</span></div>
       ))}
     </div>
   );
