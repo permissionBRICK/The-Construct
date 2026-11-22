@@ -14,6 +14,7 @@ public sealed class RepairAwareVmOperationGate(InMemoryVmOperationGate inner, Re
     private static readonly HashSet<string> Passes = new(StringComparer.Ordinal)
     {
         "capacity-reconcile", "idle-evaluate", "pressure-evaluate", "lease-reconcile", "lease-tick", "memory-floor", "https-start-on-request",
+        Constructd.Api.Jobs.HostStartSettings.GateOwner,
     };
 
     public async Task<IAsyncDisposable> AcquireAsync(string vmName, string operationId, CancellationToken ct)

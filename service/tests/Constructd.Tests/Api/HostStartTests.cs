@@ -51,6 +51,70 @@ public sealed class HostStartTests
         Assert.True(app.Driver.StartWithHost["idler"]);
     }
 
+    private static async Task UntilAsync(Func<bool> done)
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(10);
+        while (!done() && DateTime.UtcNow < deadline) await Task.Delay(20);
+        Assert.True(done(), "The setting did not follow.");
+    }
+
+    [Fact]
+    public async Task A_policy_change_while_an_operation_holds_the_vm_is_set_after_it_from_the_latest_policy()
+    {
+        // Review of #133: a create or reinstall writes the setting from the record it read before the hypervisor VM
+        // existed; a policy change beside it failed (no VM yet) or was overwritten. It now follows the operation.
+        using var app = new TestApp();
+        using var owner = await app.CreateUserClientAsync("alice");
+        Assert.Equal(JobState.Succeeded, (await CreateAsync(owner, "keeper", 0, "off")).State);
+        Assert.True(app.Driver.StartWithHost["keeper"]);
+
+        var held = await app.Service<IVmOperationGate>().AcquireAsync("keeper", "create-job", default);
+        await PutPolicyAsync(owner, "keeper", 60, "save");
+        // The operation still holds the VM: nothing is set beside it, and it ends writing its own older reading.
+        Assert.DoesNotContain("start-with-host:keeper:False", app.Driver.Calls);
+        app.Driver.StartWithHost["keeper"] = true;
+        await held.DisposeAsync();
+
+        await UntilAsync(() => !app.Driver.StartWithHost["keeper"]);
+    }
+
+    [Fact]
+    public async Task The_startup_pass_waits_for_an_operation_that_holds_the_vm_and_reads_the_vm_after_it()
+    {
+        // Review of #133: the pass read a VM, a start beside it changed what the VM should get, and the pass wrote its
+        // stale result. Under the VM's gate it runs after the start, from the record as the start left it.
+        using var app = new TestApp();
+        Assert.Equal(VmAddOutcome.Added, await app.Vms.AddAsync(Record("keeper", TwoHours), 10, default));
+        app.Driver.StartWithHost["keeper"] = false;
+
+        var held = await app.Service<IVmOperationGate>().AcquireAsync("keeper", "start-job", default);
+        await app.Service<HostStartSettings>().ApplyAllAsync(default);
+        Assert.DoesNotContain(app.Driver.Calls, c => c.StartsWith("start-with-host:keeper:", StringComparison.Ordinal));
+        // Meanwhile the VM's policy changed: it never idles out now.
+        var vm = (await app.Vms.GetAsync("keeper", default))!;
+        await app.Vms.UpdateAsync(vm with { IdlePolicy = IdlePolicy.Disabled }, default);
+        await held.DisposeAsync();
+
+        await UntilAsync(() => app.Driver.StartWithHost["keeper"]);
+    }
+
+    [Fact]
+    public async Task A_user_operation_waits_for_the_setting_instead_of_being_refused()
+    {
+        // The setting holds a VM's gate for one hypervisor call, as a background pass: a Stop clicked meanwhile waits
+        // for it (PrimaryOperationGate) instead of answering "another operation runs".
+        using var app = new TestApp();
+        using var owner = await app.CreateUserClientAsync("alice");
+        Assert.Equal(JobState.Succeeded, (await CreateAsync(owner, "keeper", 0, "off")).State);
+
+        var held = await app.Service<IVmOperationGate>().AcquireAsync("keeper", HostStartSettings.GateOwner, default);
+        var stop = owner.PostAsJsonAsync("/api/v1/vms/keeper/power", new { action = "stop" });
+        await Task.Delay(200);
+        Assert.False(stop.IsCompleted);
+        await held.DisposeAsync();
+        Assert.True((await stop).IsSuccessStatusCode);
+    }
+
     [Fact]
     public async Task A_host_that_forces_idling_keeps_every_primary_down_at_its_boot()
     {

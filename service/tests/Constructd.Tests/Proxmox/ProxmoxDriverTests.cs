@@ -232,8 +232,8 @@ public sealed class ProxmoxDriverTests
         var (driver, runner, _) = Driver(new RecordingProcessRunner()
             .RespondStdout(Resources).RespondStdout("""{"status":"stopped"}""")
             .RespondStdout("").RespondStdout("")                                                         // start
-            .RespondStdout(Resources).RespondStdout("")
-            .RespondStdout("""{"status":"running"}""").RespondStdout("")                                 // stop
+            .RespondStdout(Resources).RespondStdout("""{"status":"running"}""")
+            .RespondStdout("").RespondStdout("")                                                         // stop
             .RespondStdout(Resources).RespondStdout("")                                                  // save
             .RespondStdout(Resources).RespondStdout("")                                                  // cpu
             .RespondStdout(Resources).RespondStdout("""{"memory":"8192"}""").RespondStdout(""));      // memory
@@ -248,7 +248,7 @@ public sealed class ProxmoxDriverTests
         // Hyper-V's StartIfRunning equivalent: a started VM comes back after a node reboot...
         Assert.Equal(["set", "104", "--onboot", "1"], runner[3].Arguments);
         // ...and a stopped VM stays down, so the flag is cleared before the shutdown.
-        Assert.Equal(["set", "104", "--onboot", "0"], runner[5].Arguments);
+        Assert.Equal(["set", "104", "--onboot", "0"], runner[6].Arguments);
         Assert.Equal(["shutdown", "104", "--timeout", "120", "--forceStop", "1"], runner[7].Arguments);
         // A save keeps onboot set: the parked session resumes after a node reboot.
         Assert.Equal(["suspend", "104", "--todisk", "1"], runner[9].Arguments);
@@ -425,17 +425,19 @@ public sealed class ProxmoxDriverTests
     public async Task Stop_of_a_vm_that_is_off_or_saved_clears_onboot_but_issues_no_shutdown()
     {
         var (driver, runner, _) = Driver(new RecordingProcessRunner()
-            .RespondStdout(Resources).RespondStdout("").RespondStdout("""{"status":"stopped"}""")
-            .RespondStdout(Resources).RespondStdout("").RespondStdout("""{"status":"stopped","lock":"suspended"}"""));
+            .RespondStdout(Resources).RespondStdout("""{"status":"stopped"}""").RespondStdout("")
+            .RespondStdout(Resources).RespondStdout("""{"status":"stopped","lock":"suspended"}""").RespondStdout(""));
 
         await driver.StopAsync("work-vm", CancellationToken.None);
         await driver.StopAsync("work-vm", CancellationToken.None);
 
         Assert.Equal(6, runner.Calls.Count);
-        // A stop of a saved VM still means "stay down" across node reboots.
-        Assert.All(runner.Calls.Where(c => c.FileName == "qm"),
-            c => Assert.Equal(["set", "104", "--onboot", "0"], c.Arguments));
-        Assert.Equal(2, runner.Calls.Count(c => c.FileName == "qm"));
+        // A stop of a saved VM still means "stay down" across node reboots; Proxmox's suspend lock on the saved VM
+        // would refuse the write, so that one write skips it.
+        var writes = runner.Calls.Where(c => c.FileName == "qm").ToList();
+        Assert.Equal(2, writes.Count);
+        Assert.Equal(["set", "104", "--onboot", "0"], writes[0].Arguments);
+        Assert.Equal(["set", "104", "--onboot", "0", "--skiplock", "1"], writes[1].Arguments);
     }
 
     [Fact]

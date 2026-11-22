@@ -262,11 +262,13 @@ public sealed class ProxmoxDriver : IHypervisorDriver, IVmCpuDriver, IVmMemoryDr
     public async Task StopAsync(string name, CancellationToken cancellationToken)
     {
         var (vmName, id, vmId) = await RequireVmWithIdAsync("stop-vm", name, cancellationToken).ConfigureAwait(false);
-        // Even when the VM is already off or parked in a saved state: a stop expresses "stay down",
-        // so a node reboot must not start (or resume) this VM again.
-        await RunQmAsync("stop-vm", vmName, ["set", id, "--onboot", "0"], ShortTimeout, null, cancellationToken)
-            .ConfigureAwait(false);
         var state = await ReadStateAsync(vmName, vmId, cancellationToken).ConfigureAwait(false);
+        // Even when the VM is already off or parked in a saved state: a stop expresses "stay down",
+        // so a node reboot must not start (or resume) this VM again. A saved VM carries Proxmox's
+        // suspend lock, which this one write skips (see SetStartWithHostAsync).
+        string[] skipLock = state == VmState.Saved ? ["--skiplock", "1"] : [];
+        await RunQmAsync("stop-vm", vmName, ["set", id, "--onboot", "0", .. skipLock], ShortTimeout, null, cancellationToken)
+            .ConfigureAwait(false);
         if (state is VmState.Off or VmState.Saved)
         {
             return;
