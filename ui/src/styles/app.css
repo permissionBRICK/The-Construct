@@ -178,6 +178,9 @@ html[data-surf="alone"] body { background: transparent; }
 /* a long text column takes the room left and ends in an ellipsis; its whole text is in the title */
 .app .tb .t { width: 100%; max-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .app .tb td.u { max-width: 160px; overflow: hidden; text-overflow: ellipsis; }
+/* a narrow column of switches under a short centred header */
+.app .tb .a { text-align: center; }
+.app .tb td.a > .sw { vertical-align: middle; }
 .app .tb.secrets td.e svg { color: var(--dim); transition: transform .12s; }
 .app .tb.secrets tr.open td { border-bottom: 0; }
 .app .tb.secrets tr.open td.e svg { transform: rotate(180deg); }
@@ -276,6 +279,7 @@ html[data-surf="alone"] body { background: transparent; }
 .app .sft { display: flex; gap: 4px; border-top: 1px solid var(--ln); padding-top: 10px; margin-top: 2px; }
 .app .sft button { position: relative; display: flex; align-items: center; gap: 8px; border: 0; background: none; color: var(--dim); padding: 6px 8px; border-radius: 6px; }
 .app .sft button:hover { color: var(--fg); background: var(--pn); }
+.app .sft .v { margin-left: auto; align-self: center; padding-right: 8px; color: var(--dim); font: 500 11.5px var(--mono); white-space: nowrap; }
 .app .alone { padding: 12px; }
 /* the pop-out never scrolls sideways (finding 18); the shell sizes it to its content (finding 7) */
 .app.s-pop { overflow-x: hidden; }

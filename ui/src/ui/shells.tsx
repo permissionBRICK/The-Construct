@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
 import type { ComponentChildren } from 'preact';
 import { activeJob, vmDot, warnedJob } from '../model/vm';
-import { updateDue } from '../model/update';
+import { shortVersion, updateDue } from '../model/update';
 import { section, VM_PAGES, type Page, type Route } from '../model/route';
 import { Icon, type IconName } from './icons';
 import { Btn, Dot, Pip } from './kit';
@@ -50,11 +50,12 @@ export function Stack({ footer }: { footer: boolean }) {
       <SignInCards />
       <div class="hd"><VmMenu /><span class="host">{host?.name}</span><PowerBtn vm={vm} /></div>
       {footer ? (
-        // The pop-out: the control panel is what it is opened for most; the open actions share one row below it.
+        // The pop-out: the control panel is what it is opened for most (the coloured button); the open actions share
+        // one row below it.
         <>
-          <Btn class="big" icon="gear" onClick={() => shell.openWindow({ page: 'home' })}>Control panel</Btn>
+          <Btn class="big" kind="pri" icon="gear" onClick={() => shell.openWindow({ page: 'home' })}>Control panel</Btn>
           <div class="three">
-            <Btn kind="pri" icon="open" onClick={() => be.open(vm.id, 't3')} disabled={na(s, 'open')}>T3 Code</Btn>
+            <Btn icon="open" onClick={() => be.open(vm.id, 't3')} disabled={na(s, 'open')}>T3 Code</Btn>
             <Btn icon="code" onClick={() => be.open(vm.id, 'vscode')} disabled={na(s, 'open')}>VS Code</Btn>
             <Btn icon="term" onClick={() => be.open(vm.id, 'ssh')} disabled={na(s, 'open')}>SSH</Btn>
           </div>
@@ -74,6 +75,7 @@ export function Stack({ footer }: { footer: boolean }) {
       {footer && (
         <nav class="sft">
           <button type="button" onClick={() => shell.openWindow({ page: 'vault' })}><Icon n="key" />Key vault</button>
+          <span class="v" title={s.version}>{shortVersion(s.version, s.prefs.channel)}</span>
         </nav>
       )}
     </div>

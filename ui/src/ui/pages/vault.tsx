@@ -79,7 +79,7 @@ export function Secrets() {
       {!na(s, 'vault') && <Sec>
         {s.secrets.length ? (
           <table class="tb secrets">
-            <thead><tr><th>Secret</th><th class="t">Note</th><th class="x">In use</th><th class="x">Last</th><th>Auto-approve</th><th class="e" /></tr></thead>
+            <thead><tr><th>Secret</th><th class="t">Note</th><th class="x">In use</th><th class="x">Last</th><th class="a" title={AUTO_TIP}>Auto</th><th class="e" /></tr></thead>
             <tbody>{s.secrets.map(x => <SecretRow key={x.name} x={x} open={open === x.name} onToggle={() => setOpen(open === x.name ? null : x.name)} />)}</tbody>
           </table>
         ) : <div class="line">None</div>}
@@ -87,6 +87,9 @@ export function Secrets() {
     </Page>
   );
 }
+
+/** The auto-approve column is headed "Auto", as narrow as its switches; the whole meaning is in the tooltip. */
+const AUTO_TIP = 'Auto-approve: agents can read this secret without asking';
 
 /** One secret on one line, its note cut with an ellipsis (whole on hover); opened, the whole note and what can be done
     with it (finding 23). */
@@ -100,7 +103,7 @@ function SecretRow({ x, open, onToggle }: { x: Secret; open: boolean; onToggle: 
         <td class="t" title={x.note}>{x.note}</td>
         <td class="x u" title={used}>{used}</td>
         <td class="x">{x.last}</td>
-        <td onClick={e => e.stopPropagation()}><Switch on={x.auto} onChange={v => be.setAutoApprove(x.name, v)} label={`Auto-approve ${x.name}`} title="Agents can read this secret without asking" /></td>
+        <td class="a" onClick={e => e.stopPropagation()}><Switch on={x.auto} onChange={v => be.setAutoApprove(x.name, v)} label={`Auto-approve ${x.name}`} title={AUTO_TIP} /></td>
         <td class="e"><Icon n="down" /></td>
       </tr>
       {open && (
