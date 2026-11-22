@@ -42,8 +42,10 @@ public static class VmUpdateEndpoints
         return Results.Ok(body);
     }
 
+    /// <summary>The device agent's "Update everything" calls this: each job carries the device that asked (design 11.5).</summary>
     private static async Task<IResult> MineAsync(HttpContext http, VmUpdates updates, CancellationToken ct) =>
-        Results.Accepted(null as string, new VmReprovisionResponse(updates.Start(await updates.PrimariesAsync(http.User.NameOrEmpty(), ct), http.User.Actor())));
+        Results.Accepted(null as string, new VmReprovisionResponse(updates.Start(await updates.PrimariesAsync(http.User.NameOrEmpty(), ct), http.User.Actor(),
+            http.User.DeviceId())));
 
     private static async Task<IResult> AllAsync(HttpContext http, VmUpdates updates, CancellationToken ct) =>
         Results.Accepted(null as string, new VmReprovisionResponse(updates.Start(await updates.PrimariesAsync(null, ct), http.User.Actor())));
@@ -103,7 +105,7 @@ public static class VmUpdateEndpoints
                 }
                 finally { work.Acceptance.Release(); }
             }
-            var job = await updates.SubmitAsync(vm, http.User.Actor(), ct);
+            var job = await updates.SubmitAsync(vm, http.User.Actor(), http.User.DeviceId(), ct);
             return Results.Accepted("/api/v1/jobs/" + job.Id, new VmUpdateResponse(job.Id, null, null));
         }
         catch (UpdateException ex) { return UpdateEndpoints.RunProblem(http, ex); }

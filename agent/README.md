@@ -304,6 +304,18 @@ A repair session's lines (`repair.*`, `id` the session, `vm` its VM) are read th
 `GET /api/engines/{id}/api/v1/vms/{vm}/repair/{session}?after=SEQ`; the agent passes these events on as
 they come and keeps nothing of them.
 
+A repair that started on this PC opens T3 Desktop by itself (`Device/RepairOpener.cs`, design 11.5). The agent
+follows `repair.started` and `repair.output` and reads each session it has not decided yet without its lines,
+one read per session at a time; a failed read is tried again on the session's next event. A session whose
+`startedHere` is false (another device, or none, started its job), or that ended, is never read again. One started
+here opens T3 Desktop on its `t3Thread` once per run of the agent, the same way as the open action with a thread,
+when the thread is first seen within 15 minutes of the session's `started`; without a thread yet it waits for the
+next event. Only the desktop app opens: without Construct's T3 Desktop on this PC, or for a thread without its
+environment, nothing does, and the failed job's button still opens T3 Code. The engine's stream repeats nothing
+from before the agent connected (`engine.reset`), so then each VM's latest repair is read once: a repair that started
+while the agent restarted and has gone quiet still opens. A session is remembered for 30 minutes after it was first
+seen, past its window, so it opens only once.
+
 ## Repair
 
 `construct-agent repair` reads only local files and the network: it reports the directory, the

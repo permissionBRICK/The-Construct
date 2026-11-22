@@ -148,8 +148,9 @@ error) shows no prompt and no menu.
 On a host that provisions VMs itself (the engine), no one has to be at a console: the engine starts
 the same kind of agent on the VM by itself with `bin/construct-repair-agent.sh`, the headless
 counterpart of `construct-agent-fix.sh`. It reads the prompt in `config/repair-prompt.md` plus what
-failed and starts it as a T3 Code thread in the VM (project "Construct repair"), which the client's
-failed job opens in T3 Code; the user follows and answers it there. With the host setting
+failed and starts it as a T3 Code thread in the VM (project "Construct repair"), which T3 Desktop opens by
+itself on the PC that started the job, and the client's failed job opens in T3 Code anywhere; the user follows
+and answers it there. With the host setting
 `repair.chat`, or without a running T3 Code on the VM, it runs Claude Code (or Codex, or OpenCode, in
 the order `AI_TOOLS` names them) directly without question, plan or permission prompts, and the user
 answers in the client under the failed job. Either way the script reports what the agent says as

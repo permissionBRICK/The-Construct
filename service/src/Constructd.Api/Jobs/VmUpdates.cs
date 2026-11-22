@@ -38,16 +38,19 @@ public sealed class VmUpdates(IVmRepository vms, IUserStore users, IJobStore job
     public async Task<UserUpdateSettings> SettingsAsync(string user, CancellationToken ct) =>
         await config.GetAsync<UserUpdateSettings>(SettingsKey(user), ct) ?? new();
 
-    /// <summary>Starts the provision job of one VM with its stored settings and the engine's installed commit.</summary>
-    public async Task<Job> SubmitAsync(Vm vm, string actor, CancellationToken ct)
+    /// <summary>
+    /// Starts the provision job of one VM with its stored settings and the engine's installed commit; <paramref name="device"/>
+    /// is the device that asked for it (<see cref="JobDevices"/>), null when the engine starts it.
+    /// </summary>
+    public async Task<Job> SubmitAsync(Vm vm, string actor, string? device, CancellationToken ct)
     {
         var (job, _) = await services.GetRequiredService<ProvisionJobs>().SubmitAsync(vm, actor,
-            new ProvisionSubmission("update-" + Guid.NewGuid().ToString("n"), null, null, false, new JobSecretBag()), ct);
+            new ProvisionSubmission("update-" + Guid.NewGuid().ToString("n"), null, null, false, new JobSecretBag(), Device: device), ct);
         return job;
     }
 
-    /// <summary>Reprovisions the VMs one after the other in the background; answers their names.</summary>
-    public IReadOnlyList<string> Start(IReadOnlyList<Vm> list, string actor)
+    /// <summary>Reprovisions the VMs one after the other in the background, each job for <paramref name="device"/>; answers their names.</summary>
+    public IReadOnlyList<string> Start(IReadOnlyList<Vm> list, string actor, string? device = null)
     {
         var queued = list.DistinctBy(v => v.Name, StringComparer.OrdinalIgnoreCase).ToArray();
         var names = queued.Select(v => v.Name).ToArray();
@@ -61,7 +64,7 @@ public sealed class VmUpdates(IVmRepository vms, IUserStore users, IJobStore job
                     // by somebody else is not touched.
                     if (await vms.GetAsync(name, CancellationToken.None) is not { Deleting: false } vm ||
                         !Ownership.SameName(vm.Owner, owner) || vm.Created != created) continue;
-                    var job = await SubmitAsync(vm, actor, CancellationToken.None);
+                    var job = await SubmitAsync(vm, actor, device, CancellationToken.None);
                     while (await jobs.GetAsync(job.Id, CancellationToken.None) is { State: JobState.Queued or JobState.Running })
                         await Task.Delay(TimeSpan.FromSeconds(1));
                 }

@@ -29,6 +29,10 @@ public static class PrincipalExtensions
 
     public static bool IsVaultDevice(this ClaimsPrincipal principal) => principal.VaultDeviceOwner() is not null;
 
+    /// <summary>The device id of a caller signed in with its device token (design 8.1), or null for every other principal.</summary>
+    public static string? DeviceId(this ClaimsPrincipal principal) =>
+        principal.FindFirst(DeviceAuthenticationHandler.DeviceClaim)?.Value is { Length: > 0 } device ? device : null;
+
     public static Role RoleOrDefault(this ClaimsPrincipal principal) =>
         principal.IsInRole(nameof(Role.Admin)) ? Role.Admin : Role.User;
 

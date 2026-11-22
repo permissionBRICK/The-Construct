@@ -668,10 +668,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** @description The VM's latest repair session with its lines after `after` (a line's `seq`); 404 `no-repair` when none ran since the engine started. */
+        /** @description The VM's latest repair session with its lines after `after` (a line's `seq`); 404 `no-repair` when none ran since the engine started. `startedHere` is true only for the device whose device token asked for the failed job (an automatic repair) or for the repair. */
         get: operations["GetVmRepair"];
         put?: never;
-        /** @description Starts the repair agent on the VM's latest failed provision, reinstall or restore. 409: `no-failed-job`, `not-repairable`, `repair-running` (with `sessionId`), `operation-in-progress`, `vm-endpoint-unknown`. */
+        /** @description Starts the repair agent on the VM's latest failed provision, reinstall or restore; it opens on the requester's device (`startedHere`). 409: `no-failed-job`, `not-repairable`, `repair-running` (with `sessionId`), `operation-in-progress`, `vm-endpoint-unknown`. */
         post: operations["StartVmRepair"];
         delete?: never;
         options?: never;
@@ -5497,6 +5497,7 @@ export interface components {
             retryJobId: null | string;
             retryRefused: null | string;
             lines: components["schemas"]["RepairLineResponse"][];
+            startedHere: boolean;
         };
         RepairT3ThreadResponse: {
             environmentId: null | string;

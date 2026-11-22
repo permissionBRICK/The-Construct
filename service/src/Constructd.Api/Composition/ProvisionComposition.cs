@@ -36,6 +36,7 @@ public static class ProvisionComposition
         services.AddSingleton<Constructd.Api.Devices.DeviceSshKeys>();
         services.AddSingleton<Constructd.Api.Devices.AccountBackupKeys>();
         services.AddSingleton<RecoveryMarks>();
+        services.AddSingleton<JobDevices>();
         services.AddSingleton<ReinstallKeys>();
         services.AddSingleton<ProvisionJob>();
         services.AddSingleton<ReinstallJob>();

@@ -22,10 +22,12 @@ public static class RepairEndpoints
     {
         api.MapGet("/vms/{name}/repair", LatestAsync).RequireAuthorization(Policies.User)
             .Produces<RepairSessionResponse>().WithName("GetVmRepair")
-            .WithDescription("The VM's latest repair session with its lines after `after` (a line's `seq`); 404 `no-repair` when none ran since the engine started.");
+            .WithDescription("The VM's latest repair session with its lines after `after` (a line's `seq`); 404 `no-repair` when none ran since the engine started. " +
+                "`startedHere` is true only for the device whose device token asked for the failed job (an automatic repair) or for the repair.");
         api.MapPost("/vms/{name}/repair", StartAsync).RequireAuthorization(Policies.User).Audited("vm.repair")
             .Produces<RepairSessionResponse>(StatusCodes.Status202Accepted).WithName("StartVmRepair")
-            .WithDescription("Starts the repair agent on the VM's latest failed provision, reinstall or restore. 409: `no-failed-job`, `not-repairable`, `repair-running` (with `sessionId`), `operation-in-progress`, `vm-endpoint-unknown`.");
+            .WithDescription("Starts the repair agent on the VM's latest failed provision, reinstall or restore; it opens on the requester's device (`startedHere`). " +
+                "409: `no-failed-job`, `not-repairable`, `repair-running` (with `sessionId`), `operation-in-progress`, `vm-endpoint-unknown`.");
         api.MapGet("/vms/{name}/repair/{id}", GetAsync).RequireAuthorization(Policies.User)
             .Produces<RepairSessionResponse>().WithName("GetVmRepairSession");
         // Audited as an action on the VM; the text is never part of the record.
@@ -52,7 +54,7 @@ public static class RepairEndpoints
         var (vm, denied) = await VmAsync(name, http, vms, ct);
         if (vm is null) return denied!;
         return repairs.Latest(vm.Name) is { } session && session.VmCreated == vm.Created
-            ? Results.Ok(RepairSessionResponse.From(session, after ?? 0))
+            ? Results.Ok(RepairSessionResponse.From(session, after ?? 0, http.User.DeviceId()))
             : CodedProblems.Create(404, "no-repair", "No repair ran on this VM since the engine started.");
     }
 
@@ -60,7 +62,7 @@ public static class RepairEndpoints
     {
         var (vm, denied) = await VmAsync(name, http, vms, ct);
         if (vm is null) return denied!;
-        return Find(repairs, vm, id) is { } session ? Results.Ok(RepairSessionResponse.From(session, after ?? 0)) : Problems.NotFound("Unknown repair session.");
+        return Find(repairs, vm, id) is { } session ? Results.Ok(RepairSessionResponse.From(session, after ?? 0, http.User.DeviceId())) : Problems.NotFound("Unknown repair session.");
     }
 
     private static async Task<IResult> StartAsync(string name, HttpContext http, IVmRepository vms, RepairSessions repairs, CancellationToken ct)
@@ -70,9 +72,10 @@ public static class RepairEndpoints
         try
         {
             var failed = await repairs.LatestFailedAsync(vm, ct);
-            var session = await repairs.StartAsync(vm, failed, automatic: false, ct);
+            // The requester's device opens it, whichever device started the failed job.
+            var session = await repairs.StartAsync(vm, failed, automatic: false, http.User.DeviceId(), ct);
             http.SetAuditDetail($"session={session.Id}; job={failed.Id}");
-            return Results.Accepted($"/api/v1/vms/{vm.Name}/repair/{session.Id}", RepairSessionResponse.From(session, 0));
+            return Results.Accepted($"/api/v1/vms/{vm.Name}/repair/{session.Id}", RepairSessionResponse.From(session, 0, http.User.DeviceId()));
         }
         catch (RepairRefusedException ex)
         {

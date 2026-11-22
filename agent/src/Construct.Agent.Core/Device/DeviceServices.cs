@@ -1,4 +1,5 @@
 using Construct.Agent.Device.Runtime;
+using Construct.Agent.Events;
 using Construct.Agent.Update;
 using Construct.Companion.Core;
 using Construct.Companion.Core.Abstractions;
@@ -18,13 +19,14 @@ public interface IAgentShell
 
 /// <summary>
 /// The device features of one agent (5.1): VM links, open actions, SSH configuration, the device's
-/// settings, its own updates and "update everything". Built by <see cref="Http.AgentHost"/> from the
-/// platform in <see cref="AgentOptions.Platform"/>; tests build it with fakes.
+/// settings, its own updates, "update everything" and, given the agent's events, T3 Desktop opening on a repair
+/// that started here. Built by <see cref="Http.AgentHost"/> from the platform in <see cref="AgentOptions.Platform"/>;
+/// tests build it with fakes.
 /// </summary>
 public sealed class DeviceServices : IAsyncDisposable
 {
     public DeviceServices(IDevicePlatform platform, DeviceSettings settings, SshClientConfig ssh, VmLinks links, AgentUpdater updater, UpdateEverything everything,
-        IDeviceEngines engines)
+        IDeviceEngines engines, AgentEvents? events = null, TimeProvider? time = null)
     {
         Platform = platform;
         Settings = settings;
@@ -34,6 +36,7 @@ public sealed class DeviceServices : IAsyncDisposable
         SignIns = new SignInForwards(links, engines, platform);
         Updater = updater;
         Everything = everything;
+        Repairs = events is null ? null : new RepairOpener(events, engines, Actions, time ?? TimeProvider.System);
     }
 
     public IDevicePlatform Platform { get; }
@@ -52,6 +55,9 @@ public sealed class DeviceServices : IAsyncDisposable
     public AgentUpdater Updater { get; }
 
     public UpdateEverything Everything { get; }
+
+    /// <summary>Opens T3 Desktop on a repair that started on this PC (design 11.5); null without the agent's events.</summary>
+    public RepairOpener? Repairs { get; }
 
     /// <summary>Set by the Windows shell once its windows exist.</summary>
     public IAgentShell? Shell { get; set; }
@@ -82,7 +88,7 @@ public sealed class DeviceServices : IAsyncDisposable
             platform as IAgentLauncher ?? throw new InvalidOperationException("The platform cannot start an agent."), stop, () => agent.Events.Publish("update"))
         { Running = running };
         everything = new UpdateEverything(engines, updater, () => agent.Events.Publish("update"), options.Time);
-        var services = new DeviceServices(platform, settings, ssh, links, updater, everything, engines)
+        var services = new DeviceServices(platform, settings, ssh, links, updater, everything, engines, agent.Events, options.Time)
         {
             StartExecutable = running is not null ? install.ExecutableOf(running) : Environment.ProcessPath,
         };
@@ -94,10 +100,12 @@ public sealed class DeviceServices : IAsyncDisposable
     {
         Links.Start();
         Updater.Start();
+        Repairs?.Start();
     }
 
     public async ValueTask DisposeAsync()
     {
+        if (Repairs is not null) await Repairs.DisposeAsync().ConfigureAwait(false);
         await Updater.DisposeAsync().ConfigureAwait(false);
         await SignIns.DisposeAsync().ConfigureAwait(false);
         await Links.DisposeAsync().ConfigureAwait(false);

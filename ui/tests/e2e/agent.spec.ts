@@ -237,8 +237,12 @@ test('first run, a VM, a reprovision and a second device on the real API', async
   await expect(pa.getByRole('status')).toHaveText('Reprovisioned alpha', { timeout: 90000 });
   await expect(pa.locator('.blk.job')).toHaveCount(0);
   const repair = (await (await admin.get('/api/v1/vms/alpha/repair')).json()) as { state: string; outcome: string; retryJobId: string | null; automatic: boolean };
-  expect(repair).toMatchObject({ state: 'ended', outcome: 'fixed', automatic: false });
+  expect(repair).toMatchObject({ state: 'ended', outcome: 'fixed', automatic: false, startedHere: false });
   expect(repair.retryJobId).not.toBeNull();
+  // It was asked for through this device's agent: read with the device's token, the repair started here.
+  const local = await request.newContext({ baseURL: a.base, extraHTTPHeaders: { Authorization: `Bearer ${a.token}` } });
+  const engineId = ((await (await local.get('/api/state')).json()) as { engines: { id: string }[] }).engines[0].id;
+  expect((await (await local.get(`/api/engines/${encodeURIComponent(engineId)}/api/v1/vms/alpha/repair`)).json()).startedHere).toBe(true);
 
   // A secret added in the vault and revealed for a moment.
   await pa.goto(`${a.base}/#/vault`);

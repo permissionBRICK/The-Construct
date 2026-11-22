@@ -1198,7 +1198,7 @@ describe('ApiBackend repair agent', () => {
   const failed = (id = 'f1', kind = 'provision') => ({ ...job(id, 'atlas', 'failed', kind), result: { fixPrompt: ['x'] } });
   const session = (o: Record<string, unknown> = {}) => ({
     id: 's1', vm: 'atlas', jobId: 'f1', jobKind: 'provision', state: 'working', outcome: null, automatic: false, started: '2026-11-13T10:01:00Z', ended: null,
-    agent: 'claude', via: 'direct', retryJobId: null, retryRefused: null, lines: [], ...o,
+    agent: 'claude', via: 'direct', retryJobId: null, retryRefused: null, lines: [], startedHere: false, ...o,
   });
   const line = (seq: number, kind: string, text: string | null, outcome: string | null = null) => ({ seq, at: '2026-11-13T10:01:00Z', kind, text, outcome });
 

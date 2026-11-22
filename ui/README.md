@@ -93,7 +93,8 @@ last one read). Only a session whose `jobId` is that job shows under it, and onl
 its reply, Stop (`DELETE`) or start (`POST /vms/{name}/repair`; a `409 repair-running` follows the session the host
 started). By default the session is a T3 Code thread in the VM (`t3Thread`): the block shows what the agent said and
 opens the thread in T3 Code (`open` with the thread's ids: T3 Desktop on the thread, else the web UI and a notice
-naming it), where the user answers; the pop-out's button opens it directly. With the host's `repair.chat` the agent
+naming it), where the user answers; the pop-out's button opens it directly. On the PC that started the failed job
+(or the repair) the device agent opens T3 Desktop on the thread by itself; the buttons stay for every other case. With the host's `repair.chat` the agent
 runs directly and the reply box is there while the session waits for an answer. "Fixed" shows only when the session
 ended with `fixed`; the job the engine retried then shows it. Otherwise the pop-out opens the window on the VM
 (`#/home/<vm>`). An admin switches `repair.auto` and `repair.chat` on the host's Configuration tab.
