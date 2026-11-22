@@ -96,16 +96,18 @@ public sealed class RepairRefusedException(int status, string code, string messa
 /// <summary>
 /// The repair sessions, one at a time per VM (design 11.5, S26). A session starts when a
 /// <c>provision</c>, <c>reinstall</c> or <c>restore</c> job fails with failed guest steps (unless the host's
-/// <c>repair.auto</c> is off) or by request; it runs <c>bin/construct-repair-agent.sh</c> on the VM over SSH,
+/// <c>repair.auto</c> is off) or by request; a job that succeeded with failed optional steps (its warnings) is repaired
+/// only by request. It runs <c>bin/construct-repair-agent.sh</c> on the VM over SSH,
 /// which starts a T3 Code thread in the VM and follows it (or, with <c>repair.chat</c> or without T3 Code there,
 /// runs the agent directly),
 /// keeps its last <see cref="RepairScript.MaxLines"/> lines, and announces itself on the change stream
 /// (<c>repair.started</c>, <c>repair.output</c> at most once a second, <c>repair.ended</c>). A job that takes
 /// the VM's operation gate ends the session first (<see cref="RepairAwareVmOperationGate"/>), so a repair and
 /// a lifecycle job never run on one VM together. When the agent ends saying it fixed the cause, the failed job
-/// is retried once; a retry that fails again starts no repair. A session remembers the device it opens on: an
-/// automatic one the failed job's (<see cref="JobDevices"/>), one asked for the requester's; only that device reads
-/// <c>startedHere</c>, and its device agent opens T3 Desktop on the session's thread.
+/// is retried once; a retry that fails again starts no repair. After the fix of a job with warnings the VM is
+/// provisioned once instead (a reinstall run again would undo a fix made inside the VM). A session remembers the device
+/// it opens on: an automatic one the failed job's (<see cref="JobDevices"/>), one asked for the requester's; only that
+/// device reads <c>startedHere</c>, and its device agent opens T3 Desktop on the session's thread.
 /// </summary>
 public sealed class RepairSessions(IServiceProvider services, InMemoryVmOperationGate gates, IGuestSessionRunner guests,
     ISshRunner ssh, IProvisionTargets targets, IJobStore jobs, IJobQueryStore history, IVmRepository vms, IHostConfigStore config,
@@ -120,7 +122,7 @@ public sealed class RepairSessions(IServiceProvider services, InMemoryVmOperatio
     // VM name -> its latest session (ended ones stay readable until the next starts).
     private readonly ConcurrentDictionary<string, RepairSession> _byVm = new(StringComparer.OrdinalIgnoreCase);
 
-    // Failed jobs the engine retried after a fix: the retry's failure starts no repair.
+    // Jobs the engine retried after a fix (one with warnings by a provision): the retry's failure starts no repair.
     private readonly ConcurrentDictionary<string, byte> _retried = new(StringComparer.Ordinal);
 
     /// <summary>How long a repair asked for by hand waits for a short operation (a reconcile pass) on the VM.</summary>
@@ -151,20 +153,21 @@ public sealed class RepairSessions(IServiceProvider services, InMemoryVmOperatio
         catch (RepairRefusedException ex) { logger.LogInformation("No repair for job {Job}: {Code}.", job.Id, ex.Code); }
     }
 
-    /// <summary>The VM's latest failed lifecycle job, for a repair asked for by hand.</summary>
-    public async Task<Job> LatestFailedAsync(Vm vm, CancellationToken ct)
+    /// <summary>The VM's latest lifecycle job when it failed or succeeded with warnings, for a repair asked for by hand.</summary>
+    public async Task<Job> LatestRepairableAsync(Vm vm, CancellationToken ct)
     {
         var latest = (await history.ListAsync(ct))
             .Where(j => JobRetryRules.IsLifecycleKind(j.Kind) && Ownership.SameName(j.VmName, vm.Name) && Ownership.SameName(j.Owner, vm.Owner) && j.Created >= vm.Created)
             .OrderByDescending(j => j.Created).FirstOrDefault();
-        return latest is { State: JobState.Failed } ? await jobs.GetAsync(latest.Id, ct) ?? latest
-            : throw new RepairRefusedException(409, "no-failed-job", "The VM's latest provision, reinstall or restore did not fail.");
+        var job = latest is { State: JobState.Failed or JobState.Succeeded } ? await jobs.GetAsync(latest.Id, ct) ?? latest : null;
+        return job is not null && (job.State == JobState.Failed || JobWarnings.Of(job) is not null) ? job
+            : throw new RepairRefusedException(409, "no-failed-job", "The VM's latest provision, reinstall or restore neither failed nor has warnings.");
     }
 
     /// <summary>
     /// Starts a repair of <paramref name="failed"/> on <paramref name="vm"/>, to open on <paramref name="device"/> (or on
-    /// none). The failed job must be the VM's latest lifecycle job and no job may run on the VM; the VM's gate is held
-    /// while the session is set up.
+    /// none). The job (failed, or succeeded with warnings) must be the VM's latest lifecycle job and no job may run on the
+    /// VM; the VM's gate is held while the session is set up.
     /// </summary>
     public async Task<RepairSession> StartAsync(Vm vm, Job failed, bool automatic, string? device, CancellationToken ct)
     {
@@ -196,7 +199,7 @@ public sealed class RepairSessions(IServiceProvider services, InMemoryVmOperatio
             var all = await history.ListAsync(ct);
             if (all.Any(j => Ownership.SameName(j.VmName, vm.Name) && j.State is JobState.Queued or JobState.Running))
                 throw new RepairRefusedException(409, "operation-in-progress", "A job runs on this VM.");
-            if (JobRetryRules.Refusal(failed, current, all) is { } refused)
+            if (JobRetryRules.Refusal(failed, current, all, orSucceeded: !automatic) is { } refused)
                 throw new RepairRefusedException(refused.Status, refused.Code == "job-superseded" ? "job-superseded" : refused.Code, refused.Message);
             if (Latest(vm.Name) is { State: not RepairState.Ended } other)
                 throw new RepairRefusedException(409, "repair-running", "A repair already runs on this VM.", other.Id);
@@ -205,7 +208,8 @@ public sealed class RepairSessions(IServiceProvider services, InMemoryVmOperatio
             _byVm[vm.Name] = session;
             changes.Publish("repair.started", session.Id, session.Vm, session.Owner);
             var rebooted = RepairScript.Rebooted(failed.Result is null ? null : JsonSerializer.SerializeToElement(failed.Result, ApiJson.Options));
-            _ = Task.Run(() => RunAsync(session, RepairScript.StartCommand(id, prompt, target.IsRoot, inT3, failed.Kind), rebooted), CancellationToken.None);
+            var command = RepairScript.StartCommand(id, prompt, target.IsRoot, inT3, failed.Kind, warned: failed.State == JobState.Succeeded);
+            _ = Task.Run(() => RunAsync(session, command, rebooted), CancellationToken.None);
             return session;
         }
     }
@@ -251,7 +255,7 @@ public sealed class RepairSessions(IServiceProvider services, InMemoryVmOperatio
     /// <summary>Waits until the VM answers over SSH again; false when it does not in time or the session was ended.</summary>
     private async Task<bool> WaitForGuestAsync(RepairSession session, SshTarget target)
     {
-        Append(session, new RepairLine(0, clock.UtcNow, "note", "The VM restarts after the failed run; the repair starts when it is back."));
+        Append(session, new RepairLine(0, clock.UtcNow, "note", "The VM restarts after the job's run; the repair starts when it is back."));
         var until = DateTimeOffset.UtcNow + RebootWait;
         // The job's own reboot comes a few seconds after it ended.
         await Task.Delay(RebootProbeDelay, session.Ending.Token).ContinueWith(_ => { }, TaskScheduler.Default);
@@ -390,7 +394,10 @@ public sealed class RepairSessions(IServiceProvider services, InMemoryVmOperatio
         Finish(session, outcome);
     }
 
-    /// <summary>Retries the failed job once, by the retry route's rules, as the job's own initiator.</summary>
+    /// <summary>
+    /// Retries the failed job once, by the retry route's rules, as the job's own initiator; after a job with warnings,
+    /// provisions the VM once under the same rules.
+    /// </summary>
     private async Task RetryAsync(RepairSession session)
     {
         try
@@ -403,13 +410,14 @@ public sealed class RepairSessions(IServiceProvider services, InMemoryVmOperatio
                 return;
             }
 
-            if (failed.Kind == JobKinds.Restore)
+            var warned = failed.State == JobState.Succeeded;
+            if (failed.Kind == JobKinds.Restore && !warned)
             {
                 Refuse(session, "A restore needs its backup's key again: retry it from a device.");
                 return;
             }
 
-            if (JobRetryRules.Refusal(failed, vm, await history.ListAsync(CancellationToken.None)) is { } refused)
+            if (JobRetryRules.Refusal(failed, vm, await history.ListAsync(CancellationToken.None), orSucceeded: true) is { } refused)
             {
                 Refuse(session, refused.Message);
                 return;
@@ -420,9 +428,10 @@ public sealed class RepairSessions(IServiceProvider services, InMemoryVmOperatio
             // Marked before it starts: its failure must not start another repair.
             _retried[failed.Id] = 0;
             var (job, _) = await provisioning.SubmitAsync(vm, failed.Initiator ?? failed.Owner,
-                new ProvisionSubmission(requestId, null, null, false, new JobSecretBag(), failed.Kind), CancellationToken.None);
+                new ProvisionSubmission(requestId, null, null, false, new JobSecretBag(), warned ? JobKinds.Provision : failed.Kind), CancellationToken.None);
             lock (session.Gate) session.RetryJobId = job.Id;
-            Append(session, new RepairLine(0, clock.UtcNow, "retry", $"The {failed.Kind} runs again (job {job.Id})."));
+            Append(session, new RepairLine(0, clock.UtcNow, "retry",
+                warned ? $"The VM is provisioned again (job {job.Id})." : $"The {failed.Kind} runs again (job {job.Id})."));
         }
         catch (ProvisionRequestException ex)
         {
@@ -498,6 +507,6 @@ public sealed class RepairSessions(IServiceProvider services, InMemoryVmOperatio
     public static string? Prompt(Job job)
     {
         JsonElement? result = job.Result is null ? null : JsonSerializer.SerializeToElement(job.Result, ApiJson.Options);
-        return RepairScript.JobPrompt(job.Kind, result, job.Progress);
+        return RepairScript.JobPrompt(job.Kind, result, job.Progress, warned: job.State == JobState.Succeeded);
     }
 }

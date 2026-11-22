@@ -78,6 +78,28 @@ public sealed class RepairScriptTests
     }
 
     [Fact]
+    public void A_job_with_warnings_gets_a_prompt_that_says_it_finished_and_that_a_provision_follows_the_fix()
+    {
+        var log = new[] { new JobProgressLine(DateTimeOffset.UnixEpoch, "provision: done") };
+        var provision = Json(new { succeeded = true, fixPrompt = new[] { "On the last run:", "- Step 'X' failed (exit 2); log: /l.log" } });
+        var text = RepairScript.JobPrompt(JobKinds.Provision, provision, log, warned: true)!;
+        Assert.StartsWith("The provision of this VM finished; only the optional steps below failed.\nOn the last run:\n- Step 'X' failed", text, StringComparison.Ordinal);
+        Assert.Contains("When the cause is fixed, the engine provisions this VM again.", text, StringComparison.Ordinal);
+        Assert.Null(RepairScript.JobPrompt(JobKinds.Provision, Json(new { succeeded = true, fixPrompt = Array.Empty<string>() }), log, warned: true));
+
+        var reinstall = RepairScript.JobPrompt(JobKinds.Reinstall, Json(new { succeeded = true, provision = new { fixPrompt = new[] { "On the last run:" } } }), log, warned: true)!;
+        Assert.StartsWith("This VM was just reinstalled from a fresh image; only the optional steps below failed.", reinstall, StringComparison.Ordinal);
+        Assert.Contains("it does not reinstall it, so a fix inside this VM stays", reinstall, StringComparison.Ordinal);
+        Assert.DoesNotContain("builds this VM anew", reinstall, StringComparison.Ordinal);
+
+        // The T3 Code thread is named after the warnings, not a failure.
+        var b64 = Convert.ToBase64String(Encoding.UTF8.GetBytes("p"));
+        Assert.Equal($"bash -lc 'bash /opt/construct/repo/bin/construct-repair-agent.sh --session abc123 --prompt-b64 {b64} --via t3 --kind reinstall --warned' 2>&1",
+            RepairScript.StartCommand("abc123", "p", connectedAsRoot: true, inT3: true, kind: JobKinds.Reinstall, warned: true));
+        Assert.DoesNotContain("--warned", RepairScript.StartCommand("abc123", "p", connectedAsRoot: true, inT3: false, kind: JobKinds.Reinstall, warned: true), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Output_lines_are_parsed_and_capped()
     {
         var at = DateTimeOffset.UnixEpoch;

@@ -8,8 +8,8 @@ using Constructd.Core.Domain;
 namespace Constructd.Api.Endpoints;
 
 /// <summary>
-/// The repair agent (design 11.5): read a VM's repair session, start one for the VM's latest failed
-/// provision, reinstall or restore, reply to it, end it. The VM's owner and admins only, with user
+/// The repair agent (design 11.5): read a VM's repair session, start one for the VM's latest provision, reinstall
+/// or restore that failed or succeeded with warnings, reply to it, end it. The VM's owner and admins only, with user
 /// credentials (a VM token cannot read or steer its own repair): the output can hold what the VM holds.
 /// Changes are announced on <c>GET /events</c> as <c>repair.started</c>, <c>repair.output</c> and
 /// <c>repair.ended</c> with the session's id and the VM.
@@ -26,8 +26,10 @@ public static class RepairEndpoints
                 "`startedHere` is true only for the device whose device token asked for the failed job (an automatic repair) or for the repair.");
         api.MapPost("/vms/{name}/repair", StartAsync).RequireAuthorization(Policies.User).Audited("vm.repair")
             .Produces<RepairSessionResponse>(StatusCodes.Status202Accepted).WithName("StartVmRepair")
-            .WithDescription("Starts the repair agent on the VM's latest failed provision, reinstall or restore; it opens on the requester's device (`startedHere`). " +
-                "409: `no-failed-job`, `not-repairable`, `repair-running` (with `sessionId`), `operation-in-progress`, `vm-endpoint-unknown`.");
+            .WithDescription("Starts the repair agent on the VM's latest provision, reinstall or restore that failed, or that succeeded with warnings " +
+                "(failed optional steps; such a job is repaired only by request, and after the fix the VM is provisioned, never reinstalled or restored again); " +
+                "it opens on the requester's device (`startedHere`). " +
+                "409: `no-failed-job` (the latest job neither failed nor has warnings), `not-repairable`, `repair-running` (with `sessionId`), `operation-in-progress`, `vm-endpoint-unknown`.");
         api.MapGet("/vms/{name}/repair/{id}", GetAsync).RequireAuthorization(Policies.User)
             .Produces<RepairSessionResponse>().WithName("GetVmRepairSession");
         // Audited as an action on the VM; the text is never part of the record.
@@ -71,7 +73,7 @@ public static class RepairEndpoints
         if (vm is null) return denied!;
         try
         {
-            var failed = await repairs.LatestFailedAsync(vm, ct);
+            var failed = await repairs.LatestRepairableAsync(vm, ct);
             // The requester's device opens it, whichever device started the failed job.
             var session = await repairs.StartAsync(vm, failed, automatic: false, http.User.DeviceId(), ct);
             http.SetAuditDetail($"session={session.Id}; job={failed.Id}");
