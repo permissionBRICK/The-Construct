@@ -63,6 +63,30 @@ public sealed class UpdateEverythingTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task A_host_update_that_installed_a_newer_release_than_its_offer_is_not_taken_for_rolled_back()
+    {
+        // FatPC 2026-11-22: the offer (read up to 15 minutes before) named the first of two nightlies minutes apart; the run
+        // read the channel again and installed the second, and the VMs were skipped as after a rollback.
+        var engines = new FakeEngines().Add("mine")
+            .On("mine", "GET whoami", """{"name":"alice","role":"admin"}""")
+            .On("mine", "GET host/updates/status", """
+                {"available":{"version":"1.0.0+older","commit":"older111"},
+                 "current":{"updateId":"u1","commit":"newer222","state":"succeeded"},"history":[{"updateId":"u1","commit":"newer222"}]}
+                """)
+            .On("mine", "POST host/updates/run", """{"state":"started","jobId":"job-1","updateId":"u1"}""")
+            .On("mine", "GET jobs/job-1", """{"state":"succeeded"}""")
+            .On("mine", "GET health", """{"status":"ok","commit":"newer222"}""")
+            .On("mine", "POST me/vms/reprovision", """{"vms":["work"]}""");
+        _device = new FakeDevice(_directory, engines);
+
+        _device.Everything.Start();
+        await _device.Everything.Work.WaitAsync(TimeSpan.FromSeconds(10));
+
+        Assert.Contains("POST me/vms/reprovision", engines.CallsTo("mine"));
+        Assert.Equal(["done", "done"], _device.Everything.View().Parts.Where(p => p.Engine == "mine").Select(p => p.State));
+    }
+
+    [Fact]
     public async Task A_host_update_that_fails_leaves_that_hosts_vms_alone()
     {
         var engines = new FakeEngines().Add("mine")
