@@ -296,7 +296,8 @@ export function ReinstallConfirm({ vm, onCancel }: { vm: Vm; onCancel: () => voi
       <div class="bf"><span>Fresh image</span><Switch on={fresh} onChange={setFresh} label="Fresh image" /></div>
       <div class="two">
         <Btn onClick={onCancel}>Cancel</Btn>
-        <Btn kind="red" onClick={() => { be.reinstall(vm.id, fresh); onCancel(); }}>Reinstall</Btn>
+        {/* Asked while it ran, then shut down: the reinstall needs it running for its backup. */}
+        <Btn kind="red" onClick={() => { if (!running(vm)) return; be.reinstall(vm.id, fresh); onCancel(); }} disabled={!running(vm)} title={running(vm) ? undefined : NEEDS_RUNNING}>Reinstall</Btn>
       </div>
     </div>
   );
