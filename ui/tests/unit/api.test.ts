@@ -29,7 +29,7 @@ const job = (id: string, vm: string, state: string, kind = 'provision', progress
   id, kind, vmName: vm, state, created: '2026-11-13T10:00:00Z', finished: null, progress, result: null, error: state === 'failed' ? 'provision-steps-failed' : null, phase: null,
 });
 
-function world(opts: { registered?: boolean; unconfirmed?: boolean; engines?: { id: string; name: string; url: string }[] } = {}) {
+function world(opts: { registered?: boolean; unconfirmed?: boolean; engines?: { id: string; name: string; url: string }[]; requestPollMs?: number } = {}) {
   const calls: Call[] = [];
   const routes = new Map<string, Handler>();
   const on = (method: string, path: string, h: Handler | Reply) => routes.set(`${method} ${path}`, typeof h === 'function' ? h : () => h);
@@ -84,7 +84,7 @@ function world(opts: { registered?: boolean; unconfirmed?: boolean; engines?: { 
     const status = r.status ?? 200;
     return new Response(r.json === undefined || status === 204 ? null : JSON.stringify(r.json), { status, headers: { 'content-type': 'application/json' } });
   };
-  const be = new ApiBackend({ base: BASE, token: TOKEN, fetch: fetch as typeof globalThis.fetch, pollMs: 0, events: false });
+  const be = new ApiBackend({ base: BASE, token: TOKEN, fetch: fetch as typeof globalThis.fetch, pollMs: 0, events: false, requestPollMs: opts.requestPollMs });
   const settle = () => new Promise(r => setTimeout(r, 20));
   return { be, calls, on, settle };
 }
@@ -755,8 +755,8 @@ describe('ApiBackend key vault', () => {
     names: ['db'], reason: 'run the migration', source: `root@${vm}`, createdAt: 1, deadline: 2, ...extra,
   });
 
-  function vaultWorld(engines?: { id: string; name: string; url: string }[]) {
-    const w = world(engines ? { engines } : {});
+  function vaultWorld(engines?: { id: string; name: string; url: string }[], requestPollMs?: number) {
+    const w = world({ ...(engines ? { engines } : {}), requestPollMs });
     w.on('GET', '/api/vault/secrets', { json: [secret('db', { leases: [{ engine: E1, engineName: 'orchard', vm: 'atlas', name: 'db', usesLeft: null, expiresAt: Date.now() + 3 * 3600e3 }] }), secret('npm', { autoApprove: true })] });
     w.on('GET', '/api/vault/history', { json: [{ name: 'db', action: 'added', revision: 1, at: '2026-11-13T10:00:00Z', actor: 'device:d1', provenance: { kind: 'device', vm: null, engine: null, device: 'd1', requestId: null } }] });
     w.on('GET', '/api/vault/approvals', { json: { approvals: [], unreachable: [] } });
@@ -835,6 +835,23 @@ describe('ApiBackend key vault', () => {
     expect(be.snapshot().vaultRequests.map(x => x.id)).toEqual([`${E1}/a1`]);
     await settle();
     expect(be.snapshot().vaultRequests.map(x => x.id)).toEqual([`${E1}/a1`]);
+  });
+
+  it('reads the requests again while one is on screen, so one answered where no event comes from leaves', async () => {
+    // A host of the old release sends no event when its request is answered on the phone: the lone card stayed open.
+    const { be, on, calls, settle } = vaultWorld(undefined, 30);
+    on('GET', '/api/vault/approvals', { json: { approvals: [approval(E1, 'a1', 'atlas')], unreachable: [] } });
+    await be.start();
+    expect(be.snapshot().vaultRequests.map(x => x.id)).toEqual([`${E1}/a1`]);
+    on('GET', '/api/vault/approvals', { json: { approvals: [], unreachable: [] } });
+    await new Promise(r => setTimeout(r, 60));
+    await settle();
+    expect(be.snapshot().vaultRequests).toEqual([]);
+    // Nothing on screen: no more reads.
+    const reads = calls.filter(c => c.path === '/api/vault/approvals').length;
+    await new Promise(r => setTimeout(r, 100));
+    expect(calls.filter(c => c.path === '/api/vault/approvals').length).toBe(reads);
+    be.dispose();
   });
 
   it('brings a card back when its answer failed', async () => {
