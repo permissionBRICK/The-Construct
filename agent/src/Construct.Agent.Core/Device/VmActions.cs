@@ -28,7 +28,8 @@ public sealed record T3PairingLinkEntry(string Kind, string PairUrl);
 /// device, and only without one the first web link the VM offers (its order: the user's proxy, the forward, direct).
 /// T3 Code can be asked to open one thread (a repair's): the desktop app takes it as the link
 /// <c>t3code://threads/{environment}/{thread}</c> on its command line, which a running app gets as well and brings to
-/// the front; the web UI opens as without a thread, and the caller names the thread.
+/// the front; the web UI opens as without a thread, and the caller names the thread. A repair that started on this
+/// device opens its thread by itself in the desktop app only (<see cref="OpenThreadInDesktopAsync"/>).
 /// </summary>
 public sealed partial class VmActions(VmLinks links, IDevicePlatform platform)
 {
@@ -43,9 +44,7 @@ public sealed partial class VmActions(VmLinks links, IDevicePlatform platform)
     /// <summary>Opens the VM in <paramref name="what"/>; T3 Code on the thread <paramref name="threadId"/> of the VM's T3 environment where it can.</summary>
     public async Task<OpenResult> OpenAsync(string engine, string vm, string what, string? environmentId, string? threadId, CancellationToken ct)
     {
-        if (string.IsNullOrEmpty(environmentId)) environmentId = null;
-        if (threadId is not null && (what != "t3" || !T3IdPattern().IsMatch(threadId) || environmentId is not null && !T3IdPattern().IsMatch(environmentId)))
-            throw new AgentFailure(400, "invalid-request", "A thread opens in T3 Code only, by ids of letters, digits and . _ : % ~ -.");
+        environmentId = CheckThread(what, environmentId, threadId);
         var target = links.Target(engine, vm);
         switch (what)
         {
@@ -60,8 +59,7 @@ public sealed partial class VmActions(VmLinks links, IDevicePlatform platform)
                 return new(what, target.Alias);
             case "t3":
             {
-                var threadLink = threadId is not null && environmentId is not null
-                    ? $"t3code://threads/{Uri.EscapeDataString(environmentId)}/{Uri.EscapeDataString(threadId)}" : null;
+                var threadLink = ThreadLink(environmentId, threadId);
                 if (await platform.OpenT3DesktopAsync(threadLink, ct).ConfigureAwait(false)) return new(what, target.Alias, "desktop", threadLink is not null);
                 var ssh = links.Transport(engine, vm);
                 var pairing = await ssh.RunRemoteScriptAsync(T3Code.BuildPairingScript(new JsonObject { ["name"] = vm }), TimeSpan.FromSeconds(90), ct).ConfigureAwait(false);
@@ -79,6 +77,31 @@ public sealed partial class VmActions(VmLinks links, IDevicePlatform platform)
                 throw new AgentFailure(400, "invalid-request", "Open takes t3, vscode or ssh.");
         }
     }
+
+    /// <summary>
+    /// Opens T3 Desktop on the thread <paramref name="threadId"/> of the VM's T3 environment, and nothing else: false, with
+    /// nothing opened, when Construct's T3 Desktop is not installed here or the thread has no environment to be named by.
+    /// Never the web UI, whose pairing link would open a browser tab by itself.
+    /// </summary>
+    public async Task<bool> OpenThreadInDesktopAsync(string engine, string vm, string? environmentId, string threadId, CancellationToken ct)
+    {
+        environmentId = CheckThread("t3", environmentId, threadId);
+        links.Target(engine, vm);
+        return ThreadLink(environmentId, threadId) is { } link && await platform.OpenT3DesktopAsync(link, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>The environment id, null when empty; throws for a thread anywhere but in T3 Code or ids unfit for a link.</summary>
+    private static string? CheckThread(string what, string? environmentId, string? threadId)
+    {
+        if (string.IsNullOrEmpty(environmentId)) environmentId = null;
+        if (threadId is not null && (what != "t3" || !T3IdPattern().IsMatch(threadId) || environmentId is not null && !T3IdPattern().IsMatch(environmentId)))
+            throw new AgentFailure(400, "invalid-request", "A thread opens in T3 Code only, by ids of letters, digits and . _ : % ~ -.");
+        return environmentId;
+    }
+
+    /// <summary>The link T3 Desktop opens a thread by; null without both ids.</summary>
+    private static string? ThreadLink(string? environmentId, string? threadId) => threadId is not null && environmentId is not null
+        ? $"t3code://threads/{Uri.EscapeDataString(environmentId)}/{Uri.EscapeDataString(threadId)}" : null;
 
     /// <summary>
     /// Mints a pairing link for T3 Desktop on one of the user's own running VMs, as <c>Get-ConstructT3PairingLink.ps1</c>
