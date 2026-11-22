@@ -159,17 +159,20 @@ public sealed class FakeHypervisorDriver : IHypervisorDriver, IVmCpuDriver, IVmM
         return Task.CompletedTask;
     }
 
-    public Task StartAsync(string name, CancellationToken cancellationToken)
+    /// <summary>Awaited right after a start took effect: a test holds a start there.</summary>
+    public Func<string, Task>? AfterStart { get; set; }
+
+    public async Task StartAsync(string name, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         Calls.Enqueue($"start:{name}");
 
         if (PowerFailure is not null)
         {
-            return Task.FromException(PowerFailure);
+            throw PowerFailure;
         }
         _states[name] = StateAfterStart;
-        return Task.CompletedTask;
+        if (AfterStart is { } hold) await hold(name);
     }
 
     public Task StopAsync(string name, CancellationToken cancellationToken)

@@ -202,6 +202,47 @@ public sealed class ProvisionStartTests
     }
 
     [Fact]
+    public async Task A_probe_that_hangs_does_not_stretch_the_wait()
+    {
+        await using var h = await StartAsync(sshWaitSeconds: 1);
+        await StopAsync(h.Client, ProvisionHarness.Vm);
+        h.Ssh.ProbeHangs = true;
+
+        var started = DateTime.UtcNow;
+        var job = await h.RunAsync("second");
+
+        Assert.Equal(JobState.Failed, job.State);
+        Assert.StartsWith("guest-unreachable: ", job.Error);
+        // The probe's own limit is 30 seconds: the wait of one second ends it.
+        Assert.True(DateTime.UtcNow - started < TimeSpan.FromSeconds(15), "The wait outlasted its deadline.");
+    }
+
+    [Fact]
+    public async Task A_job_cancelled_while_its_vm_starts_finishes_the_start_and_leaves_nothing_in_flight()
+    {
+        await using var h = await StartAsync();
+        await StopAsync(h.Client, ProvisionHarness.Vm);
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        h.App.Driver.AfterStart = async _ =>
+        {
+            started.TrySetResult();
+            await release.Task;
+        };
+
+        var id = await h.StartAsync("second");
+        await started.Task.WaitAsync(TimeSpan.FromSeconds(30));
+        (await h.Client.PostAsync($"/api/v1/jobs/{id}/cancel", null)).EnsureSuccessStatusCode();
+        release.SetResult();
+        var job = await h.Client.WaitForJobAsync(id);
+
+        Assert.NotEqual(JobState.Succeeded, job.State);
+        Assert.Equal(VmState.Running, h.App.Driver.StateOf(ProvisionHarness.Vm));
+        Assert.Equal(VmState.Running, (await h.App.Vms.GetAsync(ProvisionHarness.Vm, default))!.State);
+        Assert.Empty(await h.App.Service<IOperationKeyStore>().ListInFlightAsync(ProvisionHarness.Vm, default));
+    }
+
+    [Fact]
     public async Task The_follow_up_of_a_host_update_skips_a_vm_that_is_off_and_submits_no_job_for_it()
     {
         await using var h = await StartAsync();

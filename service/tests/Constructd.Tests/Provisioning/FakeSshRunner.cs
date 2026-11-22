@@ -41,6 +41,9 @@ public partial class FakeSshRunner : ISshRunner
     /// </summary>
     public Func<SshTarget, bool>? Reachable { get; set; }
 
+    /// <summary>An SSH probe (<c>true</c>) hangs until it is cancelled, as one to a guest that is still booting can.</summary>
+    public bool ProbeHangs { get; set; }
+
     /// <summary>A step name ("copy", "provision", "project-commands", "applied") whose first command waits here.</summary>
     public string? HoldAt { get; set; }
     public TaskCompletionSource Held { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -59,6 +62,7 @@ public partial class FakeSshRunner : ISshRunner
         var call = new SshCall(target, command, standardInput);
         Calls.Enqueue(call);
         if (Reachable?.Invoke(target) == false) return 255;
+        if (ProbeHangs && command == "true") await Task.Delay(Timeout.Infinite, ct);
         var step = command.Contains("PROVISION_PHASE", StringComparison.Ordinal) ? "project-commands"
             : command.Contains("bin/provision.sh", StringComparison.Ordinal) ? "provision"
             : command.Contains("construct-repo.tar.gz", StringComparison.Ordinal) ? "copy"

@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using Constructd.Core.Abstractions;
 using Constructd.Core.Configuration;
 using Constructd.Core.Domain;
@@ -51,7 +50,9 @@ public sealed class ProvisionStart(LifecycleStart starts, IVmRepository vms, IHy
         CapacityDecision? decision = null;
         try
         {
-            var reply = await starts.RunAsync(current, null, null, starts.PrimaryKey(current), ct);
+            // An admitted start is finished whatever happens to the job: cancelled halfway it would leave the VM running
+            // with its stored state, operation key and reservations of a start that never completed. A start is short.
+            var reply = await starts.RunAsync(current, null, null, starts.PrimaryKey(current), CancellationToken.None);
             code = reply.Code ?? (ReservationRules.Terminal(reply.State) ? "start-failed" : null);
         }
         catch (LifecycleException ex)
@@ -62,31 +63,38 @@ public sealed class ProvisionStart(LifecycleStart starts, IVmRepository vms, IHy
         }
 
         if (code is not null) throw Failure(progress, failed, "start-refused", Refusal(code, decision));
+        ct.ThrowIfCancellationRequested();
         Report(progress, "running", "the VM runs; waiting for it to answer over SSH");
 
+        // One deadline bounds the whole wait, the endpoint's resolution and each probe included.
         var wait = TimeSpan.FromSeconds(Math.Max(1, options.StartedVmSshWaitSeconds));
-        var waited = Stopwatch.StartNew();
-        while (true)
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        deadline.CancelAfter(wait);
+        try
         {
-            ct.ThrowIfCancellationRequested();
-            if (await targets.ResolveAsync(current, ct) is { } target)
+            while (true)
             {
-                try
+                deadline.Token.ThrowIfCancellationRequested();
+                if (await targets.ResolveAsync(current, deadline.Token) is { } target)
                 {
-                    if (await ssh.RunAsync(target, "true", null, null, ProbeTimeout, ct) == 0)
+                    try
                     {
-                        Report(progress, "succeeded", "the VM answers over SSH");
-                        return target;
+                        if (await ssh.RunAsync(target, "true", null, null, ProbeTimeout, deadline.Token) == 0)
+                        {
+                            Report(progress, "succeeded", "the VM answers over SSH");
+                            return target;
+                        }
                     }
+                    catch (Exception ex) when (ex is not OperationCanceledException) { }
                 }
-                catch (Exception ex) when (ex is not OperationCanceledException) { }
-            }
 
-            var left = wait - waited.Elapsed;
-            if (left <= TimeSpan.Zero)
-                throw Failure(progress, failed, "guest-unreachable",
-                    $"The VM started but did not answer over SSH within {Span(wait)}. It keeps running; retry once it is up.");
-            await Task.Delay(left < ProbeDelay ? left : ProbeDelay, ct);
+                await Task.Delay(ProbeDelay, deadline.Token);
+            }
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            throw Failure(progress, failed, "guest-unreachable",
+                $"The VM started but did not answer over SSH within {Span(wait)}. It keeps running; retry once it is up.");
         }
     }
 
