@@ -97,7 +97,10 @@ public static class VmJobs
 
         mayExist();
         JobProgressTracker.Current?.Begin(InstallStep, "Installing Ubuntu");
-        await driver.CreateVmAsync(descriptor with { IsoPath = isoPath }, progress, cancellationToken)
+        // From the record as it is now, so an idle policy changed while the media was built counts.
+        var startWithHost = HostStartRules.StartsWithHost(
+            await vms.GetAsync(name, cancellationToken).ConfigureAwait(false) ?? initial, options.Idle);
+        await driver.CreateVmAsync(descriptor with { IsoPath = isoPath, StartWithHost = startWithHost }, progress, cancellationToken)
             .ConfigureAwait(false);
 
         var timeout = TimeSpan.FromMinutes(Math.Max(1, options.VmReachableTimeoutMinutes));

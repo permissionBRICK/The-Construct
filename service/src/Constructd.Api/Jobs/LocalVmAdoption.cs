@@ -121,7 +121,11 @@ public static class LocalVmAdoption
         await EnrollGuestAsync(services, guest, name, user.Name, port, serviceUrl, certificate, options, progress, ct);
 
         if (await vms.GetAsync(name, ct) is { } registered)
+        {
             await vms.UpdateAsync(registered with { SshForwardPort = port, State = VmState.Running }, ct);
+            // The old client let every VM start with the host; the engine's rule decides from now on.
+            if (services.GetService<HostStartSettings>() is { } hostStart) await hostStart.TryApplyAsync(registered, ct);
+        }
         await services.GetRequiredService<IAuditLog>().AppendAsync(new AuditEntry(clock.UtcNow, actor, "vm.adopt", name, AuditOutcome.Success,
             "existing Hyper-V VM, guest enrolled; owner=" + user.Name), ct);
         progress.Report("VM adopted; it kept running throughout");

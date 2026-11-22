@@ -220,6 +220,22 @@ function Get-ConstructVmNested {
     [bool](Get-VMProcessor -VMName $Name -ErrorAction Stop).ExposeVirtualizationExtensions
 }
 
+function Set-ConstructVmStartWithHost {
+    <#
+        Whether a host boot brings the VM back: StartIfRunning starts (or resumes)
+        it when it was running or saved as the host went down, Nothing leaves it
+        down. Hyper-V takes the change in every power state; it is written only
+        when it differs.
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$Name, [Parameter(Mandatory)][bool]$Enabled)
+    $action = if ($Enabled) { 'StartIfRunning' } else { 'Nothing' }
+    $vm = Get-VM -Name $Name -ErrorAction Stop
+    if ([string]$vm.AutomaticStartAction -ne $action) {
+        Set-VM -VM $vm -AutomaticStartAction $action -ErrorAction Stop
+    }
+}
+
 function Set-ConstructVmNested {
     [CmdletBinding()]
     param([Parameter(Mandatory)][string]$Name, [Parameter(Mandatory)][bool]$Enabled)

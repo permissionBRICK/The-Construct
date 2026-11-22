@@ -99,6 +99,11 @@ public static class IdleEndpoints
         if (result.Outcome != AdmissionOutcome.Accepted) return LifecycleEndpoints.Problem("power-state-changed");
 
         http.SetAuditDetail($"timeoutMinutes={policy.TimeoutMinutes}, action={policy.Action}, clamped={clamped}");
+        // Whether the host brings the VM back at its boot follows the policy (HostStartRules), under the VM's gate: a
+        // create or reinstall that runs sets it from an older reading, and this one follows when it ends.
+        await http.RequestServices.GetRequiredService<Constructd.Api.Jobs.HostStartSettings>()
+            .RefreshAsync(vm.Name, cancellationToken).ConfigureAwait(false);
+
         return TypedResults.Ok(ApiHelpers.ToResponse(policy, options.Idle, clamped));
     }
 

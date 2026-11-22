@@ -37,7 +37,7 @@ public sealed class HypervisorOperationException(string operation, string vmName
 /// script dot-sources the driver's own <c>hyperv\HyperV.Driver.ps1</c> (<see cref="HyperVScripts"/>)
 /// and calls the contract function there.
 /// </summary>
-public sealed class HyperVDriver : IHypervisorDriver, IVmCpuDriver, IVmMemoryDriver, IVmNestedDriver, IVmFactsDriver
+public sealed class HyperVDriver : IHypervisorDriver, IVmCpuDriver, IVmMemoryDriver, IVmNestedDriver, IVmFactsDriver, IVmHostStartDriver
 {
     public async Task<HypervisorVmFacts?> GetFactsAsync(string name, CancellationToken ct)
     {
@@ -55,6 +55,9 @@ public sealed class HyperVDriver : IHypervisorDriver, IVmCpuDriver, IVmMemoryDri
 
     public async Task SetNestedAsync(string name, bool enabled, CancellationToken ct) =>
         await RunAsync("set-nested", name, HyperVScript.SetNested(name, enabled), ShortTimeout, null, ct);
+
+    public async Task SetStartWithHostAsync(string name, bool enabled, CancellationToken ct) =>
+        await RunAsync("set-start-with-host", name, HyperVScript.SetStartWithHost(name, enabled), ShortTimeout, null, ct);
 
     public async Task SetMemoryAsync(string name, int ramGb, CancellationToken ct) =>
         await RunAsync("set-memory", name, HyperVScript.SetMemory(name, ramGb), ShortTimeout, null, ct);

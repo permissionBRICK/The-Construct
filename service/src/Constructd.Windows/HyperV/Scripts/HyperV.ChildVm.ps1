@@ -390,7 +390,8 @@ function New-ConstructChildVm {
     $record.id = [string]$vm.Id
     Write-ConstructChildOwnership -Marker $marker -Record $record
     if (-not $h.networkAttached) { Get-VMNetworkAdapter -VMName $name | Remove-VMNetworkAdapter -ErrorAction Stop }
-    Set-VM -Name $name -AutomaticCheckpointsEnabled $false -AutomaticStopAction Save -AutomaticStartAction StartIfRunning -ErrorAction Stop
+    # A child is disposable: a host boot never brings it back on its own.
+    Set-VM -Name $name -AutomaticCheckpointsEnabled $false -AutomaticStopAction Save -AutomaticStartAction Nothing -ErrorAction Stop
     Set-ConstructChildHardware -Name $name -Hardware $h -ResendTemplate $true
     if ($Descriptor.licenseBaseline) {
         $pool = Get-ConstructLicensePath -Incarnation ([string]$vm.Id) -PoolRoot (Split-Path $disk -Parent)

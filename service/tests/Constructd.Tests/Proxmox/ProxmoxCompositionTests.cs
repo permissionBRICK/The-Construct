@@ -3,6 +3,7 @@ using System.Net.Http.Json;
 using Constructd.Core.Abstractions;
 using Constructd.Proxmox;
 using Constructd.Tests.Support;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace Constructd.Tests.Proxmox;
 
@@ -28,6 +29,8 @@ public sealed class ProxmoxCompositionTests : IDisposable
         Assert.IsType<ProxmoxConsoleTransport>(app.Service<IConsoleTransport>());
         Assert.IsType<ProxmoxInteractiveConsole>(app.Service<IInteractiveConsole>());
         Assert.IsType<ProxmoxGuestAddressProvider>(app.Service<IGuestAddressProvider>());
+        // Once per engine start, which VMs the node brings back at its boot is set again.
+        Assert.Single(app.Services.GetServices<Microsoft.Extensions.Hosting.IHostedService>().OfType<Constructd.Api.Hosting.HostStartStartupService>());
         var capabilities = await app.Service<ICapabilityAggregator>().GetAsync(default);
         Assert.Equal(Constructd.Core.Domain.CapabilityLevel.Supported, capabilities.Suspend);
         Assert.True(capabilities.Legacy.Suspend);
