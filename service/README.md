@@ -454,6 +454,13 @@ user answers in Construct's chat under the failed job.
   `construct-repair-agent.sh --stop` ends the agent's process group on the VM.
 - The change stream announces `repair.started`, `repair.output` (at most once a second) and `repair.ended`
   with the session id and the VM, to the VM's owner and admins.
+- `startedHere` is true only for the device that started the repair, read with its device token: the one whose
+  device token asked for the failed job (an automatic repair) or for the repair itself (`POST`). The engine
+  remembers the device of each `provision`, `reinstall` and `restore` asked for with a device token (`POST
+  /vms/{name}/jobs`, `POST /jobs/{id}/retry`, `POST /vms/{name}/update`, and each job of `POST /me/vms/reprovision`)
+  in memory, for the latest 500 jobs; jobs the engine starts itself (the host update's follow-up, the retry after a
+  fix) have none. No device id is in any answer. That device's agent opens T3 Desktop on the session's thread by
+  itself (design 11.5).
 
 One session per VM. A job that takes the VM's operation gate (a provision, a power action, a hardware change,
 a delete) ends the repair first and waits until its processes on the VM are gone (`outcome: superseded`);
