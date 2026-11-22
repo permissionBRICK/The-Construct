@@ -55,6 +55,8 @@ internal static class HyperVScript
         body.AppendLine($"$descriptor['Nested'] = {PowerShellLiteral.Bool(descriptor.Nested)}");
         body.AppendLine(
             $"$descriptor['AutomaticCheckpoints'] = {PowerShellLiteral.Bool(descriptor.AutomaticCheckpoints)}");
+        body.AppendLine(
+            $"$descriptor['AutomaticStartAction'] = {PowerShellLiteral.Quote(descriptor.StartWithHost ? "StartIfRunning" : "Nothing")}");
         body.AppendLine("New-ConstructVm -Descriptor $descriptor");
 
         // docs/drivers.md §3.3: New-ConstructVm deliberately leaves the VM off, so the caller decides
@@ -76,6 +78,9 @@ internal static class HyperVScript
 
     public static string SetNested(string vmName, bool enabled) => Build(
         $"Set-ConstructVmNested -Name {PowerShellLiteral.Quote(ArgumentGuard.VmName(vmName))} -Enabled {PowerShellLiteral.Bool(enabled)}");
+
+    public static string SetStartWithHost(string vmName, bool enabled) => Build(
+        $"Set-ConstructVmStartWithHost -Name {PowerShellLiteral.Quote(ArgumentGuard.VmName(vmName))} -Enabled {PowerShellLiteral.Bool(enabled)}");
 
     public static string SetCpuCount(string vmName, int cpus) => Build(
         $"Set-ConstructVmCpuCount -Name {PowerShellLiteral.Quote(ArgumentGuard.VmName(vmName))} -ProcessorCount {ArgumentGuard.Positive(cpus, "cpus", 64)}");

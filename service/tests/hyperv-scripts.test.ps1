@@ -8,7 +8,8 @@
 
       (a) every file parses, and none uses syntax Windows PowerShell 5.1 lacks;
       (b) every function the service calls is defined by the files it dot-sources;
-      (c) Get-ConstructVmFacts against stubbed cmdlets.
+      (c) Get-ConstructVmFacts against stubbed cmdlets;
+      (d) which VMs a host boot brings back, against stubbed cmdlets.
 
     The files are the driver's only copy: they were moved from the old client's
     drivers\hyperv-local and lib\AgentVm.Common.ps1, which are gone.
@@ -109,6 +110,54 @@ $json = @{ ok = $true; value = $facts } | ConvertTo-Json -Compress -Depth 6
 ok "facts serialize to the envelope the service parses" ($json -match '"DiskBytes":274877906944' -and $json -match '"Cpu":6')
 $script:missing = $true
 ok "a VM Hyper-V does not know is null, not an error" ($null -eq (Get-ConstructVmFacts -Name 'agent-vm'))
+
+# ── (d) Start with host ──────────────────────────────────────────────────────
+Write-Host ""
+Write-Host "=== Start with host ===" -ForegroundColor Cyan
+. (Join-Path $scripts 'HyperV.ChildVm.ps1')
+$script:setVm = @()
+$script:startAction = 'StartIfRunning'
+function Set-VM {
+    param($Name, $VM, $ProcessorCount, [switch]$StaticMemory, $CheckpointType, $AutomaticStartAction, $AutomaticStopAction,
+          $AutomaticCheckpointsEnabled, $ErrorAction)
+    $script:setVm += ,@{ Name = $(if ($VM) { $VM.Name } else { $Name }); AutomaticStartAction = $AutomaticStartAction }
+}
+function Get-VM { param($Name, $Id, $ErrorAction) [pscustomobject]@{ Name = $Name; Id = $script:vmId; AutomaticStartAction = $script:startAction } }
+
+Set-ConstructVmStartWithHost -Name 'agent-vm' -Enabled $false
+ok "a VM that must stay down at host boot gets AutomaticStartAction Nothing" ($script:setVm.Count -eq 1 -and $script:setVm[0].Name -eq 'agent-vm' -and $script:setVm[0].AutomaticStartAction -eq 'Nothing')
+$script:setVm = @(); $script:startAction = 'Nothing'
+Set-ConstructVmStartWithHost -Name 'agent-vm' -Enabled $true
+ok "a VM that starts with the host gets StartIfRunning" ($script:setVm.Count -eq 1 -and $script:setVm[0].AutomaticStartAction -eq 'StartIfRunning')
+$script:setVm = @()
+Set-ConstructVmStartWithHost -Name 'agent-vm' -Enabled $false
+ok "a setting already in place is not written again" ($script:setVm.Count -eq 0)
+
+function New-VM { param($Name, $Path, $Generation, $MemoryStartupBytes, [switch]$NoVHD, $SwitchName, $NewVHDPath, $NewVHDSizeBytes, $ErrorAction) [pscustomobject]@{ Name = $Name; Id = $script:vmId } }
+function Set-VMProcessor { param($VMName, $VM, $ExposeVirtualizationExtensions, $Count, $ErrorAction) }
+function Set-VMFirmware { param($VMName, $EnableSecureBoot, $BootOrder, $ErrorAction) }
+function Get-VMNetworkAdapter { param($VMName, $VM, $ErrorAction) }
+$script:setVm = @()
+New-ConstructVm -Descriptor @{ Name = 'agent-vm'; MemoryGB = 4; DiskGB = 40; ProcessorCount = 2; Nested = $false; AutomaticStartAction = 'Nothing' } 6>$null
+ok "a primary is created with the descriptor's AutomaticStartAction" ($script:setVm.Count -eq 1 -and $script:setVm[0].AutomaticStartAction -eq 'Nothing')
+
+function Assert-ConstructChildHardware { param($h) }
+function Get-ConstructChildDiskPath { param($Name, $VhdPath) 'C:\vms\child.vhdx' }
+function Get-ConstructChildVmObject { param($Name) $null }
+function Get-VMSwitch { param($Name, $ErrorAction) [pscustomobject]@{ Name = $Name } }
+# Joined with Join-Path, which needs a drive this machine has.
+function Get-VMHost { param($ErrorAction) [pscustomobject]@{ VirtualMachinePath = [IO.Path]::GetTempPath() } }
+function Write-ConstructChildOwnership { param($Marker, $Record, [switch]$CreateNew) }
+function Set-ConstructChildHardware { param($Name, $Hardware, $ResendTemplate) }
+function New-VHD { param($Path, [switch]$Dynamic, $SizeBytes, $ErrorAction) }
+function Add-VMHardDiskDrive { param($VMName, $ControllerType, $ControllerNumber, $ControllerLocation, $Path, $ErrorAction) }
+function Set-ConstructChildMedia { param($Name, $InstallMediaPath, $AuxiliaryMediaPath, $BootOrder) }
+$script:setVm = @()
+New-ConstructChildVm -Descriptor ([pscustomobject]@{ name = 'child'; operationId = 'op'; switchName = 'Default Switch'; licenseBaseline = $false
+    hardware = [pscustomobject]@{ ramMb = 512; diskGb = 1; networkAttached = $true; bootOrder = @('disk') } })
+ok "a child is created with AutomaticStartAction Nothing: a host boot never brings it back" (
+    $script:setVm.Count -ge 1 -and @($script:setVm | Where-Object { $_.Name -eq 'child' -and $_.AutomaticStartAction -eq 'Nothing' }).Count -eq 1 -and
+    @($script:setVm | Where-Object { $_.AutomaticStartAction -and $_.AutomaticStartAction -ne 'Nothing' }).Count -eq 0)
 
 Write-Host ""
 Write-Host "hyperv-scripts: $($script:pass) passed, $($script:fail) failed"

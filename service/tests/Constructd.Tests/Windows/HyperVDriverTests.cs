@@ -26,6 +26,15 @@ public sealed class HyperVDriverTests
         Assert.Contains("Get-ConstructVmNested -Name 'work-vm'", Script(runner[0]));
         Assert.Contains("Set-ConstructVmNested -Name 'work-vm' -Enabled $false", Script(runner[1]));
     }
+    [Theory]
+    [InlineData(true, "$true")]
+    [InlineData(false, "$false")]
+    public async Task Start_with_host_goes_through_the_drivers_own_function(bool enabled, string literal)
+    {
+        var (driver, runner) = Driver(new RecordingProcessRunner().Respond(Ok("null")));
+        await driver.SetStartWithHostAsync("work-vm", enabled, default);
+        Assert.Contains("Set-ConstructVmStartWithHost -Name 'work-vm' -Enabled " + literal, Script(runner[0]), StringComparison.Ordinal);
+    }
     [Fact]
     public async Task Cpu_change_uses_the_guarded_shared_driver_contract()
     {
@@ -128,12 +137,24 @@ public sealed class HyperVDriverTests
         Assert.Contains(@"$descriptor['IsoPath'] = 'C:\isos\work-vm-autoinstall.iso'", script, StringComparison.Ordinal);
         Assert.Contains("$descriptor['Nested'] = $true", script, StringComparison.Ordinal);
         Assert.Contains("$descriptor['AutomaticCheckpoints'] = $false", script, StringComparison.Ordinal);
+        // A VM that does not start with the host is created so; the driver's own default would start it.
+        Assert.Contains("$descriptor['AutomaticStartAction'] = 'Nothing'", script, StringComparison.Ordinal);
         Assert.Contains("New-ConstructVm -Descriptor $descriptor", script, StringComparison.Ordinal);
 
         // docs/drivers.md §3.3: New-ConstructVm leaves the VM off, so the caller starts it.
         Assert.True(
             script.IndexOf("New-ConstructVm", StringComparison.Ordinal) <
             script.IndexOf("Start-ConstructVm -Name 'work-vm'", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task Create_of_a_vm_that_starts_with_the_host_brings_it_back_if_it_was_running()
+    {
+        var (driver, runner) = Driver(new RecordingProcessRunner().Respond(Ok("null")));
+
+        await driver.CreateVmAsync(Descriptor with { StartWithHost = true }, progress: null, CancellationToken.None);
+
+        Assert.Contains("$descriptor['AutomaticStartAction'] = 'StartIfRunning'", Script(runner[0]), StringComparison.Ordinal);
     }
 
     [Fact]

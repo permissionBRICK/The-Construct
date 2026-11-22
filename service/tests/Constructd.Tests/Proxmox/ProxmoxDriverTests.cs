@@ -110,7 +110,7 @@ public sealed class ProxmoxDriverTests
             .RespondStdout(""));            // qm start
         var progress = new List<string>();
 
-        await driver.CreateVmAsync(Descriptor, new Progress<string>(progress.Add), CancellationToken.None);
+        await driver.CreateVmAsync(Descriptor with { StartWithHost = true }, new Progress<string>(progress.Add), CancellationToken.None);
 
         Assert.Equal("pvesh", runner[0].FileName);
         Assert.Equal(["get", "/cluster/resources", "--type", "vm", "--output-format", "json"], runner[0].Arguments);
@@ -132,6 +132,18 @@ public sealed class ProxmoxDriverTests
         Assert.Equal(5, runner.Calls.Count);
         Assert.Empty(seeds.Removed);
         Assert.Contains(progress, line => line.Contains("creating VM 104", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task Create_of_a_vm_that_does_not_start_with_the_host_leaves_onboot_cleared()
+    {
+        var (driver, runner, _) = Driver(new RecordingProcessRunner()
+            .RespondStdout("[]").RespondStdout("\"104\"").RespondStdout("").RespondStdout("").RespondStdout(""));
+
+        await driver.CreateVmAsync(Descriptor, null, CancellationToken.None);
+
+        var argv = runner[2].Arguments.ToArray();
+        Assert.Equal("0", argv[Array.IndexOf(argv, "--onboot") + 1]);
     }
 
     [Fact]
@@ -216,6 +228,7 @@ public sealed class ProxmoxDriverTests
     [Fact]
     public async Task Power_operations_map_onto_qm_and_mirror_intent_into_onboot()
     {
+        // work-vm is a primary that never idles out: onboot follows its starts and stops.
         var (driver, runner, _) = Driver(new RecordingProcessRunner()
             .RespondStdout(Resources).RespondStdout("""{"status":"stopped"}""")
             .RespondStdout("").RespondStdout("")                                                         // start
@@ -243,6 +256,59 @@ public sealed class ProxmoxDriverTests
         Assert.Equal(["set", "104", "--memory", "12288"], runner[14].Arguments);
         Assert.Equal(15, runner.Calls.Count);
         Assert.All(runner.Calls.Where(c => c.FileName == "qm"), c => Assert.DoesNotContain("--output-format", c.Arguments));
+    }
+
+    public static TheoryData<VmKind, int, IdleAction> NotStartingWithTheHost => new()
+    {
+        { VmKind.Child, 0, IdleAction.Off },
+        { VmKind.Primary, 120, IdleAction.Save },
+        { VmKind.Primary, 30, IdleAction.Shutdown },
+    };
+
+    [Theory]
+    [MemberData(nameof(NotStartingWithTheHost))]
+    public async Task A_child_or_a_primary_that_idles_out_keeps_onboot_cleared_through_start_and_save(VmKind kind, int timeout, IdleAction action)
+    {
+        var (driver, runner, _) = Driver(new RecordingProcessRunner()
+            .RespondStdout(Resources).RespondStdout("""{"status":"stopped"}""").RespondStdout("").RespondStdout("")   // start
+            .RespondStdout(Resources).RespondStdout("").RespondStdout(""),                                           // save
+            kind, new IdlePolicy(timeout, action));
+
+        await driver.StartAsync("work-vm", CancellationToken.None);
+        await driver.SaveAsync("work-vm", CancellationToken.None);
+
+        Assert.Equal(["start", "104"], runner[2].Arguments);
+        // The start clears whatever an earlier start had set...
+        Assert.Equal(["set", "104", "--onboot", "0"], runner[3].Arguments);
+        // ...and the save clears it while the VM still runs: once saved, its configuration is locked.
+        Assert.Equal(["set", "104", "--onboot", "0"], runner[5].Arguments);
+        Assert.Equal(["suspend", "104", "--todisk", "1"], runner[6].Arguments);
+        Assert.Equal(7, runner.Calls.Count);
+    }
+
+    [Theory]
+    // Enabled mirrors the power state: up (running or saved) sets it, off clears it.
+    [InlineData(true, """{"status":"running"}""", "{}", new[] { "set", "104", "--onboot", "1" })]
+    [InlineData(true, """{"status":"stopped"}""", """{"onboot":1}""", new[] { "set", "104", "--onboot", "0" })]
+    // A saved VM is locked; the onboot write alone skips the lock.
+    [InlineData(true, """{"status":"stopped","lock":"suspended"}""", "{}", new[] { "set", "104", "--onboot", "1", "--skiplock", "1" })]
+    [InlineData(false, """{"status":"stopped","lock":"suspended"}""", """{"onboot":1}""", new[] { "set", "104", "--onboot", "0", "--skiplock", "1" })]
+    [InlineData(false, """{"status":"running"}""", """{"onboot":1}""", new[] { "set", "104", "--onboot", "0" })]
+    // Already in place: no write.
+    [InlineData(false, """{"status":"running"}""", "{}", null)]
+    [InlineData(true, """{"status":"running"}""", """{"onboot":1}""", null)]
+    [InlineData(false, """{"status":"stopped"}""", """{"onboot":0}""", null)]
+    public async Task Start_with_host_sets_onboot_from_the_power_state(bool enabled, string status, string config, string[]? expected)
+    {
+        var (driver, runner, _) = Driver(new RecordingProcessRunner()
+            .RespondStdout(Resources).RespondStdout(status).RespondStdout(config).RespondStdout(""));
+
+        await driver.SetStartWithHostAsync("work-vm", enabled, CancellationToken.None);
+
+        Assert.Equal(["get", "/nodes/pve1/qemu/104/config", "--output-format", "json"], runner[2].Arguments);
+        var writes = runner.Calls.Where(c => c.FileName == "qm").ToList();
+        if (expected is null) Assert.Empty(writes);
+        else Assert.Equal(expected, Assert.Single(writes).Arguments);
     }
 
     [Theory]
@@ -452,7 +518,10 @@ public sealed class ProxmoxDriverTests
         Assert.Empty(runner.Calls);
     }
 
-    private static (ProxmoxDriver Driver, RecordingProcessRunner Runner, RecordingSeeds Seeds) Driver(RecordingProcessRunner runner)
+    /// <summary>The driver, with the engine's record of <c>work-vm</c>: by default a primary that never idles
+    /// out, which the host starts at its boot.</summary>
+    private static (ProxmoxDriver Driver, RecordingProcessRunner Runner, RecordingSeeds Seeds) Driver(RecordingProcessRunner runner,
+        VmKind kind = VmKind.Primary, IdlePolicy? idle = null)
     {
         var options = new ConstructdOptions
         {
@@ -460,7 +529,10 @@ public sealed class ProxmoxDriverTests
             Proxmox = new ProxmoxOptions { Node = "pve1" },
         };
         var seeds = new RecordingSeeds();
-        return (new ProxmoxDriver(runner, options, seeds, NullLogger<ProxmoxDriver>.Instance), runner, seeds);
+        var vms = new InMemoryVmRepository();
+        Assert.Equal(VmAddOutcome.Added, vms.AddAsync(new Vm("work-vm", "alice", 4, 8, 60, DateTimeOffset.UnixEpoch, VmState.Running,
+            null, null, idle ?? IdlePolicy.Disabled, Vm.NoForwards, Kind: kind), 10, default).GetAwaiter().GetResult());
+        return (new ProxmoxDriver(runner, options, seeds, vms, NullLogger<ProxmoxDriver>.Instance), runner, seeds);
     }
 
     private sealed class RecordingSeeds : IProxmoxSeedFiles

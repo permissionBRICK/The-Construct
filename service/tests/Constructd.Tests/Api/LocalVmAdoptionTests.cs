@@ -103,8 +103,9 @@ public sealed class LocalVmAdoptionTests : IDisposable
         Assert.Equal(("agent-vm", "alice", 6, 16384, 256, _vmId), (vm.Name, vm.Owner, vm.Cpu, vm.RamMb, vm.DiskGb, vm.Incarnation));
         Assert.Equal(port, vm.SshForwardPort);
         Assert.Equal(VmState.Running, driver.StateOf("agent-vm"));
-        // Read, never rebuilt, powered or resized.
-        Assert.All(driver.Calls, call => Assert.StartsWith("facts:", call));
+        // Read, never rebuilt, powered or resized; only whether the host brings it back at its boot is set.
+        Assert.All(driver.Calls, call => Assert.True(call.StartsWith("facts:", StringComparison.Ordinal) || call == "start-with-host:agent-vm:True", call));
+        Assert.Contains("start-with-host:agent-vm:True", driver.Calls);
 
         // The old client's choices are the VM's desired state, plus the service settings.
         var desired = (await services.GetRequiredService<IVmDesiredStateSource>().GetDesiredAsync("agent-vm", CancellationToken.None))!.Desired;
@@ -236,6 +237,7 @@ public sealed class LocalVmAdoptionTests : IDisposable
         var user = await app.CreateUserClientAsync("bob");
         app.Driver.Facts["agent-vm"] = new HypervisorVmFacts(_vmId, VmState.Running, 4, 8L << 30, 100L << 30, Firmware);
         app.Driver.SetState("agent-vm", VmState.Running);
+        app.Driver.StartWithHost["agent-vm"] = false;
         var body = new
         {
             settings = JsonNode.Parse(File.ReadAllText(SettingsPath)),
@@ -254,6 +256,8 @@ public sealed class LocalVmAdoptionTests : IDisposable
         Assert.Equal(LocalVmAdoption.JobKind, job.Kind);
         var vm = (await app.Vms.GetAsync("agent-vm", CancellationToken.None))!;
         Assert.Equal(("alice", 4, 8192, 100), (vm.Owner, vm.Cpu, vm.RamMb, vm.DiskGb));
+        // Adopted with idling off: the engine's rule has the host bring it back at its boot.
+        Assert.True(app.Driver.StartWithHost["agent-vm"]);
         // A named instance's own file wins over the install's top level; the git identity stays install-wide.
         var desired = (await app.Service<IVmDesiredStateSource>().GetDesiredAsync("agent-vm", CancellationToken.None))!.Desired;
         Assert.Equal(["docs"], desired.Projects);
