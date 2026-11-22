@@ -114,6 +114,9 @@ export interface Profile {
 export type JobKind = 'reprovision' | 'reinstall' | 'update' | 'restore' | 'create';
 export type JobState = 'running' | 'failed' | 'done' | 'stopped';
 
+/** A thread of a VM's T3 Code, as the engine names a repair's: T3 Desktop opens it by these ids, the web UI by its title. */
+export interface T3Thread { environmentId: string | null; threadId: string; title: string | null }
+
 /** One line of the repair agent's output: what it says, what the user sent, a note of the guest script, one action of the agent. */
 export interface RepairMessage { from: 'agent' | 'user' | 'note' | 'tool'; text: string }
 export interface Repair {
@@ -122,8 +125,9 @@ export interface Repair {
       gave-up: it ended without a fix; stopped: the user or another job on the VM ended it. */
   state: 'working' | 'asking' | 'done' | 'gave-up' | 'stopped';
   messages: RepairMessage[];
-  /** Set when the agent runs as a T3 Code thread, which can be opened there instead. */
-  t3Thread: boolean;
+  /** The T3 Code thread in the VM the repair runs in (the default): the user follows and answers it in T3 Code.
+      Null when the agent runs directly and is answered here. */
+  t3Thread: T3Thread | null;
   /** After the end: how it ended and what the engine did with the job. */
   outcome?: string | null;
   /** When this run started (local time, HH:MM), and whether the host started it by itself when the job failed. */
@@ -274,6 +278,8 @@ export interface Host {
   lan?: boolean;
   /** Admin only: the repair agent starts by itself when a job fails (`repair.auto`). Undefined: not read. */
   repairAuto?: boolean;
+  /** Admin only: the repair runs in Construct's chat instead of a T3 Code thread in the VM (`repair.chat`). Undefined: not read. */
+  repairChat?: boolean;
 }
 
 /** Shown once after adding a user: what that user's client needs. */
@@ -459,8 +465,9 @@ export interface Backend {
   subscribe(fn: () => void): () => void;
 
   /* VM */
-  /** T3 Code opens the patched desktop app where Construct installed one, else the web UI. */
-  open(vmId: string, what: Open): void;
+  /** T3 Code opens the patched desktop app where Construct installed one, else the web UI. With `thread` (a repair's)
+      the desktop app opens on that thread; the web UI opens as it is and the notice names the thread. */
+  open(vmId: string, what: Open, thread?: T3Thread): void;
   /** A one-time pairing link for T3 Code on another machine (ten minutes); it is copied, never opened. */
   t3Link(vmId: string): Promise<string>;
   /** Open a forwarded port in the browser. */
@@ -551,6 +558,8 @@ export interface Backend {
   setLanAccess(hostId: string, on: boolean): void;
   /** The host setting `repair.auto`: the repair agent starts by itself when a job fails. */
   setRepairAuto(hostId: string, on: boolean): void;
+  /** The host setting `repair.chat`: the repair runs in Construct's chat instead of a T3 Code thread in the VM. */
+  setRepairChat(hostId: string, on: boolean): void;
   addUser(hostId: string, user: { name: string; role: 'admin' | 'user'; maxVms: number; hostForwards: HostUser['hostForwards'] }): void;
   saveUser(hostId: string, user: HostUser): void;
   removeUser(hostId: string, name: string): void;

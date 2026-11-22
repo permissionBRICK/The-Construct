@@ -56,7 +56,7 @@ describe('VM state', () => {
     expect(vmDot(vm, job({}))).toBe('busy');
     expect(vmDot(vm, job({ state: 'failed' }))).toBe('bad');
     expect(vmWord(vm, job({ kind: 'reinstall' }))).toBe('Reinstalling');
-    expect(vmWord(vm, job({ state: 'failed', repair: { agent: 'a', state: 'working', messages: [], t3Thread: false, at: '14:02', auto: true } }))).toBe('Fixing');
+    expect(vmWord(vm, job({ state: 'failed', repair: { agent: 'a', state: 'working', messages: [], t3Thread: null, at: '14:02', auto: true } }))).toBe('Fixing');
     expect(vmWord(s.vms[1], null)).toBe('Off');
   });
 

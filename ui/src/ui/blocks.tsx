@@ -120,27 +120,35 @@ function LogView({ job }: { job: Job }) {
   );
 }
 
-/** The repair agent under a failed job: its output as plain text, one reply box while it waits for an answer,
-    Stop, and how it ended. */
+/** The repair agent under a failed job: its output as plain text, Stop, and how it ended. By default it runs as a
+    T3 Code thread in the VM, which the user answers in T3 Code: the block opens it there. In Construct's chat
+    (`repair.chat`) it has one reply box while it waits for an answer. */
 function Repair({ job }: { job: Job }) {
   const { be } = useApp();
   const r = job.repair!;
   const [text, setText] = useState('');
   const follow = useFollow<HTMLDivElement>(`${r.messages.length}/${r.state}`);
   const asking = r.state === 'asking';
+  const live = r.state === 'working' || asking;
+  const t3 = r.t3Thread;
   const send = () => { if (asking && text.trim()) { be.replyRepair(job.id, text); setText(''); } };
   return (
     <div class="repair" aria-label="Repair agent">
       <div class="bh"><Icon n="fix" /><b>{r.agent}</b><span class="d">{repairWhen(r)}</span>
-        {r.t3Thread && <Btn sm icon="open" onClick={() => be.open(job.vmId, 't3')}>T3 Code</Btn>}
-        {(r.state === 'working' || asking) && <Btn sm onClick={() => be.stopRepair(job.id)}>Stop</Btn>}
+        {live && <Btn sm onClick={() => be.stopRepair(job.id)}>Stop</Btn>}
       </div>
       <div class="chat" aria-live="polite" ref={follow.ref} onScroll={follow.onScroll}>
         {r.messages.map(m => <p class={m.from}>{m.text}</p>)}
         {r.state === 'working' && <p class="agent typing" aria-label="working" />}
         {r.outcome && <p class={`end ${r.state === 'done' ? 'okc' : ''}`}>{r.outcome}</p>}
       </div>
-      {asking && (
+      {t3 && (
+        <div class="open">
+          <span>{asking ? 'It waits for your answer in T3 Code.' : live ? 'It runs as a thread in this VM\'s T3 Code.' : 'The thread stays in T3 Code.'}</span>
+          <Btn sm kind={asking ? 'pri' : ''} icon="open" onClick={() => be.open(job.vmId, 't3', t3)}>Open in T3 Code</Btn>
+        </div>
+      )}
+      {asking && !t3 && (
         <div class="reply">
           <Field value={text} onInput={setText} label="Reply" placeholder="Reply" onEnter={send} wide />
           <Btn kind="pri" icon="send" title="Send" onClick={send} disabled={!text.trim()} />
@@ -162,7 +170,11 @@ export function JobBlock({ job, vm }: { job: Job; vm: Vm }) {
           <Btn sm icon="x" title="Dismiss" onClick={() => be.dismissJob(job.id)} /></div>
         <div class="msg">{job.step}: {job.error}</div>
         {(log || !job.repair) && <LogView key={job.id} job={job} />}
-        {pop && (job.repair || job.canRepair) && (
+        {pop && job.repair?.t3Thread && !job.canRepair && (
+          // The repair runs in T3 Code: the pop-out opens the thread there.
+          <Btn icon="open" onClick={() => be.open(job.vmId, 't3', job.repair!.t3Thread!)}>{`Repair in T3 Code · ${repairWhen(job.repair)}`}</Btn>
+        )}
+        {pop && (job.repair || job.canRepair) && !(job.repair?.t3Thread && !job.canRepair) && (
           <Btn icon="fix" onClick={() => { if (!job.repair || job.canRepair) be.startRepair(job.id); shell.openWindow({ page: 'home', arg: vm.id }); }}>
             {job.repair && !job.canRepair ? `${job.repair.agent} · ${repairWhen(job.repair)}` : 'Let an agent fix it'}
           </Btn>

@@ -42,8 +42,8 @@ the agent's tests do, with a scripted SSH guest so provision and reinstall jobs 
 fingerprint, creating a VM with its settings (the engine provisions it; the page sends no provision), a setting
 changed and the dot on Reprovision, a reprovision, a failed reprovision retried through the engine's retry route
 (the scripted guest fails once when the test leaves `fail-next` in the engine's directory), the host's `repair.auto`
-switched off, a failed provision step (`fail-step`) repaired by the agent started from the UI (the engine's fake-mode
-guest session asks once and fixes on the reply; the engine runs the job again), a secret added and revealed, a VM's vault request allowed from its card, a profile edited and saved, a reinstall, a restore of the
+switched off and `repair.chat` on, a failed provision step (`fail-step`) repaired by the agent started from the UI in
+Construct's chat (the engine's fake-mode guest session asks once and fixes on the reply; the engine runs the job again), a secret added and revealed, a VM's vault request allowed from its card, a profile edited and saved, a reinstall, a restore of the
 backup it left through the agent's restore route, and pairing a second device in headless Chromium. Nothing in
 the product enrols the account's backup key on a VM yet; the scripted guest adds it from the store once the test
 names the account, so the device can open the backup.
@@ -91,9 +91,12 @@ A failed provision, reinstall or restore shows the VM's repair session from its 
 read once per failed job, then on each `repair.started`, `repair.output` and `repair.ended` event, the lines after the
 last one read). Only a session whose `jobId` is that job shows under it, and only the engine and VM of that job get
 its reply, Stop (`DELETE`) or start (`POST /vms/{name}/repair`; a `409 repair-running` follows the session the host
-started). The reply box is there only while the session waits for an answer. "Fixed" shows only when the session
-ended with `fixed`; the job the engine retried then shows it. The pop-out opens the window on the VM (`#/home/<vm>`).
-An admin switches `repair.auto` on the host's Configuration tab.
+started). By default the session is a T3 Code thread in the VM (`t3Thread`): the block shows what the agent said and
+opens the thread in T3 Code (`open` with the thread's ids: T3 Desktop on the thread, else the web UI and a notice
+naming it), where the user answers; the pop-out's button opens it directly. With the host's `repair.chat` the agent
+runs directly and the reply box is there while the session waits for an answer. "Fixed" shows only when the session
+ended with `fixed`; the job the engine retried then shows it. Otherwise the pop-out opens the window on the VM
+(`#/home/<vm>`). An admin switches `repair.auto` and `repair.chat` on the host's Configuration tab.
 
 ## The one-time upgrade
 

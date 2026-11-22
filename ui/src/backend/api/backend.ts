@@ -3,7 +3,7 @@ import type { paths as AgentPaths } from '../generated/agent';
 import type { paths as EnginePaths } from '../generated/engine';
 import type {
   AgentId, Backend, CreateVmRequest, Feature, FirstRunRequest, Host, HostProbe, HostUser, HostVm, Job, JobKind, Open, Prefs, ProfileSave, SettingsPatch, SignIn, SignInInput, State, Upgrade,
-  VaultMode, VaultRequest, Vm, WinKey,
+  T3Thread, VaultMode, VaultRequest, Vm, WinKey,
 } from '../types';
 import { followEvents, type AgentEventData } from './events';
 import { openExternal } from '../../ui/shell';
@@ -63,8 +63,9 @@ interface AdminData {
   isos: Host['isos'];
   /** A solo host's LAN switch; undefined on any other host. */
   lan: boolean | undefined;
-  /** `repair.auto` from the host configuration. */
+  /** `repair.auto` and `repair.chat` from the host configuration. */
   repairAuto: boolean | undefined;
+  repairChat: boolean | undefined;
 }
 
 /** A repair session with the lines read so far. */
@@ -640,6 +641,7 @@ export class ApiBackend implements Backend {
       isos: isos.status === 'fulfilled' ? toIsos(isos.value) : prev?.isos ?? [],
       lan,
       repairAuto: config.status === 'fulfilled' ? (config.value as HostConfig).repair?.auto ?? true : prev?.repairAuto,
+      repairChat: config.status === 'fulfilled' ? (config.value as HostConfig).repair?.chat ?? false : prev?.repairChat,
     };
   }
 
@@ -751,6 +753,7 @@ export class ApiBackend implements Backend {
       problem: sl.problem,
       ...(a?.lan !== undefined ? { lan: a.lan } : {}),
       ...(admin && a?.repairAuto !== undefined ? { repairAuto: a.repairAuto } : {}),
+      ...(admin && a?.repairChat !== undefined ? { repairChat: a.repairChat } : {}),
     };
   }
 
@@ -1384,11 +1387,19 @@ export class ApiBackend implements Backend {
     if (this.s.vaultRequests.some(r => r.id === key)) this.emit({ vaultRequests: this.s.vaultRequests.filter(r => r.id !== key) });
   }
 
-  /** T3 Code, VS Code or an SSH terminal on this device, through the agent. */
-  open(vmId: string, what: Open) {
+  /** T3 Code, VS Code or an SSH terminal on this device, through the agent; T3 Code on one thread where the desktop app can. */
+  open(vmId: string, what: Open, thread?: T3Thread) {
     const ref = this.vmRef(vmId);
     if (!ref) return;
-    void this.run(() => ok(this.agent.POST('/api/connections/{engine}/{vm}/open', { params: { path: { engine: ref.engine, vm: ref.name } }, body: { what } })),
+    const path = { params: { path: { engine: ref.engine, vm: ref.name } } };
+    if (what === 't3' && thread) {
+      void this.run(async () => {
+        const r = await ok(this.agent.POST('/api/connections/{engine}/{vm}/open', { ...path, body: { what, environmentId: thread.environmentId, threadId: thread.threadId } }));
+        this.note(r.threadOpened ? 'T3 Code opens on the repair thread' : `T3 Code opens; the repair is the thread ${thread.title ? `"${thread.title}"` : 'Construct repair'}`);
+      });
+      return;
+    }
+    void this.run(() => ok(this.agent.POST('/api/connections/{engine}/{vm}/open', { ...path, body: { what } })),
       `${{ t3: 'T3 Code', vscode: 'VS Code', ssh: 'SSH' }[what]} opens`);
   }
 
@@ -1885,8 +1896,16 @@ export class ApiBackend implements Backend {
   }
 
   setRepairAuto(hostId: string, on: boolean) {
-    if (this.s.hosts.find(h => h.id === hostId)?.repairAuto === undefined) return;
-    this.hostAct(hostId, c => ok(c.PUT('/api/v1/host/config', { body: { repair: { auto: on } } as never })), on ? 'The repair agent starts by itself' : 'The repair agent starts when asked');
+    const h = this.s.hosts.find(x => x.id === hostId);
+    if (h?.repairAuto === undefined) return;
+    // A section is replaced whole: the other switch goes along as it is.
+    this.hostAct(hostId, c => ok(c.PUT('/api/v1/host/config', { body: { repair: { auto: on, chat: h.repairChat ?? false } } as never })), on ? 'The repair agent starts by itself' : 'The repair agent starts when asked');
+  }
+
+  setRepairChat(hostId: string, on: boolean) {
+    const h = this.s.hosts.find(x => x.id === hostId);
+    if (h?.repairAuto === undefined) return;
+    this.hostAct(hostId, c => ok(c.PUT('/api/v1/host/config', { body: { repair: { auto: h.repairAuto, chat: on } } as never })), on ? 'The repair runs in Construct\'s chat' : 'The repair runs in T3 Code');
   }
 
   setLanAccess(hostId: string, on: boolean) {

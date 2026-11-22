@@ -5464,6 +5464,8 @@ export interface components {
         RepairConfig: {
             /** @default true */
             auto: boolean;
+            /** @default false */
+            chat: boolean;
         };
         RepairLineResponse: {
             /** Format: int64 */
@@ -5491,9 +5493,15 @@ export interface components {
             ended: null | string;
             agent: null | string;
             via: null | string;
+            t3Thread: null | components["schemas"]["RepairT3ThreadResponse"];
             retryJobId: null | string;
             retryRefused: null | string;
             lines: components["schemas"]["RepairLineResponse"][];
+        };
+        RepairT3ThreadResponse: {
+            environmentId: null | string;
+            threadId: string;
+            title: null | string;
         };
         /** @enum {string} */
         Role: "user" | "admin";

@@ -39,8 +39,22 @@ describe('FakeBackend', () => {
     expect(be.snapshot().vms[0].changeWaits).toBeNull();
   });
 
-  it('starts the repair agent on failure, takes a reply and retries', () => {
+  it('starts the repair in a T3 Code thread on failure, answered there and not here', () => {
     const be = new FakeBackend({ tick: 10 });
+    be.demo('fail-next');
+    be.reprovision('atlas');
+    run(500);
+    const j = activeJob(be.snapshot(), 'atlas')!;
+    expect(j.repair).toMatchObject({ agent: 'T3 Code', state: 'asking', t3Thread: { threadId: 'thread-repair' } });
+    be.replyRepair(j.id, 'stop them');
+    expect(activeJob(be.snapshot(), 'atlas')!.repair!.messages).toHaveLength(4);
+    be.open('atlas', 't3', j.repair!.t3Thread!);
+    expect(be.snapshot().notice?.text).toBe('T3 Code opens on the repair thread');
+  });
+
+  it('with the chat setting starts the repair agent on failure, takes a reply and retries', () => {
+    const be = new FakeBackend({ tick: 10 });
+    be.setRepairChat(be.snapshot().vms.find(v => v.id === 'atlas')!.hostId, true);
     be.demo('fail-next');
     be.reprovision('atlas');
     run(500);

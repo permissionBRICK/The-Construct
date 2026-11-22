@@ -14056,6 +14056,10 @@
           "auto": {
             "type": "boolean",
             "default": true
+          },
+          "chat": {
+            "type": "boolean",
+            "default": false
           }
         }
       },
@@ -14118,6 +14122,7 @@
           "ended",
           "agent",
           "via",
+          "t3Thread",
           "retryJobId",
           "retryRefused",
           "lines"
@@ -14171,6 +14176,16 @@
               "string"
             ]
           },
+          "t3Thread": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/RepairT3ThreadResponse"
+              }
+            ]
+          },
           "retryJobId": {
             "type": [
               "null",
@@ -14188,6 +14203,31 @@
             "items": {
               "$ref": "#/components/schemas/RepairLineResponse"
             }
+          }
+        }
+      },
+      "RepairT3ThreadResponse": {
+        "required": [
+          "environmentId",
+          "threadId",
+          "title"
+        ],
+        "type": "object",
+        "properties": {
+          "environmentId": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "threadId": {
+            "type": "string"
+          },
+          "title": {
+            "type": [
+              "null",
+              "string"
+            ]
           }
         }
       },

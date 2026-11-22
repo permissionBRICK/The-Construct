@@ -13,8 +13,14 @@ namespace Constructd.Core.Logic;
 /// </param>
 public sealed record RepairLine(long Seq, DateTimeOffset At, string Kind, string? Text, string? Outcome = null);
 
-/// <summary>What a <c>start</c> line says about the agent.</summary>
-public sealed record RepairAgentInfo(string? Agent, string? Via);
+/// <summary>What a <c>start</c> line says about the agent; <paramref name="T3Thread"/> when it runs as a T3 Code thread.</summary>
+public sealed record RepairAgentInfo(string? Agent, string? Via, RepairT3Thread? T3Thread = null);
+
+/// <summary>
+/// The T3 Code thread a repair runs in: its id, the id of the VM's T3 Code environment (null when the VM did not
+/// say; T3 Code then opens without a link to the thread), and its title.
+/// </summary>
+public sealed record RepairT3Thread(string? Environment, string Thread, string? Title);
 
 /// <summary>
 /// The guest side of the repair agent (<c>bin/construct-repair-agent.sh</c>): its commands, the
@@ -33,17 +39,27 @@ public static partial class RepairScript
     [GeneratedRegex("^[a-z0-9]{1,64}$")]
     private static partial Regex SessionIdPattern();
 
+    [GeneratedRegex("^[a-z]{1,32}$")]
+    private static partial Regex KindPattern();
+
+    /// <summary>A T3 Code id as a link's path segment takes it: no slash, space or query.</summary>
+    [GeneratedRegex("^[A-Za-z0-9._:%~-]{1,200}$")]
+    private static partial Regex T3IdPattern();
+
     public static bool IsSessionId(string? id) => id is not null && SessionIdPattern().IsMatch(id);
 
     /// <summary>
     /// Runs the script as root. The prompt goes base64-encoded, the session id is checked, and
-    /// nothing a user typed is on this command line: replies go on stdin.
+    /// nothing a user typed is on this command line: replies go on stdin. <paramref name="inT3"/> asks for a
+    /// T3 Code thread named after the job's <paramref name="kind"/> (<c>--via t3</c>); without it the script
+    /// runs the agent directly, as every guest's script does.
     /// </summary>
-    public static string StartCommand(string sessionId, string jobPrompt, bool connectedAsRoot)
+    public static string StartCommand(string sessionId, string jobPrompt, bool connectedAsRoot, bool inT3 = false, string? kind = null)
     {
         if (!IsSessionId(sessionId)) throw new ArgumentException("Invalid session id.", nameof(sessionId));
+        if (inT3 && (kind is null || !KindPattern().IsMatch(kind))) throw new ArgumentException("Invalid job kind.", nameof(kind));
         var prompt = Convert.ToBase64String(Encoding.UTF8.GetBytes(jobPrompt));
-        return AsRoot($"bash {ScriptPath} --session {sessionId} --prompt-b64 {prompt}", connectedAsRoot);
+        return AsRoot($"bash {ScriptPath} --session {sessionId} --prompt-b64 {prompt}" + (inT3 ? $" --via t3 --kind {kind}" : ""), connectedAsRoot);
     }
 
     /// <summary>Ends a session's processes on the guest, whatever became of its connection.</summary>
@@ -150,10 +166,20 @@ public static partial class RepairScript
             using var doc = JsonDocument.Parse(ProvisionScript.CleanLine(raw));
             var root = doc.RootElement;
             return root.ValueKind == JsonValueKind.Object && Text(root, "type") == "start"
-                ? new(Text(root, "agent"), Text(root, "via"))
+                ? new(Text(root, "agent"), Text(root, "via"), T3ThreadOf(root))
                 : null;
         }
         catch (JsonException) { return null; }
+    }
+
+    /// <summary>The thread a start line names, when its ids are fit for a link; else null.</summary>
+    private static RepairT3Thread? T3ThreadOf(JsonElement start)
+    {
+        if (Text(start, "thread") is not { } thread || !T3IdPattern().IsMatch(thread)) return null;
+        var environment = Text(start, "environment") is { Length: > 0 } env ? env : null;
+        if (environment is not null && !T3IdPattern().IsMatch(environment)) return null;
+        var title = Text(start, "title") is { Length: > 0 } t ? (t.Length > 200 ? t[..200] : t) : null;
+        return new(environment, thread, title);
     }
 
     private static string? Cap(string? text) => text is { Length: > MaxText } ? text[..MaxText] + "..." : text;

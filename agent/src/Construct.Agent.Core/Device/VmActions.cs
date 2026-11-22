@@ -4,7 +4,12 @@ using Construct.Companion.Core.State;
 
 namespace Construct.Agent.Device;
 
-public sealed record OpenResult(string What, string Alias, string? Kind = null);
+/// <summary>
+/// What opened: <paramref name="Kind"/> says how T3 Code opened (<c>desktop</c>, or the kind of pairing link the browser got);
+/// <paramref name="ThreadOpened"/> whether it opened on the thread that was asked for (only T3 Desktop with the thread's
+/// environment can).
+/// </summary>
+public sealed record OpenResult(string What, string Alias, string? Kind = null, bool ThreadOpened = false);
 
 public sealed record ShareView(string Unc, string? Letter);
 
@@ -21,13 +26,26 @@ public sealed record T3PairingLinkEntry(string Kind, string PairUrl);
 /// Companion's dispatcher ran them (<c>openT3</c>, <c>openAgentWeb</c>, <c>connect</c>, <c>Mount-RepoShare</c>),
 /// without prompts: T3 Code opens (or brings to the front) the patched T3 Code desktop app Construct installed on this
 /// device, and only without one the first web link the VM offers (its order: the user's proxy, the forward, direct).
+/// T3 Code can be asked to open one thread (a repair's): the desktop app takes it as the link
+/// <c>t3code://threads/{environment}/{thread}</c> on its command line, which a running app gets as well and brings to
+/// the front; the web UI opens as without a thread, and the caller names the thread.
 /// </summary>
-public sealed class VmActions(VmLinks links, IDevicePlatform platform)
+public sealed partial class VmActions(VmLinks links, IDevicePlatform platform)
 {
     public const string Workspace = "/root/repos";
 
-    public async Task<OpenResult> OpenAsync(string engine, string vm, string what, CancellationToken ct)
+    /// <summary>A T3 Code id as a link's path segment takes it (the engine's rule for a repair's thread).</summary>
+    [System.Text.RegularExpressions.GeneratedRegex("^[A-Za-z0-9._:%~-]{1,200}$")]
+    private static partial System.Text.RegularExpressions.Regex T3IdPattern();
+
+    public Task<OpenResult> OpenAsync(string engine, string vm, string what, CancellationToken ct) => OpenAsync(engine, vm, what, null, null, ct);
+
+    /// <summary>Opens the VM in <paramref name="what"/>; T3 Code on the thread <paramref name="threadId"/> of the VM's T3 environment where it can.</summary>
+    public async Task<OpenResult> OpenAsync(string engine, string vm, string what, string? environmentId, string? threadId, CancellationToken ct)
     {
+        if (string.IsNullOrEmpty(environmentId)) environmentId = null;
+        if (threadId is not null && (what != "t3" || !T3IdPattern().IsMatch(threadId) || environmentId is not null && !T3IdPattern().IsMatch(environmentId)))
+            throw new AgentFailure(400, "invalid-request", "A thread opens in T3 Code only, by ids of letters, digits and . _ : % ~ -.");
         var target = links.Target(engine, vm);
         switch (what)
         {
@@ -42,7 +60,9 @@ public sealed class VmActions(VmLinks links, IDevicePlatform platform)
                 return new(what, target.Alias);
             case "t3":
             {
-                if (await platform.OpenT3DesktopAsync(ct).ConfigureAwait(false)) return new(what, target.Alias, "desktop");
+                var threadLink = threadId is not null && environmentId is not null
+                    ? $"t3code://threads/{Uri.EscapeDataString(environmentId)}/{Uri.EscapeDataString(threadId)}" : null;
+                if (await platform.OpenT3DesktopAsync(threadLink, ct).ConfigureAwait(false)) return new(what, target.Alias, "desktop", threadLink is not null);
                 var ssh = links.Transport(engine, vm);
                 var pairing = await ssh.RunRemoteScriptAsync(T3Code.BuildPairingScript(new JsonObject { ["name"] = vm }), TimeSpan.FromSeconds(90), ct).ConfigureAwait(false);
                 if (pairing.Code == 7) throw new AgentFailure(409, "t3-forward-not-ready", "T3 Code's port forward is not ready yet; try again in a moment.");

@@ -79,9 +79,20 @@ public sealed class FakeGuestSessionRunner : IGuestSessionRunner
         s.Emit(new { type = "end", outcome = "done", signedIn = true, version = "1.0.0", text = "" });
     }
 
+    /// <summary>The T3 Code environment and thread a fake repair with <c>--via t3</c> runs in.</summary>
+    public const string T3Environment = "6f1c0b9e-2d4a-4c55-9a41-0e2b7c1d5f60";
+    public const string T3Thread = "thread-fake-repair";
+
+    /// <summary>
+    /// The default repair: with <c>--via t3</c> as a T3 Code thread (a reply reaches it as the user's answer there, and
+    /// it runs again), else as the agent run directly.
+    /// </summary>
     public static async Task AskThenFix(FakeGuestSession s)
     {
-        s.Emit(new { type = "start", agent = "claude", via = "direct" });
+        var t3 = s.Command.Contains(" --via t3 ", StringComparison.Ordinal);
+        var kind = s.Command.Split(' ', '\'').SkipWhile(w => w != "--kind").Skip(1).FirstOrDefault();
+        if (t3) s.Emit(new { type = "start", agent = "t3", via = "t3", thread = T3Thread, environment = T3Environment, title = $"Construct repair: {kind} failed" });
+        else s.Emit(new { type = "start", agent = "claude", via = "direct" });
         s.Emit(new { type = "tool", text = "Bash: tail -n 50 /var/log/construct/provision.log" });
         s.Emit(new { type = "text", text = "The step failed because a package mirror timed out. I can retry it, or switch the mirror. Which do you prefer?" });
         s.Emit(new { type = "turn", outcome = "question" });
@@ -91,6 +102,7 @@ public sealed class FakeGuestSessionRunner : IGuestSessionRunner
             return;
         }
 
+        if (t3) s.Emit(new { type = "run" });
         s.Emit(new { type = "tool", text = "Bash: apt-get update" });
         s.Emit(new { type = "text", text = "Done, the cause is fixed." });
         s.Emit(new { type = "turn", outcome = "fixed" });

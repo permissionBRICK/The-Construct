@@ -10,8 +10,8 @@ import { fileURLToPath } from 'node:url';
    to its end) and two device agents, each serving the built bundle. One browser drives both: first-run setup
    on the first device after confirming the host's fingerprint, a VM created through the UI with its settings
    and provisioned by the engine alone, an agent signed in on the step after it and the ready screen, a setting changed and the dot on Reprovision, a reprovision to its end,
-   a failed reprovision retried, the repair agent's switch turned off on the host, a failed step repaired by the
-   agent started from the UI (output, one reply, fixed, the job run again), a secret added and revealed, the VM asking for it through the engine's guest
+   a failed reprovision retried, the repair agent's switch turned off and its chat switched on on the host, a failed step
+   repaired by the agent started from the UI in Construct's chat (output, one reply, fixed, the job run again), a secret added and revealed, the VM asking for it through the engine's guest
    routes and the card allowing it, a profile edited and saved, a reinstall to its end, a restore of the backup
    it left, then the second device paired. */
 
@@ -211,6 +211,12 @@ test('first run, a VM, a reprovision and a second device on the real API', async
   await auto.click();
   await expect(pa.getByRole('status')).toHaveText('The repair agent starts when asked');
   await expect.poll(async () => (await (await admin.get('/api/v1/host/config')).json()).repair.auto).toBe(false);
+  // By default the repair runs as a T3 Code thread in the VM; the chat in Construct is the option switched on here.
+  const chatSwitch = pa.getByRole('switch', { name: 'Repair in Construct, not T3 Code' });
+  await expect(chatSwitch).toHaveAttribute('aria-checked', 'false');
+  await chatSwitch.click();
+  await expect(pa.getByRole('status')).toHaveText('The repair runs in Construct\'s chat');
+  await expect.poll(async () => (await (await admin.get('/api/v1/host/config')).json()).repair).toMatchObject({ auto: false, chat: true });
 
   // A provision step that fails: the agent is started from the failed job, its output shows, it takes one reply
   // while it waits, says it fixed the cause, and the engine runs the job again to its end.

@@ -8,8 +8,16 @@
 # counterpart for the old client's console.
 #
 #   bash /opt/construct/repo/bin/construct-repair-agent.sh --session ID --prompt-b64 B64 \
-#     [--agent claude|codex|opencode]
+#     [--agent claude|codex|opencode] [--via direct|t3] [--kind provision|reinstall|restore]
 #   bash /opt/construct/repo/bin/construct-repair-agent.sh --stop --session ID
+#
+# --via t3 (the engine's default) starts the repair as a T3 Code thread in the VM (`t3 thread
+# start` in the project "Construct repair", folder /var/lib/construct/repair), so the user
+# follows and answers it in T3 Code; the script then follows the thread's runs with `t3 thread
+# show` and reports them as below. A reply on stdin goes to the thread with `t3 thread send`.
+# The t3 CLI cannot stop a thread: ending the session (stdin, --stop) ends the following, and
+# the thread itself goes on in T3 Code until the user stops it there. When T3 Code is not
+# installed or running, or cannot start the thread, a note says so and the agent runs directly.
 #
 # The prompt is config/repair-prompt.md followed by the job's part (what failed, which
 # logs), which arrives base64-encoded so no shell between the engine and this script
@@ -21,20 +29,21 @@
 #
 # stdout, one JSON object per line:
 #   {"type":"start","agent":"claude","via":"direct"}       which agent runs, and how
+#   {"type":"start","agent":"t3","via":"t3","thread":ID,"environment":ID,"title":...}
+#                                      the T3 Code thread (--via t3) and its T3 environment
 #   {"type":"note","text":...}         something this script says (a fallback, a hint)
 #   {"type":"text","text":...}         what the agent says
 #   {"type":"tool","text":...}         one short line per action of the agent
 #   {"type":"error","text":...}        the agent's run failed
 #   {"type":"turn","outcome":fixed|question|stuck|none}   the agent finished a turn
+#   {"type":"run"}                     the T3 Code thread works again after a turn (--via t3)
 #   {"type":"end","outcome":fixed|stopped|error,"text":...}   the session is over
 #
 # The outcome comes from the status line the prompt asks for (REPAIR-STATUS: ...). After a
 # turn that is not "fixed" the script waits for a reply; after "fixed" it ends.
 #
-# Which agent: --agent, else the first of Claude Code and then the tools AI_TOOLS names
-# (/etc/construct/config.env) that is installed. It runs directly, not as a T3 Code thread:
-# the t3 CLI can neither stop a thread nor switch off its question tools, so a repair that
-# was ended could go on beside the job that ended it.
+# Which agent runs directly: --agent, else the first of Claude Code and then the tools
+# AI_TOOLS names (/etc/construct/config.env) that is installed.
 #
 # Exit status: 0 when the agent ended with "fixed", 3 when it ended otherwise, 2 for a
 # usage error, 127 when no agent is installed.
@@ -61,18 +70,24 @@ usage() {
 session=""
 prompt_b64=""
 agent=""
+via=""
+kind=""
 stop=0
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --session) [ "$#" -ge 2 ] || usage; session="$2"; shift 2 ;;
     --prompt-b64) [ "$#" -ge 2 ] || usage; prompt_b64="$2"; shift 2 ;;
     --agent) [ "$#" -ge 2 ] || usage; agent="$2"; shift 2 ;;
+    --via) [ "$#" -ge 2 ] || usage; via="$2"; shift 2 ;;
+    --kind) [ "$#" -ge 2 ] || usage; kind="$2"; shift 2 ;;
     --stop) stop=1; shift ;;
     *) usage ;;
   esac
 done
 [[ "${session}" =~ ^[A-Za-z0-9_-]{1,64}$ ]] || usage
 case "${agent}" in ""|claude|codex|opencode) ;; *) usage ;; esac
+case "${via}" in ""|direct|t3) ;; *) usage ;; esac
+[[ -z "${kind}" || "${kind}" =~ ^[a-z]{1,32}$ ]] || usage
 
 # Ends a session's process group. The pid file holds the group's id (the session leader).
 stop_session() {
@@ -97,7 +112,8 @@ fi
 # The whole session runs in a process group of its own, so ending it reaches every
 # process the agent started, whatever the connection does.
 if [ -z "${CONSTRUCT_REPAIR_LEADER:-}" ]; then
-  CONSTRUCT_REPAIR_LEADER=1 exec setsid -w bash "${BASH_SOURCE[0]}" --session "${session}" --prompt-b64 "${prompt_b64}" ${agent:+--agent "${agent}"}
+  CONSTRUCT_REPAIR_LEADER=1 exec setsid -w bash "${BASH_SOURCE[0]}" --session "${session}" --prompt-b64 "${prompt_b64}" \
+    ${agent:+--agent "${agent}"} ${via:+--via "${via}"} ${kind:+--kind "${kind}"}
 fi
 
 if ! command -v jq >/dev/null 2>&1; then
@@ -219,6 +235,9 @@ start_reader() {
       [ -n "${text//[[:space:]]/}" ] || continue
       if [ "${target}" = claude ]; then
         jq -nc --arg t "${text}" '{type:"user",message:{role:"user",content:$t}}' >&7 2>/dev/null || break
+      elif [ "${target}" = t3 ]; then
+        printf '%s' "${text}" | t3 thread send --log-level none "${T3_THREAD}" - >/dev/null 2>&1 ||
+          emit note "The reply did not reach the T3 Code thread; answer it in T3 Code."
       else
         jq -nc --arg t "${text}" '$t' >&6
       fi
@@ -360,6 +379,83 @@ run_opencode() {
   done
 }
 
+# ---- T3 Code (--via t3): the repair as a thread in the VM's T3 Code, followed by its runs.
+T3_DIR="${CONSTRUCT_REPAIR_T3_DIR:-/var/lib/construct/repair}"
+T3_HOME="${T3CODE_HOME:-${HOME:-/root}/.t3}"
+# Seconds between two reads of the thread while it works and while it waits for the user;
+# how long it is followed; how many failed reads in a row end the session.
+T3_POLL="${CONSTRUCT_REPAIR_T3_POLL:-10}"
+T3_IDLE_POLL="${CONSTRUCT_REPAIR_T3_IDLE_POLL:-30}"
+T3_WATCH="${CONSTRUCT_REPAIR_T3_WATCH:-86400}"
+T3_FAILS="${CONSTRUCT_REPAIR_T3_FAILS:-60}"
+T3_THREAD=""
+
+# Starts the thread and says so in the start line; fails with a note when T3 Code cannot take it.
+start_t3() {
+  local title="Construct repair${kind:+: ${kind} failed}" launched env why
+  if ! command -v t3 >/dev/null 2>&1; then
+    emit note "T3 Code is not installed on this VM; the repair runs here instead."
+    return 1
+  fi
+  if ! systemctl is-active --quiet t3code-serve 2>/dev/null; then
+    emit note "T3 Code is not running on this VM; the repair runs here instead."
+    return 1
+  fi
+  mkdir -p "${T3_DIR}"
+  # Once per VM; later runs find the project there (the CLI then says it exists).
+  t3 project add "${T3_DIR}" --title "Construct repair" --log-level none </dev/null >/dev/null 2>&1 || true
+  if ! launched="$(printf '%s' "${prompt}" | t3 thread start --json --title "${title}" --log-level none "${T3_DIR}" - 2>"${work}/t3-err")" ||
+    ! T3_THREAD="$(jq -er '.threadId | strings | select(length > 0)' <<<"${launched}" 2>/dev/null)"; then
+    why="$(tail -n 3 "${work}/t3-err" 2>/dev/null | tr '\n' ' ')"
+    why="${why%"${why##*[! ]}"}"
+    emit note "T3 Code could not start the repair thread${why:+: ${why}}. The repair runs here instead."
+    return 1
+  fi
+  env="$(head -n 1 "${T3_HOME}/userdata/environment-id" 2>/dev/null | tr -d '[:space:]')"
+  jq -nc --arg thread "${T3_THREAD}" --arg env "${env}" --arg title "${title}" \
+    '{type:"start",agent:"t3",via:"t3",thread:$thread,environment:$env,title:$title}'
+}
+
+# Follows the thread until a run ends with "fixed": a turn line when a run ends (with its last
+# message) or asks through T3 Code's own question tool, a run line when the thread works again.
+follow_t3() {
+  local last="" asked="" waiting=0 fails=0 json active latest pending text until=$((SECONDS + T3_WATCH))
+  while [ "${SECONDS}" -lt "${until}" ]; do
+    if ! json="$(t3 thread show --json --messages 3 --log-level none "${T3_THREAD}" </dev/null 2>"${work}/t3-err")" ||
+      ! active="$(jq -er '.thread.activeRunId // ""' <<<"${json}" 2>/dev/null)"; then
+      fails=$((fails + 1))
+      [ "${fails}" -lt "${T3_FAILS}" ] ||
+        finish error "T3 Code stopped answering about the repair thread: $(tail -n 2 "${work}/t3-err" 2>/dev/null | tr '\n' ' ')"
+      sleep "${T3_POLL}"
+      continue
+    fi
+    fails=0
+    latest="$(jq -r '.thread.latestRunId // ""' <<<"${json}")"
+    pending="$(jq -r '.thread.pendingRequestCount // 0' <<<"${json}")"
+    if [ -n "${active}" ]; then
+      if [ "${pending}" -gt 0 ]; then
+        [ "${asked}" = "${active}" ] || { asked="${active}"; waiting=1; jq -nc '{type:"turn",outcome:"question"}'; }
+      elif [ "${waiting}" = 1 ]; then
+        waiting=0; asked=""
+        jq -nc '{type:"run"}'
+      fi
+      sleep "${T3_POLL}"
+      continue
+    fi
+    if [ -n "${latest}" ] && [ "${latest}" != "${last}" ]; then
+      [ "${waiting}" = 1 ] && jq -nc '{type:"run"}'
+      last="${latest}"; waiting=1; asked=""
+      text="$(jq -r --arg run "${latest}" '[.messages[]? | select(.role == "assistant" and .runId == $run)] | last | .text // ""' <<<"${json}")"
+      if [ -n "${text}" ]; then emit text "$(strip_status "${text}")"
+      elif [ "$(jq -r '.thread.status' <<<"${json}")" = failed ]; then emit error "The thread's run failed in T3 Code."
+      fi
+      after_turn "${text}"
+    fi
+    sleep "${T3_IDLE_POLL}"
+  done
+  finish stopped "Construct no longer follows the repair thread; it goes on in T3 Code."
+}
+
 # ---- Which agent.
 pick_agent() {
   local tools tool order=(claude)
@@ -382,6 +478,11 @@ pick_agent() {
 WORKSPACE="${WORKSPACE_ROOT:-$(cfg_value WORKSPACE_ROOT)}"
 WORKSPACE="${WORKSPACE:-/root/repos}"
 [ -d "${WORKSPACE}" ] || WORKSPACE="${HOME:-/root}"
+
+if [ "${via}" = t3 ] && start_t3; then
+  start_reader t3
+  follow_t3
+fi
 
 if [ -z "${agent}" ] && ! agent="$(pick_agent)"; then
   jq -nc '{type:"end",outcome:"error",text:"No AI coding agent (Claude Code, Codex or OpenCode) is installed on this VM."}'

@@ -428,18 +428,28 @@ When a `provision`, `reinstall` or `restore` job fails in a guest step (a provis
 `failedSteps`, a restore whose guest side failed), the engine starts the repair agent on the VM (design 11.5,
 S26) unless the host setting `repair.auto` (`PUT /host/config`, default `true`) is off. It runs
 `bin/construct-repair-agent.sh` as root over SSH with the job's part of the prompt (the `fixPrompt`, the end of
-the job's log); the script adds `config/repair-prompt.md`, runs Claude Code, Codex or OpenCode without
-question or plan tools and reports JSON lines (not as a T3 Code thread: the `t3` CLI can neither stop a thread
-nor switch off its question tools). When the
+the job's log); the script adds `config/repair-prompt.md` and reports JSON lines. When the
 failed run rebooted the VM, the repair waits up to five minutes for SSH first.
 
+By default (owner, 2026-11-21) the script starts the repair as a T3 Code thread in the VM (`--via t3`: `t3 thread
+start` in the project "Construct repair", folder `/var/lib/construct/repair`) and follows its runs with `t3 thread
+show`; the user follows and answers it in T3 Code. The session's `t3Thread` names the thread (`environmentId`, the
+VM's T3 environment; `threadId`; `title`), and a device opens it through the device agent: T3 Desktop takes
+`t3code://threads/{environmentId}/{threadId}` on its command line, the web UI opens without it. The `t3` CLI cannot
+stop a thread: ending the session ends Construct's following and the retry, and the thread goes on in T3 Code. With
+the host setting `repair.chat` (default `false`), or when T3 Code is not installed or running on the VM or cannot
+start the thread, the script runs Claude Code, Codex or OpenCode directly, without question or plan tools, and the
+user answers in Construct's chat under the failed job.
+
 - `GET /vms/{name}/repair?after=SEQ` answers the VM's latest session: `state` (`working`, `waiting` for a
-  reply, `ended`), `outcome` (`fixed`, `stopped`, `superseded`, `error`), the agent (`agent`, `via`), and its kept `lines` after `SEQ` (the last 400: `start`, `note`, `text`,
-  `tool`, `error`, `turn`, `end`, `reply`, `retry`, `log`). `GET /vms/{name}/repair/{id}` reads one session.
+  reply, `ended`), `outcome` (`fixed`, `stopped`, `superseded`, `error`), the agent (`agent`, `via`: `t3`/`t3` or
+  `claude`, `codex`, `opencode`/`direct`), the T3 Code thread (`t3Thread`), and its kept `lines` after `SEQ` (the last 400: `start`, `note`, `text`,
+  `tool`, `error`, `turn`, `run`, `end`, `reply`, `retry`, `log`). `GET /vms/{name}/repair/{id}` reads one session.
 - `POST /vms/{name}/repair` starts one for the VM's latest failed lifecycle job (`409 no-failed-job`,
   `not-repairable`, `repair-running`, `operation-in-progress`).
 - `POST /vms/{name}/repair/{id}/reply` `{text}` writes one line to the agent's stdin; the agent continues the
-  same conversation. `409 repair-ended` once it is over. The text never reaches a command line.
+  same conversation (a T3 Code thread gets it with `t3 thread send`). `409 repair-ended` once it is over. The text
+  never reaches a command line.
 - `DELETE /vms/{name}/repair/{id}` ends it: stdin closes, the connection goes, and
   `construct-repair-agent.sh --stop` ends the agent's process group on the VM.
 - The change stream announces `repair.started`, `repair.output` (at most once a second) and `repair.ended`

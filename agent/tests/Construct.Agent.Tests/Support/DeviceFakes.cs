@@ -54,9 +54,9 @@ public sealed class FakePlatform : IDevicePlatform, IAgentLauncher, IDisposable
     /// <summary>Construct's patched T3 Code desktop app is installed here.</summary>
     public bool T3Desktop { get; set; }
 
-    public Task<bool> OpenT3DesktopAsync(CancellationToken ct)
+    public Task<bool> OpenT3DesktopAsync(string? link, CancellationToken ct)
     {
-        if (T3Desktop) Opened.Enqueue("t3-desktop");
+        if (T3Desktop) Opened.Enqueue(link is null ? "t3-desktop" : "t3-desktop " + link);
         return Task.FromResult(T3Desktop);
     }
 

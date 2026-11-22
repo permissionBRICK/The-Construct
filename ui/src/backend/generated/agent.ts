@@ -939,7 +939,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** @description Opens the VM: `t3` (the patched T3 Code desktop app Construct installed here, else T3 Code's pairing link in the browser), `vscode` (Remote-SSH), `ssh` (a terminal). */
+        /** @description Opens the VM: `t3` (the patched T3 Code desktop app Construct installed here, else T3 Code's pairing link in the browser), `vscode` (Remote-SSH), `ssh` (a terminal). With `threadId` (and `environmentId`, the VM's T3 environment) T3 Desktop opens on that thread (`threadOpened`); the web UI opens without it. */
         post: operations["OpenVm"];
         delete?: never;
         options?: never;
@@ -1285,11 +1285,15 @@ export interface components {
         };
         OpenRequest: {
             what: string;
+            environmentId?: null | string;
+            threadId?: null | string;
         };
         OpenResult: {
             what: string;
             alias: string;
             kind?: null | string;
+            /** @default false */
+            threadOpened: boolean;
         };
         PairingRequestView: {
             pairingId: string;

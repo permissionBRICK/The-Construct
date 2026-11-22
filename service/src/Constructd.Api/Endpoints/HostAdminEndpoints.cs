@@ -192,6 +192,8 @@ public static class HostAdminEndpoints
                 if (!(fallback is NetworkConfig && field.Name == nameof(NetworkConfig.OwnerMaySwitchMode)) &&
                     // Old clients' forms do not know updates.auto (12.1): omitted, it is false.
                     !(fallback is UpdatesConfig && field.Name == nameof(UpdatesConfig.Auto)) &&
+                    // Nor repair.chat: omitted, it is false.
+                    !(fallback is RepairConfig && field.Name == nameof(RepairConfig.Chat)) &&
                     field.PropertyType.IsValueType && Nullable.GetUnderlyingType(field.PropertyType) is null &&
                     !property.Value.TryGetProperty(JsonNamingPolicy.CamelCase.ConvertName(field.Name), out _))
                     return CodedProblems.Validation(property.Name + "." + JsonNamingPolicy.CamelCase.ConvertName(field.Name), "Required in a section replacement.");

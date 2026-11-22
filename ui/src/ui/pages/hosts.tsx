@@ -337,6 +337,9 @@ function HConfig({ h }: { h: Host }) {
       {h.repairAuto !== undefined && (
         <Sec>
           <Row l="Repair agent starts by itself"><Switch on={h.repairAuto} onChange={on => be.setRepairAuto(h.id, on)} label="Repair agent starts by itself" /></Row>
+          {h.repairChat !== undefined && (
+            <Row l="Repair in Construct, not T3 Code"><Switch on={h.repairChat} onChange={on => be.setRepairChat(h.id, on)} label="Repair in Construct, not T3 Code" /></Row>
+          )}
         </Sec>
       )}
       <Sec title="Sections">

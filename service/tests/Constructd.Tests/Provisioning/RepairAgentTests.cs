@@ -70,20 +70,74 @@ public sealed class RepairAgentTests
         Assert.Equal(failed.Id, session.JobId);
         Assert.Equal(JobKinds.Provision, session.JobKind);
         Assert.True(session.Automatic);
-        Assert.Equal("claude", session.Agent);
-        Assert.Equal("direct", session.Via);
+        // By default the repair is a T3 Code thread in the VM; the session names it for the device to open.
+        Assert.Equal("t3", session.Agent);
+        Assert.Equal("t3", session.Via);
+        Assert.Equal(new RepairT3ThreadResponse(FakeGuestSessionRunner.T3Environment, FakeGuestSessionRunner.T3Thread, "Construct repair: provision failed"), session.T3Thread);
         Assert.Contains(session.Lines, l => l.Kind == "tool" && l.Text!.StartsWith("Bash: tail", StringComparison.Ordinal));
         Assert.Contains(session.Lines, l => l is { Kind: "turn", Outcome: "question" });
 
         var guest = Assert.Single(Guests(h).Sessions);
         // As root through sudo -n: stdin is the conversation, so no password goes there.
         Assert.StartsWith("sudo -n bash -lc 'bash /opt/construct/repo/bin/construct-repair-agent.sh --session " + session.Id + " --prompt-b64 ", guest.Command, StringComparison.Ordinal);
-        var b64 = guest.Command.Split("--prompt-b64 ")[1].Split('\'')[0];
+        Assert.EndsWith(" --via t3 --kind provision' 2>&1", guest.Command, StringComparison.Ordinal);
+        var b64 = guest.Command.Split("--prompt-b64 ")[1].Split('\'', ' ')[0];
         var prompt = Encoding.UTF8.GetString(Convert.FromBase64String(b64));
         Assert.Contains("Step 'Installing SDKs' failed (exit 2); log: " + Log, prompt, StringComparison.Ordinal);
         Assert.Contains("The end of the provision job's log in the engine:", prompt, StringComparison.Ordinal);
         // The failed run rebooted the VM (bootstrap path): the repair waited for SSH first.
         Assert.Contains(h.Ssh.Commands, c => c == "true");
+    }
+
+    [Fact]
+    public async Task With_the_chat_setting_the_agent_runs_directly_and_answers_in_constructs_chat()
+    {
+        await using var h = await ProvisionHarness.StartAsync(Failing());
+        JobRetryTests.Installed(h);
+        var admin = await h.App.CreateUserClientAsync("root", Role.Admin);
+        Assert.False((await (await admin.GetAsync("/api/v1/host/config")).ReadAsync<JsonElement>()).GetProperty("repair").GetProperty("chat").GetBoolean());
+        (await admin.PutAsJsonAsync("/api/v1/host/config", new { repair = new { auto = true, chat = true } })).EnsureSuccessStatusCode();
+        await h.RunAsync("click-1");
+        var session = await InState(h.Client, "waiting");
+
+        Assert.Equal(("claude", "direct"), (session.Agent, session.Via));
+        Assert.Null(session.T3Thread);
+        Assert.DoesNotContain("--via", Assert.Single(Guests(h).Sessions).Command, StringComparison.Ordinal);
+        // The form of a client that does not know the setting turns it off again.
+        (await admin.PutAsJsonAsync("/api/v1/host/config", new { repair = new { auto = true } })).EnsureSuccessStatusCode();
+        Assert.False((await (await admin.GetAsync("/api/v1/host/config")).ReadAsync<JsonElement>()).GetProperty("repair").GetProperty("chat").GetBoolean());
+    }
+
+    [Fact]
+    public async Task A_t3_code_thread_that_works_again_after_its_turn_reads_as_working_and_its_fix_retries_the_job()
+    {
+        await using var h = await ProvisionHarness.StartAsync(Failing());
+        JobRetryTests.Installed(h);
+        var answered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        // The user answers in T3 Code, not through Construct: the thread runs again, then says it fixed the cause.
+        Guests(h).Script = async s =>
+        {
+            s.Emit(new { type = "start", agent = "t3", via = "t3", thread = "t-1", environment = "env-1", title = "Construct repair: provision failed" });
+            s.Emit(new { type = "text", text = "Retry the mirror, or switch it?" });
+            s.Emit(new { type = "turn", outcome = "question" });
+            await answered.Task;
+            s.Emit(new { type = "run" });
+            await answered.Task.ContinueWith(_ => Task.Delay(300)).Unwrap();
+            s.Emit(new { type = "text", text = "Fixed." });
+            s.Emit(new { type = "turn", outcome = "fixed" });
+            s.Emit(new { type = "end", outcome = "fixed", text = "" });
+        };
+        await h.RunAsync("click-1");
+        var waiting = await InState(h.Client, "waiting");
+        Assert.Equal(new RepairT3ThreadResponse("env-1", "t-1", "Construct repair: provision failed"), waiting.T3Thread);
+        h.Ssh.Provision = _ => (0, FakeSshRunner.Clean);
+        answered.SetResult();
+
+        await InState(h.Client, "working");
+        var ended = await InState(h.Client, "ended");
+        Assert.Equal("fixed", ended.Outcome);
+        Assert.Equal(JobState.Succeeded, (await h.Client.WaitForJobAsync(ended.RetryJobId!)).State);
+        Assert.Empty(Assert.Single(Guests(h).Sessions).Received);
     }
 
     [Fact]
