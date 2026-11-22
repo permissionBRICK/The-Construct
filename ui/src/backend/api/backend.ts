@@ -143,6 +143,10 @@ export interface ApiOptions {
   /** Milliseconds between reads of what the event stream does not announce (usage, guest reports, host
       administration, profiles, secrets); 0 turns polling off (tests). Default one minute. */
   pollMs?: number;
+  /** Milliseconds between reads of the vault requests while one is on screen: a host of the old release sends no
+      event when a request is answered elsewhere (on the phone). Default five seconds; 0, or a `pollMs` of 0 without
+      this, turns it off. */
+  requestPollMs?: number;
   /** false: do not follow `/api/events` (tests drive `onEvent`). */
   events?: boolean;
 }
@@ -201,6 +205,8 @@ export class ApiBackend implements Backend {
   /** The issue of the code on screen; the confirm names it, so a code replaced since is never confirmed. */
   private codeIssue = 0;
   private writersTimer: ReturnType<typeof setTimeout> | null = null;
+  private requestsTimer: ReturnType<typeof setTimeout> | null = null;
+  private disposed = false;
   constructor(private opts: ApiOptions) {
     this.fetchImpl = opts.fetch ?? ((...a: Parameters<typeof fetch>) => fetch(...a));
     const headers = { Authorization: `Bearer ${opts.token}` };
@@ -233,6 +239,9 @@ export class ApiBackend implements Backend {
     this.stopEvents?.();
     if (this.timer) clearTimeout(this.timer);
     if (this.writersTimer) clearTimeout(this.writersTimer);
+    if (this.requestsTimer) clearTimeout(this.requestsTimer);
+    this.requestsTimer = null;
+    this.disposed = true;
     this.subs.clear();
   }
 
@@ -487,6 +496,18 @@ export class ApiBackend implements Backend {
     this.emit({ vaultRequests: [...keep.filter(r => !ids.has(r.id) && !this.answeredKeys.has(r.id)), ...fresh.filter(r => !this.answeredKeys.has(r.id))] });
     const names = [...unreachable].map(id => this.slices.get(id)?.view.name ?? id);
     this.problem('requests', failed[0] ?? (names.length ? `Not reachable: ${names.join(', ')}` : null));
+    this.watchRequests();
+  }
+
+  /** While a request is on screen it is read again every few seconds, so one answered elsewhere leaves soon also
+      where its host sends no event (a host of the old release). */
+  private watchRequests() {
+    const ms = this.opts.requestPollMs ?? (this.opts.pollMs === 0 ? 0 : 5000);
+    if (!ms || this.disposed || this.requestsTimer || !this.s.vaultRequests.length) return;
+    this.requestsTimer = setTimeout(() => {
+      this.requestsTimer = null;
+      void this.loadRequests();
+    }, ms);
   }
 
   /** The engine profiles are read from and written to: the store's, else the first one. */

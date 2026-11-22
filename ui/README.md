@@ -56,7 +56,9 @@ engine, a vault approval or entry-request event the pending vault requests. The 
 re-reads this device's update and the "update everything" run, `connections` this device's links to the VMs.
 A job the page saw end stays ended whatever an older read says. What has no event is read once a minute:
 usage, guest reports (coding agents), host administration, profiles, secrets, and the vault requests of an
-engine that was not reachable.
+engine that was not reachable. While a vault request is on screen, the requests are read again every five seconds:
+a host of the old release sends no event when its request is answered elsewhere (on the phone), and the lone card
+closes once none is left.
 
 ## First run
 
