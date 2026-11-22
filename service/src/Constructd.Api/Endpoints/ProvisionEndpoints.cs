@@ -62,7 +62,8 @@ public static partial class ProvisionEndpoints
         if (Validate(request.Desired) is { } field) return CodedProblems.Validation(field, "Invalid value.");
         if (SecretBag(request.Secrets, request.Kind == JobKinds.Restore, out var bag) is { } invalid) return invalid;
         return await StartAsync(vm, http, provisioning, new ProvisionSubmission(request.RequestId, request.Commit, request.Desired,
-            request.DeferProjectCommands == true, bag, request.Kind, request.Kind == JobKinds.Restore ? request.BackupId : null, request.FreshImage == true), ct);
+            request.DeferProjectCommands == true, bag, request.Kind, request.Kind == JobKinds.Restore ? request.BackupId : null, request.FreshImage == true,
+            StartStopped: true), ct);
     }
 
     /// <summary>The validated secrets of a request in a new RAM bag; a problem when one is malformed.</summary>
@@ -81,6 +82,7 @@ public static partial class ProvisionEndpoints
         return null;
     }
 
+    /// <summary>A job a user asked for: a provision of a VM that is off starts it first (<see cref="ProvisionStart"/>).</summary>
     private static async Task<IResult> StartAsync(Vm vm, HttpContext http, ProvisionJobs provisioning, ProvisionSubmission submission, CancellationToken ct)
     {
         try
@@ -132,7 +134,7 @@ public static partial class ProvisionEndpoints
                 return CodedProblems.Validation("secrets.backupKey", "A restore needs the backup's key (AGE-SECRET-KEY-1...).");
         }
         if (SecretBag(request?.Secrets, failed.Kind == JobKinds.Restore, out var bag) is { } invalid) return invalid;
-        return await StartAsync(vm, http, provisioning, new ProvisionSubmission(requestId, null, null, false, bag, failed.Kind, backupId), ct);
+        return await StartAsync(vm, http, provisioning, new ProvisionSubmission(requestId, null, null, false, bag, failed.Kind, backupId, StartStopped: true), ct);
     }
 
     private static async Task<(Vm? Vm, IResult? Denied)> PrimaryAsync(string name, HttpContext http, IVmRepository vms, CancellationToken ct)

@@ -96,10 +96,12 @@ public sealed class ProvisionRequestException(int status, string code, string me
 /// What a job request carries after validation (secrets already in their bag). <paramref name="Kind"/> is
 /// <c>provision</c>, <c>reinstall</c> (<paramref name="FreshImage"/>: new install media) or <c>restore</c>
 /// (<paramref name="BackupId"/>, its key in the bag). <paramref name="Device"/> is the device whose token asked for
-/// the job (<see cref="JobDevices"/>), null for any other caller and for the engine itself.
+/// the job (<see cref="JobDevices"/>), null for any other caller and for the engine itself. <paramref name="StartStopped"/>: a
+/// provision a user asked for starts its VM first when the VM is off, saved or paused (<see cref="ProvisionStart"/>); without it
+/// (the engine's own provisions) a stopped VM is provisioned as it is, so its chains skip it before they submit.
 /// </summary>
 public sealed record ProvisionSubmission(string RequestId, string? Commit, VmDesiredState? Desired, bool DeferProjectCommands, JobSecretBag Secrets,
-    string Kind = JobKinds.Provision, string? BackupId = null, bool FreshImage = false, string? Device = null);
+    string Kind = JobKinds.Provision, string? BackupId = null, bool FreshImage = false, string? Device = null, bool StartStopped = false);
 
 /// <summary>
 /// Accepts <c>provision</c>, <c>reinstall</c> and <c>restore</c> jobs (design 7.1): a repeated <c>requestId</c> returns the job it started,
@@ -109,7 +111,7 @@ public sealed record ProvisionSubmission(string RequestId, string? Commit, VmDes
 public sealed class ProvisionJobs(IJobStore jobs, IJobQueryStore history, IPersistedJobRunner runner, IVmOperationGate gates,
     IMaintenanceGate maintenance, IVmDesiredStateSource desired, IProvisionTargets targets, IReleaseInfo release,
     IHostConfigStore config, ConstructdOptions options, ProvisionJob job, ReinstallJob reinstall, IHypervisorDriver driver,
-    BackupCoordinator backups, JobDevices devices, IClock clock)
+    BackupCoordinator backups, JobDevices devices, ProvisionStart starter, IClock clock)
 {
     // owner|vm|requestId → job id, the fast path; the stored jobs are the fallback.
     private readonly ConcurrentDictionary<string, string> _requests = new(StringComparer.OrdinalIgnoreCase);
@@ -211,8 +213,10 @@ public sealed class ProvisionJobs(IJobStore jobs, IJobQueryStore history, IPersi
                 ?? throw new ProvisionRequestException(409, "desired-state-missing", "No settings are stored for this VM yet; send 'desired' once.");
         }
 
+        // A provision the user asked for starts a stopped VM first; its address is known once it runs.
+        var startFirst = request.Kind == JobKinds.Provision && request.StartStopped && await starter.StoppedAsync(vm, ct);
         // A reinstall finds its VM itself: a retry after the delete has none to dial yet.
-        var target = request.Kind == JobKinds.Reinstall ? null : await targets.ResolveAsync(vm, ct)
+        var target = request.Kind == JobKinds.Reinstall || startFirst ? null : await targets.ResolveAsync(vm, ct)
             ?? throw new ProvisionRequestException(409, "vm-endpoint-unknown", "The VM has no SSH endpoint the engine can dial.");
 
         var id = Guid.NewGuid().ToString("n");
@@ -236,15 +240,25 @@ public sealed class ProvisionJobs(IJobStore jobs, IJobQueryStore history, IPersi
             if (request.Desired is not null) await desired.SetDesiredAsync(vm.Name, state, ct);
             var channel = HostUpdateTrust.Settings(await config.GetAsync<UpdatesConfig>("updates", ct), options).Channel;
             var queued = new Job(id, request.Kind, vm.Name, vm.Owner, JobState.Queued, [], null, null, clock.UtcNow, null,
-                actor, request.RequestId, request.Kind == JobKinds.Reinstall ? ReinstallJob.Steps[0] : ProvisionJob.Steps[0]);
+                actor, request.RequestId, request.Kind == JobKinds.Reinstall ? ReinstallJob.Steps[0] : startFirst ? ProvisionStart.Step : ProvisionJob.Steps[0]);
             await jobs.UpsertAsync(queued, ct);
             // Before it runs: a job that fails at once starts its repair from what is known here.
             devices.Remember(id, request.Device);
             Func<IProgress<string>, CancellationToken, Task<JobOutcome>> work = request.Kind == JobKinds.Reinstall
                 ? (progress, token) => reinstall.RunAsync(new ReinstallRun(id, vm, commit, state, channel, options.Iso.SeedUser, request.FreshImage,
                     request.Secrets), progress, token)
-                : (progress, token) => job.RunAsync(new ProvisionRun(id, vm, target!, commit, state, channel, request.DeferProjectCommands,
-                    options.Iso.SeedUser, target!.IsRoot ? targets.BootstrapPublicKey() : null, request.Secrets), progress, token);
+                : async (progress, token) =>
+                {
+                    var dial = target;
+                    if (startFirst)
+                    {
+                        try { dial = await starter.RunAsync(id, vm, new ProvisionJobResult(commit, "", state.Hash, channel, false, null, null, [], [], false, null), progress, token); }
+                        catch { request.Secrets.Clear(); throw; }
+                    }
+
+                    return await job.RunAsync(new ProvisionRun(id, vm, dial!, commit, state, channel, request.DeferProjectCommands,
+                        options.Iso.SeedUser, dial!.IsRoot ? targets.BootstrapPublicKey() : null, request.Secrets), progress, token);
+                };
             await runner.StartPersistedAsync(queued, handle, work, CancellationToken.None);
             handle = null;
             return queued;
