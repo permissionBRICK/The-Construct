@@ -30,7 +30,8 @@ public sealed record ConvertRequest(string? From = null);
 
 /// <summary>
 /// The upgrade dialog's steps as agent routes (11.6, 13.2), in order: the engine (installed elevated where
-/// this PC has a local VM; the shared hosts added with their pins and tokens), the recovery code (the
+/// this PC has a local VM; the shared hosts added with their pins and tokens, and the one that keeps the store
+/// moved to the new version first when it still runs the old one), the recovery code (the
 /// existing first-device setup, which takes the old vault key as <c>K</c>), the old writers closed, the
 /// conversion. Each step can be repeated; the state is in <c>bridge.json</c>, whose <c>converted</c> stage
 /// is written last by the converter.
@@ -48,6 +49,7 @@ public sealed class UpgradeService
     private string? _running;
     private string? _error;
     private StepProgress? _convertProgress;
+    private StepProgress? _hostProgress;
     private List<UpgradeItem> _live = [];
     private Task? _probe;
     private Task? _scripts;
@@ -156,7 +158,7 @@ public sealed class UpgradeService
         IReadOnlyList<UpgradeItem> items;
         lock (_gate)
         {
-            progress = _running switch { "engine" => setup.Progress, "convert" => _convertProgress, _ => null };
+            progress = _running switch { "engine" => _hostProgress ?? setup.Progress, "convert" => _convertProgress, _ => null };
             // While the conversion runs its rows as they are now, so a reload keeps them; after it, the run's own list.
             items = _running == "convert" ? [.. _live] : bridge.Items;
         }
@@ -252,7 +254,10 @@ public sealed class UpgradeService
 
     // ---- step 1: the engine ----
 
-    /// <summary>Starts the engine step: the solo engine where this PC has a local VM, and the shared hosts added for sign-in.</summary>
+    /// <summary>
+    /// Starts the engine step: the solo engine where this PC has a local VM, and the shared hosts added for sign-in; without a
+    /// local VM a shared host keeps the account's store, and one on the old Construct moves to the new version first.
+    /// </summary>
     public UpgradeView StartEngine() => Start("engine", EngineAsync);
 
     private async Task EngineAsync(CancellationToken ct)
@@ -264,19 +269,78 @@ public sealed class UpgradeService
             localEngine = await _setup.RunAsync(legacy.BootstrapKey(), ct).ConfigureAwait(false);
 
         // The shared hosts are added for sign-in now; the converter enrols this device there.
-        string? firstHost = null;
+        var hosts = new List<(string Id, LegacyHost Host)>();
         foreach (var host in legacy.Hosts().Where(h => h.Pin is not null))
         {
-            if (_agent.EngineIdFor(host.Url) is { } known) { firstHost ??= known; continue; }
+            if (_agent.EngineIdFor(host.Url) is { } known) { hosts.Add((known, host)); continue; }
             var token = host.HasToken ? legacy.HostToken(host) : null;
             var added = await _agent.AddEngineAsync(host.Url, host.Pin!, null, token, ct).ConfigureAwait(false);
-            if (token is not null) firstHost ??= added.Id;
-            if (token is not null) await MarkOldHostAsync(_agent, Bridge, added.Id, ct).ConfigureAwait(false);
+            if (token is null) continue;
+            hosts.Add((added.Id, host));
+            await MarkOldHostAsync(_agent, Bridge, added.Id, ct).ConfigureAwait(false);
         }
 
-        var store = _agent.StoreEngineId ?? localEngine ?? firstHost
+        var store = _agent.StoreEngineId ?? localEngine ?? await StoreHostAsync(hosts, ct).ConfigureAwait(false)
             ?? throw new AgentFailure(409, "no-engine", "No engine to keep the account's store: this PC has no local VM and no shared host with a stored sign-in.");
         Bridge.Update(b => b with { Engine = local ? "done" : "skipped", LocalEngine = localEngine, StoreEngine = store });
+    }
+
+    /// <summary>
+    /// The shared host that keeps the account's store when this PC has no engine of its own: the first on the new Construct.
+    /// Else the first on the old stack, which has no store: it moves to the new version now, through its own update, where
+    /// the user administers it and it offers that version (as the converter moves the other old hosts), and is noted as moved
+    /// so the converter does not move it again but reprovisions its VMs. Otherwise the step stops here, before anything is
+    /// set up, and Retry asks again. Null when no host has a sign-in.
+    /// </summary>
+    private async Task<string?> StoreHostAsync(IReadOnlyList<(string Id, LegacyHost Host)> hosts, CancellationToken ct)
+    {
+        (string Id, LegacyHost Host)? old = null;
+        string? unknown = null;
+        foreach (var (id, host) in hosts)
+        {
+            switch (await MarkOldHostAsync(_agent, Bridge, id, ct).ConfigureAwait(false))
+            {
+                case false: return id;
+                case true: old ??= (id, host); break;
+                default: unknown ??= id; break; // it did not tell; the setup there says why it fails
+            }
+        }
+
+        if (old is not { } move) return unknown;
+        var name = new Uri(move.Host.Url).Host;
+        var update = OldHostUpdate(_engines);
+        if (await update.OfferAsync(move.Id, ct).ConfigureAwait(false) is not { } offer)
+            throw new AgentFailure(409, "store-host-old",
+                $"{name} still runs the old Construct; its admin has to update it to the new version first. Your old Companion keeps working until then.");
+
+        string? problem;
+        try
+        {
+            problem = await update.RunAsync(move.Id, offer, ct, (percent, word) =>
+            {
+                var next = new StepProgress(percent, $"{word} {name}");
+                lock (_gate)
+                {
+                    if (_hostProgress == next) return;
+                    _hostProgress = next;
+                }
+
+                _agent.Events.Publish("upgrade");
+            }).ConfigureAwait(false);
+        }
+        finally
+        {
+            lock (_gate) _hostProgress = null;
+        }
+
+        if (problem is not null)
+            throw new AgentFailure(409, "store-host-not-moved", $"{name} did not move to the new version: {problem}. Your old Companion keeps working until then; retry.");
+
+        // The converter's row for this move (LegacyConverter.HostUpdateAsync), done: it runs the moved host's VM rows.
+        var moved = "host-update:" + move.Host.Slug;
+        Bridge.Update(b => b with { Done = b.Done.Contains(moved) ? b.Done : [.. b.Done, moved] });
+        await MarkOldHostAsync(_agent, Bridge, move.Id, ct).ConfigureAwait(false);
+        return move.Id;
     }
 
     /// <summary>Notes a shared host as still on the old stack, or no longer, as far as it told; the dialog names it before the conversion. What it told.</summary>

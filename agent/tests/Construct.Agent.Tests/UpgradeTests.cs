@@ -859,6 +859,140 @@ public sealed class UpgradeTests
     }
 
     /// <summary>
+    /// The PC's old install has no local VM, only a shared host on the old stack with a stored sign-in (in the field the PC's
+    /// own old host service), so the account's store has to go there. The installer of a local engine counts its runs.
+    /// </summary>
+    private static async Task<(UpgradeRig Rig, EngineHost Remote, Func<int> Installs)> OnlyAnOldHostAsync(OldUntilStaged old, Role role)
+    {
+        var remote = new EngineHost(services => services.AddSingleton<Microsoft.AspNetCore.Hosting.IStartupFilter>(old));
+        var remoteToken = await remote.AddUserAsync("alice", role);
+        var rig = await UpgradeRig.CreateAsync(f =>
+        {
+            SingleVm(f);
+            f.SshKey("construct_far_ed25519");
+            f.Instances(new JsonObject
+            {
+                ["version"] = 1, ["defaultInstance"] = "far",
+                ["instances"] = new JsonObject
+                {
+                    ["agent-vm"] = null,
+                    ["far"] = new JsonObject
+                    {
+                        ["backend"] = "hyperv-remote", ["sshHost"] = "127.0.0.1", ["sshPort"] = 2201,
+                        ["service"] = new JsonObject { ["url"] = remote.Url, ["auth"] = "token" },
+                    },
+                },
+            });
+            f.RemoteHost(remote.Url, remote.Pin, remoteToken);
+        });
+        rig.Agent.Host.Upgrade.ShipsAgent = (_, tag, _) => Task.FromResult(tag == "host-" + OldUntilStaged.NewCommit);
+        rig.Agent.Host.Upgrade.OldHostPoll = TimeSpan.FromMilliseconds(50);
+        var installs = 0;
+        rig.Agent.Host.Upgrade.EngineInstaller = _ =>
+        {
+            installs++;
+            throw new AgentFailure(500, "test-no-install", "No engine is installed on this PC here.");
+        };
+        return (rig, remote, () => installs);
+    }
+
+    private static async Task<JsonNode> EngineStepAsync(UpgradeRig rig)
+    {
+        await rig.Agent.PostAsync("api/upgrade/engine", null, HttpStatusCode.Accepted);
+        await rig.Agent.Host.Upgrade.Work;
+        return await rig.Agent.GetAsync("api/upgrade");
+    }
+
+    [Fact]
+    public async Task Without_a_local_VM_the_old_host_for_the_store_moves_in_the_first_step_and_the_converter_does_not_move_it_again()
+    {
+        // Field run: the recovery step set the store up at the old host and stopped with "The store answered 404".
+        var old = new OldUntilStaged { HoldStage = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously) };
+        var (rig, remote, installs) = await OnlyAnOldHostAsync(old, Role.Admin);
+        using var _ = remote;
+        await using var __ = rig;
+        var slug = LegacyState.Slug(remote.Url);
+
+        // The step shows the move while the host updates.
+        await rig.Agent.PostAsync("api/upgrade/engine", null, HttpStatusCode.Accepted);
+        JsonNode? bar = null;
+        var until = DateTime.UtcNow + TimeSpan.FromSeconds(30);
+        while (bar is null)
+        {
+            Assert.True(DateTime.UtcNow < until, "the step never showed the host's update");
+            await Task.Delay(20);
+            bar = (await rig.Agent.GetAsync("api/upgrade"))["progress"];
+        }
+
+        Assert.Equal("Updating 127.0.0.1", bar["label"]!.GetValue<string>());
+        old.HoldStage!.SetResult();
+        await rig.Agent.Host.Upgrade.Work;
+        var view = await rig.Agent.GetAsync("api/upgrade");
+        Assert.True(view["error"] is null, view.ToJsonString());
+        Assert.Equal("skipped", view["steps"]![0]!["state"]!.GetValue<string>());
+        Assert.Equal(1, old.Stages);
+        // No second engine on this PC: the store is on the moved host.
+        Assert.Equal(0, installs());
+        Assert.Null(rig.Agent.Host.Upgrade.Bridge.Read().LocalEngine);
+        var host = (await rig.Agent.GetAsync("api/state"))["engines"]!.AsArray().Single(e => e!["url"]!.GetValue<string>() == remote.Url)!;
+        Assert.Equal(host["id"]!.GetValue<string>(), view["storeEngine"]!.GetValue<string>());
+        Assert.Empty(view["oldHosts"]!.AsArray());
+
+        await rig.SetupAsync();
+        var converted = await rig.ConvertAsync();
+        Assert.Equal("converted", converted["stage"]!.GetValue<string>());
+        Assert.Equal(0, old.StoreCalls);
+        // The converter does not move it again; its moved-host rows run.
+        Assert.DoesNotContain(converted["items"]!.AsArray(), i => i!["id"]!.GetValue<string>().StartsWith("host-update:", StringComparison.Ordinal));
+        Assert.Equal(1, old.Stages);
+        Assert.Equal(("done", "None of yours"), Row(converted, "host-reprovision:" + slug));
+    }
+
+    [Fact]
+    public async Task Without_a_local_VM_an_old_host_the_user_does_not_administer_stops_the_first_step_until_its_admin_moved_it()
+    {
+        var old = new OldUntilStaged { Admin = false };
+        var (rig, remote, installs) = await OnlyAnOldHostAsync(old, Role.User);
+        using var _ = remote;
+        await using var __ = rig;
+
+        var view = await EngineStepAsync(rig);
+        Assert.Equal("127.0.0.1 still runs the old Construct; its admin has to update it to the new version first. Your old Companion keeps working until then.",
+            view["error"]?.GetValue<string>());
+        Assert.Equal("todo", view["steps"]![0]!["state"]!.GetValue<string>());
+        Assert.True(view["storeEngine"] is null, view.ToJsonString());
+        Assert.Equal((0, 0, 0), (old.StoreCalls, old.Stages, installs()));
+
+        // Its admin updated it: Retry goes on, and the store is set up there.
+        old.UpdatedElsewhere = true;
+        view = await EngineStepAsync(rig);
+        Assert.True(view["error"] is null, view.ToJsonString());
+        Assert.Empty(view["oldHosts"]!.AsArray());
+        await rig.SetupAsync();
+        Assert.Equal((0, 0), (old.StoreCalls, old.Stages));
+    }
+
+    [Fact]
+    public async Task Without_a_local_VM_a_failed_update_of_the_old_host_for_the_store_stops_the_first_step_and_Retry_moves_it()
+    {
+        var old = new OldUntilStaged { Refusals = 1 };
+        var (rig, remote, _) = await OnlyAnOldHostAsync(old, Role.Admin);
+        using var __ = remote;
+        await using var ___ = rig;
+
+        var view = await EngineStepAsync(rig);
+        Assert.Equal("127.0.0.1 did not move to the new version: Update not started (409). Your old Companion keeps working until then; retry.",
+            view["error"]?.GetValue<string>());
+        Assert.True(view["storeEngine"] is null, view.ToJsonString());
+
+        view = await EngineStepAsync(rig);
+        Assert.True(view["error"] is null, view.ToJsonString());
+        Assert.Equal(1, old.Stages);
+        await rig.SetupAsync();
+        Assert.Equal(0, old.StoreCalls);
+    }
+
+    /// <summary>
     /// An old host the user administers with one VM of theirs ("far"), which the engine there reaches only as root with the old
     /// client's key (the old provisioning removed the bootstrap key from the seed user), and the PC's old install pointing at it.
     /// </summary>
@@ -1151,15 +1285,40 @@ public sealed class UpgradeTests
         /// <summary>How many stage requests it refuses first (409).</summary>
         public int Refusals { get; set; }
 
+        /// <summary>False: the user is not its admin, and its update API refuses them (403).</summary>
+        public bool Admin { get; init; } = true;
+
+        /// <summary>Its admin updated it meanwhile: it answers as the new stack.</summary>
+        public bool UpdatedElsewhere { get; set; }
+
+        /// <summary>Requests to the store it answered 404 to: the old stack has none.</summary>
+        public int StoreCalls { get; private set; }
+
+        /// <summary>Holds a stage request until set.</summary>
+        public TaskCompletionSource? HoldStage { get; set; }
+
         public Action<Microsoft.AspNetCore.Builder.IApplicationBuilder> Configure(Action<Microsoft.AspNetCore.Builder.IApplicationBuilder> next) => app =>
         {
             app.Use(call => context =>
             {
-                if (Staged) return call(context);
+                if (Staged || UpdatedElsewhere) return call(context);
                 var path = context.Request.Path;
                 if (path.StartsWithSegments("/api/v1/engine") || path.StartsWithSegments("/api/v1/device/backup-key"))
                 {
                     context.Response.StatusCode = 404;
+                    return Task.CompletedTask;
+                }
+
+                if (path.StartsWithSegments("/api/v1/store"))
+                {
+                    StoreCalls++;
+                    context.Response.StatusCode = 404;
+                    return Task.CompletedTask;
+                }
+
+                if (!Admin && path.StartsWithSegments("/api/v1/host/updates"))
+                {
+                    context.Response.StatusCode = 403;
                     return Task.CompletedTask;
                 }
 
@@ -1180,17 +1339,22 @@ public sealed class UpgradeTests
                         return context.Response.WriteAsync("""{"code":"update-busy"}""");
                     }
 
-                    Stages++;
-                    // The update installs the offered release: the host answers healthy with its commit.
-                    ((FakeReleaseInfo)context.RequestServices.GetRequiredService<IReleaseInfo>()).Installed = new InstalledRelease(NewCommit, "1.0.0-test", null, "test");
-                    context.Response.StatusCode = 202;
-                    return context.Response.WriteAsync("""{"updateId":"u1","state":"staged"}""");
+                    return HoldStage is { } hold ? hold.Task.ContinueWith(_ => Stage(context), TaskScheduler.Default).Unwrap() : Stage(context);
                 }
 
                 return call(context);
             });
             next(app);
         };
+
+        private Task Stage(HttpContext context)
+        {
+            Stages++;
+            // The update installs the offered release: the host answers healthy with its commit.
+            ((FakeReleaseInfo)context.RequestServices.GetRequiredService<IReleaseInfo>()).Installed = new InstalledRelease(NewCommit, "1.0.0-test", null, "test");
+            context.Response.StatusCode = 202;
+            return context.Response.WriteAsync("""{"updateId":"u1","state":"staged"}""");
+        }
     }
 
     /// <summary>An engine without the new stack's identity route, as a host of the old stack answers.</summary>
