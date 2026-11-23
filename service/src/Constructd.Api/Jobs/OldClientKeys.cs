@@ -38,7 +38,11 @@ public static class OldClientKeys
     /// <summary>Reads the guest's coding agents (<c>AI_TOOLS</c>) while it proves the login works.</summary>
     public const string ProbeCommand = "{ sed -n 's/^AI_TOOLS=//p' /etc/construct/config.env 2>/dev/null | head -n 1; true; }";
 
-    private static readonly TimeSpan ProbeTimeout = TimeSpan.FromMinutes(1);
+    // Two probes and the wait for the VM's gate fit within the 30 seconds a device gives one request; a running guest
+    // answers a login in a second or two, and one that boots is asked again by the device.
+    private static readonly TimeSpan ProbeTimeout = TimeSpan.FromSeconds(10);
+
+    private static readonly TimeSpan GateWait = TimeSpan.FromSeconds(5);
 
     public static bool ValidKey(string? key) =>
         key is { Length: > 0 and <= MaxKeyLength } && key.Contains("PRIVATE KEY", StringComparison.Ordinal) && !key.Contains('\0');
@@ -53,6 +57,13 @@ public static class OldClientKeys
             throw new Refusal(409, "unsupported-capability", "The engine reaches an external machine with its configured account.");
         if (await services.GetRequiredService<ProvisionStart>().StoppedAsync(vm, ct))
             throw new Refusal(409, "vm-not-running", "The VM is not running; start it first.");
+
+        // Under the VM's gate, as a delete or reinstall runs: neither can remove the VM (and the key the engine keeps for
+        // it) between the probe and the write, so a key never outlives the VM it reached.
+        await using var operation = await AcquireAsync(services.GetRequiredService<IVmOperationGate>(), vm.Name, ct);
+        var now = await services.GetRequiredService<IVmRepository>().GetAsync(vm.Name, ct);
+        if (now is null || now.Deleting || !string.Equals(now.Incarnation, vm.Incarnation, StringComparison.Ordinal))
+            throw new Refusal(409, "vm-changed", "The VM was deleted or rebuilt meanwhile; nothing was stored.");
 
         // Where the engine dials the VM now: as root with the key it keeps, or as its seed account.
         var current = await targets.ResolveAsync(vm, ct)
@@ -94,6 +105,20 @@ public static class OldClientKeys
         }
 
         return new Outcome(status);
+    }
+
+    private static async Task<IAsyncDisposable> AcquireAsync(IVmOperationGate gates, string vm, CancellationToken ct)
+    {
+        using var wait = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        wait.CancelAfter(GateWait);
+        try
+        {
+            return await gates.AcquireAsync(vm, "old-client-key-" + Guid.NewGuid().ToString("n"), wait.Token);
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            throw new Refusal(409, "vm-busy", "Another operation runs on the VM; try again when it ends.");
+        }
     }
 
     /// <summary>The probe's output lines when the login worked; null when it did not.</summary>

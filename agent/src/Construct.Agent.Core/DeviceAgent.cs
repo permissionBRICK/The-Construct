@@ -281,7 +281,7 @@ public sealed partial class DeviceAgent : IDisposable
         }
 
         await WriteEngineRecordAsync(entry, ct).ConfigureAwait(false);
-        if (!TakesPart(entry))
+        if (!TakesPart(entry) && !await EngineTakesPartAsync(entry, ct).ConfigureAwait(false))
         {
             // E12: a grant here would make the engine serve the account's vault from its own empty store and start a
             // second account store; it keeps the user's sign-in and its table instead. What an earlier version granted goes.
@@ -315,6 +315,23 @@ public sealed partial class DeviceAgent : IDisposable
     }
 
     /// <summary>
+    /// Whether the engine says it takes part in the account's store (<c>GET /engine/participation</c>): one that syncs with
+    /// the store it is configured for needs <c>D</c> before it can enrol this device. An engine without the route (the
+    /// release before it) or one not reached counts as not taking part, so it gets no keys; the next connect asks again.
+    /// </summary>
+    private async Task<bool> EngineTakesPartAsync(EngineEntry entry, CancellationToken ct)
+    {
+        try
+        {
+            return (await EngineApi(entry).GetEngineParticipationAsync(ct).ConfigureAwait(false)).TakesPart;
+        }
+        catch (Exception ex) when (ex is ApiException or HttpRequestException or TaskCanceledException && !ct.IsCancellationRequested)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
     /// Withdraws the keys an earlier version of this agent granted engines outside the account's store (E12): once per
     /// engine of the new release that does not take part, until that engine has answered. Run at start; a failure (an
     /// engine not reached, one without the route) is that engine's alone and is tried again at the next start or connect.
@@ -327,7 +344,7 @@ public sealed partial class DeviceAgent : IDisposable
         await Task.WhenAll(engines.Select(e => WithdrawGrantsAsync(e, ct))).ConfigureAwait(false);
     }
 
-    // DELETE /engine/grants at one engine: the engine drops D and K of this account, its replica and what it wrote for it.
+    // DELETE /engine/grants at one engine: the engine drops D and K of this account and its replica.
     private async Task WithdrawGrantsAsync(EngineEntry entry, CancellationToken ct)
     {
         if (entry.GrantsWithdrawn || entry.EngineId is null) return;

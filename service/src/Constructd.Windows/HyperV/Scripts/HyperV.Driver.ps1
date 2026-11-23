@@ -286,12 +286,14 @@ function Set-ConstructVmMemory {
 
 function Start-ConstructVm {
     <#
-        Power the VM on. Hyper-V's Start-VM also RESUMES a saved or paused VM,
-        which is what the "suspend" capability relies on.
+        Power the VM on. Hyper-V's Start-VM also restores a saved VM, which is
+        what the "suspend" capability relies on; a paused VM needs Resume-VM.
     #>
     [CmdletBinding()]
     param([Parameter(Mandatory)][string]$Name)
-    Start-VM -Name $Name
+    $vm = Get-VM -Name $Name -ErrorAction SilentlyContinue
+    if ($vm -and [string]$vm.State -eq 'Paused') { Resume-VM -Name $Name }
+    else { Start-VM -Name $Name }
 }
 
 function Stop-ConstructVm {

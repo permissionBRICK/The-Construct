@@ -55,7 +55,7 @@ public sealed class SharedHostVaultTests
     }
 
     [Fact]
-    public async Task Keys_an_earlier_agent_left_change_nothing_and_their_withdrawal_takes_the_replica_and_records_along()
+    public async Task Keys_an_earlier_agent_left_change_nothing_and_their_withdrawal_takes_the_replica_and_keeps_the_records()
     {
         var root = Path.Combine(Path.GetTempPath(), "constructd-shared-host-" + Guid.NewGuid().ToString("n"));
         Directory.CreateDirectory(root);
@@ -87,6 +87,7 @@ public sealed class SharedHostVaultTests
             Assert.False((await h.Bob.GetFromJsonAsync<JsonObject>("/api/v1/vault/mode"))!["records"]!.GetValue<bool>());
             Assert.Null(sync.Replica("bob"));
             Assert.False(h.App.Service<DeviceSshKeys>().Manages("bob"));
+            Assert.False((await h.Bob.GetFromJsonAsync<JsonObject>("/api/v1/engine/participation"))!["takesPart"]!.GetValue<bool>());
 
             // Only the caller's own keys: another user's withdrawal leaves bob's alone.
             using (var other = await alice.DeleteAsync("/api/v1/engine/grants")) Assert.Equal(HttpStatusCode.NoContent, other.StatusCode);
@@ -95,7 +96,8 @@ public sealed class SharedHostVaultTests
             using (var withdrawn = await h.Bob.DeleteAsync("/api/v1/engine/grants")) Assert.Equal(HttpStatusCode.NoContent, withdrawn.StatusCode);
             Assert.Empty(engine.GrantingAccounts(EngineGrants.Records));
             Assert.Empty(engine.GrantingAccounts(EngineGrants.Vault));
-            Assert.Empty((await store.ExportAsync("bob", default)).Records);
+            // The record stays (a guest's secret has no other copy); without D nothing here opens it.
+            Assert.Single((await store.ExportAsync("bob", default)).Records);
             Assert.False(File.Exists(replica));
 
             // Idempotent; the table is untouched, and profile sync makes no replica again.
@@ -126,6 +128,7 @@ public sealed class SharedHostVaultTests
         Assert.Equal(["bob"], own.App.Service<EngineKeyStore>().GrantingAccounts(EngineGrants.Records));
         Assert.Equal(["bob"], own.App.Service<EngineKeyStore>().GrantingAccounts(EngineGrants.Vault));
         Assert.True((await own.Bob.GetFromJsonAsync<JsonObject>("/api/v1/vault/mode"))!["records"]!.GetValue<bool>());
+        Assert.True((await own.Bob.GetFromJsonAsync<JsonObject>("/api/v1/engine/participation"))!["takesPart"]!.GetValue<bool>());
 
         // An engine whose account syncs against a store it names takes part too.
         await using var remote = await ProfileSyncHarness.StartRemoteAsync("engine-token");
@@ -134,5 +137,6 @@ public sealed class SharedHostVaultTests
         using (var refused = await remote.Alice.DeleteAsync("/api/v1/engine/grants")) Assert.Equal(HttpStatusCode.Conflict, refused.StatusCode);
         Assert.Equal([ProfileSyncHarness.User], remote.App.Service<EngineKeyStore>().GrantingAccounts(EngineGrants.Records));
         Assert.NotNull(remote.Sync.Replica(ProfileSyncHarness.User));
+        Assert.True((await remote.Alice.GetFromJsonAsync<JsonObject>("/api/v1/engine/participation"))!["takesPart"]!.GetValue<bool>());
     }
 }

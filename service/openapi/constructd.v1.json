@@ -6477,6 +6477,36 @@
         }
       }
     },
+    "/api/v1/engine/participation": {
+      "get": {
+        "tags": [
+          "Constructd.Api"
+        ],
+        "operationId": "GetEngineParticipation",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EngineParticipationResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error, as a Problem document.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/sync/records/{id}": {
       "get": {
         "tags": [
@@ -10531,6 +10561,17 @@
           },
           "hostPublicKey": {
             "type": "string"
+          }
+        }
+      },
+      "EngineParticipationResponse": {
+        "required": [
+          "takesPart"
+        ],
+        "type": "object",
+        "properties": {
+          "takesPart": {
+            "type": "boolean"
           }
         }
       },

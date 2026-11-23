@@ -46,8 +46,12 @@ public static class EngineParticipationEndpoints
         api.MapPut("/engine/grants", PutGrants)
             .RequireAuthorization(Policies.User).Audited("engine.grants").WithName("PutEngineGrants").Produces(StatusCodes.Status204NoContent);
 
-        api.MapDelete("/engine/grants", WithdrawGrantsAsync)
+        api.MapDelete("/engine/grants", WithdrawGrants)
             .RequireAuthorization(Policies.User).Audited("engine.grants.withdraw").WithName("WithdrawEngineGrants").Produces(StatusCodes.Status204NoContent);
+
+        api.MapGet("/engine/participation", (HttpContext http, EngineStores stores) =>
+                TypedResults.Ok(new EngineParticipationResponse(stores.TakesPart(http.User.NameOrEmpty()))))
+            .RequireAuthorization(Policies.User).WithName("GetEngineParticipation").Produces<EngineParticipationResponse>();
 
         api.MapGet("/sync/records/{id}", ReadRecordAsync)
             .RequireAuthorization(Policies.User).WithName("ReadSyncRecord").Produces<SyncRecordResponse>();
@@ -170,12 +174,12 @@ public static class EngineParticipationEndpoints
 
     /// <summary>
     /// Withdraws the caller's grants from an engine that does not take part in the account's store (E12): <c>D</c> and
-    /// <c>K</c> of every epoch, the replica profile sync kept against this engine's own store, and the records written
-    /// there for the account, so they cannot come back later. The account's vault is the table again, as on a host of the
-    /// old release. Refused on an engine that takes part, so the account's own records are never touched; idempotent.
+    /// <c>K</c> of every epoch and the replica profile sync kept against this engine's own store. The account's vault is
+    /// the table again, as on a host of the old release. Records written to this engine's store for the account stay:
+    /// without <c>D</c> nothing here opens them, and a secret a guest added while the keys were here has no other copy.
+    /// Refused on an engine that takes part, so its keys stay; idempotent.
     /// </summary>
-    private static async Task<IResult> WithdrawGrantsAsync(HttpContext http, EngineKeyStore keys, EngineStores stores, RecordStore store,
-        Constructd.Api.Profiles.ProfileSync sync, CancellationToken ct)
+    private static IResult WithdrawGrants(HttpContext http, EngineKeyStore keys, EngineStores stores, Constructd.Api.Profiles.ProfileSync sync)
     {
         var account = http.User.NameOrEmpty();
         if (stores.TakesPart(account)) return Refused(409, "account-store", "This engine takes part in the account's store; its keys stay.");
@@ -184,8 +188,7 @@ public static class EngineParticipationEndpoints
         keys.DeleteGrant(account, EngineGrants.Records);
         keys.DeleteGrant(account, EngineGrants.Vault);
         sync.Drop(account);
-        var records = await store.DeleteAccountAsync(account, ct);
-        http.SetAuditDetail($"granted={(granted ? "yes" : "no")}, records={records}");
+        http.SetAuditDetail($"granted={(granted ? "yes" : "no")}");
         return TypedResults.NoContent();
     }
 

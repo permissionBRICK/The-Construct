@@ -167,31 +167,6 @@ public sealed class RecordStore : IDisposable
         finally { _lock.Release(); }
     }
 
-    /// <summary>
-    /// Removes everything of an account: its records, their history and its epoch. For an account whose store this is
-    /// not, so what an engine wrote here for it cannot come back (or block an import) later. Returns how many records went.
-    /// </summary>
-    public async Task<int> DeleteAccountAsync(string account, CancellationToken ct)
-    {
-        await _lock.WaitAsync(ct).ConfigureAwait(false);
-        try
-        {
-            using var tx = _connection.BeginTransaction();
-            int removed;
-            using (var records = Command("DELETE FROM store_records WHERE account = $a", ("$a", account)))
-            {
-                records.Transaction = tx;
-                removed = records.ExecuteNonQuery();
-            }
-
-            Run(tx, "DELETE FROM store_versions WHERE account = $a", ("$a", account));
-            Run(tx, "DELETE FROM store_epochs WHERE account = $a", ("$a", account));
-            tx.Commit();
-            return removed;
-        }
-        finally { _lock.Release(); }
-    }
-
     // ---- writes ---------------------------------------------------------------------------------
 
     public async Task<WriteOutcome> WriteAsync(StorePrincipal principal, RecordWrite write, CancellationToken ct)

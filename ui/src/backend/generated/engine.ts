@@ -2250,6 +2250,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/engine/participation": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["GetEngineParticipation"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/sync/records/{id}": {
         parameters: {
             query?: never;
@@ -4616,6 +4632,9 @@ export interface components {
         EngineIdentityResponse: {
             engineId: string;
             hostPublicKey: string;
+        };
+        EngineParticipationResponse: {
+            takesPart: boolean;
         };
         EngineRegistration: {
             engineId: string;
@@ -11235,6 +11254,35 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description An error, as a Problem document. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    GetEngineParticipation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EngineParticipationResponse"];
+                };
             };
             /** @description An error, as a Problem document. */
             default: {

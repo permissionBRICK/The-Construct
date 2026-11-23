@@ -19,6 +19,12 @@ public sealed record DeviceEnrollResponse([property: ConstructSecret] string Tok
 /// <summary><c>PUT /engine/grants</c>: keys sealed to this engine's host key, <c>D</c> and per vault mode <c>K</c>.</summary>
 public sealed record EngineGrantsRequest([property: ConstructSecret] IReadOnlyList<EngineGrant> Grants);
 
+/// <summary>
+/// <c>GET /engine/participation</c>: whether this engine takes part in the caller's account store (its own store holds
+/// the account, or it syncs with the account's store), so a device grants it <c>D</c> and <c>K</c> (8.7, E12).
+/// </summary>
+public sealed record EngineParticipationResponse(bool TakesPart);
+
 /// <summary><c>GET /sync/records/{id}</c>: a record of the caller's account, opened with this engine's <c>D</c>.</summary>
 public sealed record SyncRecordResponse(string Id, string Kind, string Actor, long Revision, JsonNode? Value);
 

@@ -1026,6 +1026,33 @@ public sealed class UpgradeTests
         Assert.Equal("converted", view["stage"]!.GetValue<string>());
     }
 
+    [Fact]
+    public async Task A_move_finished_as_converted_with_the_host_VMs_row_that_did_not_wait_opens_again()
+    {
+        // The other state that converter could leave: everything else moved, so it saved "converted"; the dialog hid the
+        // move for good and the host's VMs were never reprovisioned.
+        var (rig, remote, _, guest) = await OldHostWithVmAsync();
+        using var _ = remote;
+        await using var __ = rig;
+        var slug = LegacyState.Slug(remote.Url);
+        await rig.ConvertAsync();
+        var bridge = rig.Agent.Host.Upgrade.Bridge;
+        bridge.Update(b => b with
+        {
+            Stage = "converted",
+            Done = [.. b.Done.Where(d => !d.StartsWith("host-reprovision:", StringComparison.Ordinal)), "host-vms:" + slug],
+        });
+
+        var open = await rig.Agent.GetAsync("api/upgrade");
+        Assert.Equal("converting", open["stage"]!.GetValue<string>());
+
+        var view = await rig.ConvertAsync();
+        Assert.Equal(("done", "On the new version"), Row(view, "host-reprovision:" + slug));
+        Assert.Equal(2, guest.Inner.Provisions);
+        Assert.Equal("converted", view["stage"]!.GetValue<string>());
+        Assert.Equal("converted", (await rig.Agent.GetAsync("api/upgrade"))["stage"]!.GetValue<string>());
+    }
+
     /// <summary>
     /// A guest on an old host: its sshd admits root with the old client's key only (the old provisioning removed the
     /// bootstrap key from the seed user, and the engine has no other key); what it admits, <see cref="AdoptableGuest"/> answers.

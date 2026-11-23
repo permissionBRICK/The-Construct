@@ -86,6 +86,7 @@ public class RouteCoverageTests
         "DELETE /api/v1/devices/{id}",
         "PUT /api/v1/engine/grants",
         "DELETE /api/v1/engine/grants",
+        "GET /api/v1/engine/participation",
         "PUT /api/v1/device/ssh-key",
         "PUT /api/v1/device/backup-key",
         "POST /api/v1/vms/{name}/backup-recipients",
