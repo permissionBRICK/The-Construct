@@ -5,6 +5,7 @@ using Construct.Agent.Tests.Support;
 using Constructd.Core.Abstractions;
 using Constructd.Core.Domain;
 using Constructd.Core.Services;
+using Constructd.Fakes;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace Construct.Agent.Tests;
@@ -315,6 +316,130 @@ public sealed class VaultTests
             });
             next(app);
         };
+    }
+
+    [Fact]
+    public async Task Files_a_scrub_found_are_listed_from_every_engine_and_answered_at_the_one_that_found_them()
+    {
+        using var engine = new EngineHost();
+        var (laptop, engineId) = await SetUpAsync(engine, "available");
+        await using var _ = laptop;
+        await laptop.PostAsync("api/vault/secrets", new { name = "db", description = "Database", value = "db_pw_123456" });
+        var vm = await CreateVmAsync(laptop, engine, engineId);
+        Assert.Empty((await laptop.GetAsync("api/vault/files"))["files"]!.AsArray());
+
+        // The VM's agent log is redacted without asking; the other two wait for the user, with the engine that found them.
+        await FoundAsync(laptop, engine, engineId, vm, "/root/.claude/projects/-root/a.jsonl", "/root/.secrets/db.json", "/root/app/state.db");
+        // A second engine of the account with a file of its own.
+        using var other = new EngineHost();
+        var otherId = await laptop.AddEngineAsync(other, await other.AddUserAsync("alice"));
+        await other.Services.GetRequiredService<IVaultStore>().SaveAsync(new VaultFileDecision("f-other", "alice", "harbor", "/root/.npmrc",
+            Convert.ToBase64String("/root/.npmrc"u8.ToArray()), [0], "text", 7, [new VaultSecretCopy("npm", "sealed", 1)], "scan-1", DateTimeOffset.UtcNow), CancellationToken.None);
+
+        var view = await laptop.GetAsync("api/vault/files");
+        Assert.Empty(view["unreachable"]!.AsArray());
+        var files = view["files"]!.AsArray().Select(f => f!).ToArray();
+        Assert.Equal([(engineId, "/root/.secrets/db.json"), (engineId, "/root/app/state.db"), (otherId, "/root/.npmrc")],
+            files.Select(f => (f["engine"]!.GetValue<string>(), f["path"]!.GetValue<string>())));
+        var (env, database) = (files[0], files[1]);
+        Assert.Equal((vm.Name, "text", 42L), (env["vm"]!.GetValue<string>(), env["type"]!.GetValue<string>(), env["size"]!.GetValue<long>()));
+        Assert.Equal(["db"], env["names"]!.AsArray().Select(n => n!.GetValue<string>()));
+        Assert.Equal("sqlite", database["type"]!.GetValue<string>());
+        Assert.Equal("harbor", files[2]["vm"]!.GetValue<string>());
+        Assert.Equal(["npm"], files[2]["names"]!.AsArray().Select(n => n!.GetValue<string>()));
+        Assert.False(string.IsNullOrEmpty(files[2]["engineName"]!.GetValue<string>()));
+
+        // Keep, then the same file again: decided already. An action the engine does not know is refused here.
+        var envId = env["id"]!.GetValue<string>();
+        await laptop.PostAsync($"api/vault/files/{engineId}/{envId}", new { action = "shred" }, HttpStatusCode.BadRequest);
+        await laptop.PostAsync($"api/vault/files/{engineId}/{envId}", new { action = "keep" }, HttpStatusCode.NoContent);
+        Assert.Equal(engineId, (await EventAsync(laptop, "vault.file.ended", envId)).Engine);
+        var again = await laptop.PostAsync($"api/vault/files/{engineId}/{envId}", new { action = "redact" }, HttpStatusCode.NotFound);
+        Assert.Equal("not-found", again["code"]!.GetValue<string>());
+        await laptop.PostAsync($"api/vault/files/{otherId}/{envId}", new { action = "keep" }, HttpStatusCode.NotFound);
+        await laptop.PostAsync($"api/vault/files/no-such-engine/{envId}", new { action = "keep" }, HttpStatusCode.NotFound);
+
+        // A delete goes to the VM as an apply job on its next scrub; the database takes its side files along.
+        await laptop.PostAsync($"api/vault/files/{engineId}/{database["id"]!.GetValue<string>()}", new { action = "delete" }, HttpStatusCode.NoContent);
+        var delete = (await ApplyFilesAsync(engine, vm)).Single(f => f.Path == "/root/app/state.db");
+        Assert.Equal("delete", delete.Action);
+        Assert.Equal(["/root/.npmrc"], (await laptop.GetAsync("api/vault/files"))["files"]!.AsArray().Select(f => f!["path"]!.GetValue<string>()));
+
+        // An engine that does not answer is named, and its files are left out.
+        other.Dispose();
+        view = await laptop.GetAsync("api/vault/files");
+        Assert.Empty(view["files"]!.AsArray());
+        Assert.Equal([otherId], view["unreachable"]!.AsArray().Select(e => e!.GetValue<string>()));
+    }
+
+    [Fact]
+    public async Task A_redact_on_a_locked_engine_unlocks_the_VM_so_it_is_delivered_and_waits_for_a_VM_that_is_off()
+    {
+        using var engine = new EngineHost();
+        var (laptop, engineId) = await SetUpAsync(engine, "available");
+        await using var _ = laptop;
+        await laptop.PostAsync("api/vault/secrets", new { name = "db", description = "Database", value = "db_pw_123456" });
+        var vm = await CreateVmAsync(laptop, engine, engineId);
+        await FoundAsync(laptop, engine, engineId, vm, "/root/.secrets/db.json", "/root/notes.txt", "/root/old.txt");
+        var ids = (await laptop.GetAsync("api/vault/files"))["files"]!.AsArray().ToDictionary(f => f!["path"]!.GetValue<string>(), f => f!["id"]!.GetValue<string>());
+        using (var locked = await laptop.Api.PutAsJsonAsync($"api/vault/engines/{engineId}/mode", new { mode = "locked" }))
+            Assert.Equal(HttpStatusCode.OK, locked.StatusCode);
+        async Task<string[]> UnlockedAsync() =>
+            (await laptop.GetAsync($"api/vault/engines/{engineId}/mode"))["unlockedVms"]!.AsArray().Select(v => v!.GetValue<string>()).ToArray();
+        Assert.Empty(await UnlockedAsync());
+
+        // A delete needs no key: the VM stays locked and gets the job.
+        await laptop.PostAsync($"api/vault/files/{engineId}/{ids["/root/old.txt"]}", new { action = "delete" }, HttpStatusCode.NoContent);
+        Assert.Empty(await UnlockedAsync());
+        Assert.Equal("delete", (await ApplyFilesAsync(engine, vm)).Single(f => f.Path == "/root/old.txt").Action);
+
+        // A redaction needs K on the VM: without the unlock it would wait for the next allow. The redact unlocks it.
+        await laptop.PostAsync($"api/vault/files/{engineId}/{ids["/root/.secrets/db.json"]}", new { action = "redact" }, HttpStatusCode.NoContent);
+        Assert.Contains(vm.Name, await UnlockedAsync());
+        var redact = (await ApplyFilesAsync(engine, vm)).Single(f => f.Path == "/root/.secrets/db.json");
+        Assert.Equal("redact", redact.Action);
+        Assert.Contains("db_pw_123456", redact.Patterns);
+
+        // A VM that is off cannot be unlocked: the redaction is recorded and waits for its next unlock.
+        var service = engine.Services.GetRequiredService<VaultHostService>();
+        var driver = engine.Services.GetRequiredService<FakeHypervisorDriver>();
+        driver.SetState(vm.Name, VmState.Off);
+        service.Drop(vm.Name);
+        await laptop.PostAsync($"api/vault/files/{engineId}/{ids["/root/notes.txt"]}", new { action = "redact" }, HttpStatusCode.NoContent);
+        Assert.Empty(await UnlockedAsync());
+        Assert.Empty((await laptop.GetAsync("api/vault/files"))["files"]!.AsArray());
+        Assert.DoesNotContain(await ApplyFilesAsync(engine, vm), f => f.Path == "/root/notes.txt");
+        driver.SetState(vm.Name, VmState.Running);
+        await laptop.PostAsync($"api/vault/engines/{engineId}/vms/{vm.Name}/unlock", null, HttpStatusCode.NoContent);
+        Assert.Equal("redact", (await ApplyFilesAsync(engine, vm)).Single(f => f.Path == "/root/notes.txt").Action);
+    }
+
+    /// <summary>
+    /// A lease of <c>db</c> on the VM, allowed and ended here, and the VM's scan of its disk: hits at <paramref name="paths"/>
+    /// (a <c>.db</c> file as a database). An agent log among them is redacted without asking; every other one waits for the user.
+    /// </summary>
+    private static async Task FoundAsync(TestAgent laptop, EngineHost engine, string engineId, Vm vm, params string[] paths)
+    {
+        var request = await SubmitAsync(engine, vm, new { v = 1, op = "request", names = new[] { "db" } });
+        await laptop.PostAsync($"api/vault/approvals/{engineId}/{request.PendingId}", new { decision = "allow" }, HttpStatusCode.NoContent);
+        var lease = Assert.Single(Assert.Single((await laptop.GetAsync("api/vault/secrets")).AsArray(), s => s!["name"]!.GetValue<string>() == "db")!["leases"]!.AsArray())!;
+        using (var ended = await laptop.Api.DeleteAsync($"api/vault/leases/{engineId}/{lease["id"]!.GetValue<string>()}"))
+            Assert.Equal(HttpStatusCode.NoContent, ended.StatusCode);
+
+        var service = engine.Services.GetRequiredService<VaultHostService>();
+        var scan = Assert.Single((await service.ScrubsAsync(vm, CancellationToken.None))["jobs"]!.AsArray())!;
+        Assert.Equal("scan", scan["step"]!.GetValue<string>());
+        var hits = paths.Select(p => new { path = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(p)), indexes = new[] { 0 }, size = 42, type = p.EndsWith(".db", StringComparison.Ordinal) ? "sqlite" : "text" });
+        await service.ScrubResultAsync(vm, scan["id"]!.GetValue<string>(), JsonNode.Parse(TestAgent.Json(new { step = "scan", complete = true, hits }))!.AsObject(), CancellationToken.None);
+    }
+
+    /// <summary>The files of the apply jobs the VM gets on its next scrub, with the patterns each is to redact.</summary>
+    private static async Task<(string Path, string Action, string[] Patterns)[]> ApplyFilesAsync(EngineHost engine, Vm vm)
+    {
+        static string Text(JsonNode? node) => System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(node!.GetValue<string>()));
+        var jobs = (await engine.Services.GetRequiredService<VaultHostService>().ScrubsAsync(vm, CancellationToken.None))["jobs"]!.AsArray();
+        return jobs.Where(j => j!["step"]!.GetValue<string>() == "apply").SelectMany(j => j!["files"]!.AsArray())
+            .Select(f => (Text(f!["path"]), f!["action"]!.GetValue<string>(), f["patterns"]!.AsArray().Select(Text).ToArray())).ToArray();
     }
 
     // ---- support ----

@@ -252,23 +252,72 @@ public sealed partial class DeviceAgent
         if (ttlSeconds is { } chosen && (!allow || chosen < 60 || chosen > 86400))
             throw new AgentFailure(400, "invalid-duration", "A duration goes with an allow and is 1 minute to 24 hours.");
         var entry = Find(engineId) ?? throw NoEngine();
-        if (allow)
+        if (allow && await LockedModeAsync(engineId, ct).ConfigureAwait(false) is { } mode)
         {
-            // A host still on the old release has no /vault/mode and no records: nothing to unlock there.
-            VaultModeView? mode;
-            try { mode = await VaultModeAsync(engineId, ct).ConfigureAwait(false); }
-            catch (AgentFailure e) when (e.Status == 404) { mode = null; }
-            if (mode is { Records: true, Mode: "locked" })
-            {
-                var pending = (await ApprovalsAsync(ct).ConfigureAwait(false)).Approvals.FirstOrDefault(a => a.Engine == engineId && a.Id == id)
-                    ?? throw new AgentFailure(404, "not-found", "No such request.");
-                if (!mode.UnlockedVms.Contains(pending.Vm, StringComparer.OrdinalIgnoreCase)) await UnlockVmAsync(engineId, pending.Vm, ct).ConfigureAwait(false);
-            }
+            var pending = (await ApprovalsAsync(ct).ConfigureAwait(false)).Approvals.FirstOrDefault(a => a.Engine == engineId && a.Id == id)
+                ?? throw new AgentFailure(404, "not-found", "No such request.");
+            if (!mode.UnlockedVms.Contains(pending.Vm, StringComparer.OrdinalIgnoreCase)) await UnlockVmAsync(engineId, pending.Vm, ct).ConfigureAwait(false);
         }
 
         await EngineSendAsync(entry, HttpMethod.Post, $"api/v1/vault/approvals/{Uri.EscapeDataString(id)}",
             ttlSeconds is null ? new { decision = allow ? "approve" : "deny" } : new { decision = "approve", ttlSeconds }, ct).ConfigureAwait(false);
         Answered("vault.approval.ended", engineId, id);
+    }
+
+    /// <summary>
+    /// The files a scrub found still holding a secret after its lease ended, from every engine, oldest first; engines
+    /// that did not answer are named. Agent logs are redacted without asking and are never listed; a file waits for the
+    /// user's keep, redact or delete and never expires.
+    /// </summary>
+    public async Task<VaultFilesView> VaultFilesAsync(CancellationToken ct)
+    {
+        var files = new List<VaultFileItem>();
+        var answered = await FromEnginesAsync("api/v1/vault/files", ct).ConfigureAwait(false);
+        foreach (var (engine, body) in answered)
+        foreach (var f in body["files"] as JsonArray ?? [])
+        {
+            files.Add(new VaultFileItem(engine.Id, engine.Name, Str(f, "id"), Str(f, "vm"), Str(f, "path"),
+                (f?["names"] as JsonArray ?? []).Select(n => n?.GetValue<string>() ?? "").ToArray(), Str(f, "type"), Long(f, "size"), Long(f, "createdAt")));
+        }
+
+        return new VaultFilesView(files.OrderBy(f => f.CreatedAt).ThenBy(f => f.Path, StringComparer.Ordinal).ToArray(), Unanswered(answered));
+    }
+
+    /// <summary>
+    /// Keeps, redacts or deletes one file at the engine that found it. A redaction needs <c>K</c> on the VM: on an engine
+    /// in <c>locked</c> mode it would wait for the VM's next unlock, so a redact first unlocks the VM, as an allow does.
+    /// A VM that is not running cannot be unlocked; its redaction is recorded all the same and waits for that unlock.
+    /// A delete needs no key.
+    /// </summary>
+    public async Task DecideFileAsync(string engineId, string id, string? action, CancellationToken ct)
+    {
+        if (action is not ("keep" or "redact" or "delete")) throw new AgentFailure(400, "invalid-action", "keep, redact or delete.");
+        var entry = Find(engineId) ?? throw NoEngine();
+        if (action == "redact" && await LockedModeAsync(engineId, ct).ConfigureAwait(false) is { } mode)
+        {
+            var files = (await EngineSendAsync(entry, HttpMethod.Get, "api/v1/vault/files", null, ct).ConfigureAwait(false))?["files"] as JsonArray ?? [];
+            var vm = files.Where(f => Str(f, "id") == id).Select(f => Str(f, "vm")).FirstOrDefault()
+                ?? throw new AgentFailure(404, "not-found", "No such file.");
+            if (!mode.UnlockedVms.Contains(vm, StringComparer.OrdinalIgnoreCase))
+            {
+                try { await UnlockVmAsync(engineId, vm, ct).ConfigureAwait(false); }
+                catch (AgentFailure e) when (e.Code == "vm-not-running") { }
+            }
+        }
+
+        await EngineSendAsync(entry, HttpMethod.Post, $"api/v1/vault/files/{Uri.EscapeDataString(id)}", new { action }, ct).ConfigureAwait(false);
+        Answered("vault.file.ended", engineId, id);
+    }
+
+    /// <summary>
+    /// The engine's vault mode when it keeps this account's vault as records and is <c>locked</c>: a VM there holds
+    /// <c>K</c> only while a device has unlocked it. Null otherwise, also for a host of the old release, which has no
+    /// <c>/vault/mode</c> and no records.
+    /// </summary>
+    private async Task<VaultModeView?> LockedModeAsync(string engineId, CancellationToken ct)
+    {
+        try { return await VaultModeAsync(engineId, ct).ConfigureAwait(false) is { Records: true, Mode: "locked" } mode ? mode : null; }
+        catch (AgentFailure e) when (e.Status == 404) { return null; }
     }
 
     /// <summary>
@@ -489,6 +538,19 @@ public sealed record VaultEntryRequestItem(string Engine, string EngineName, str
     string Source, long CreatedAt, long ExpiresAt);
 
 public sealed record VaultEntryRequestsView(IReadOnlyList<VaultEntryRequestItem> Requests, IReadOnlyList<string> Unreachable);
+
+/// <summary>A file on a VM that still holds secrets after their lease ended; never its content.</summary>
+/// <param name="Names">The secrets found in it.</param>
+/// <param name="Type"><c>text</c>, <c>sqlite</c> (a database; its side files go with it) or <c>binary</c>.</param>
+/// <param name="Size">In bytes, as the scan found it; 0 when unknown.</param>
+public sealed record VaultFileItem(string Engine, string EngineName, string Id, string Vm, string Path, IReadOnlyList<string> Names, string Type,
+    long Size, long CreatedAt);
+
+/// <param name="Unreachable">Engines that did not answer: their files are not in the list.</param>
+public sealed record VaultFilesView(IReadOnlyList<VaultFileItem> Files, IReadOnlyList<string> Unreachable);
+
+/// <param name="Action"><c>keep</c> leaves the file as it is, <c>redact</c> replaces the secrets in it, <c>delete</c> removes it.</param>
+public sealed record FileDecision(string Action);
 
 /// <param name="HoldsKey">The engine holds <c>K</c> now: granted, or in RAM for an unlocked VM.</param>
 /// <param name="Records">The engine keeps this account's vault as records; false: a Companion vault.</param>

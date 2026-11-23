@@ -9,6 +9,7 @@ import { contrast, cssVars, SCHEME_ORDER, SCHEMES } from '../../src/model/tokens
 import type { Job } from '../../src/backend/types';
 import { profileError } from '../../src/model/profile';
 import { linkParts, lostSignIns, signedIn, signInState } from '../../src/model/signin';
+import { filesByVm } from '../../src/model/vault';
 
 const job = (p: Partial<Job>): Job => ({ id: 'j', vmId: 'atlas', kind: 'reprovision', state: 'running', step: 's', stepIndex: 0, stepCount: 3, pct: 0, log: [], error: null, repair: null, ...p });
 
@@ -252,5 +253,14 @@ describe('sign-in text', () => {
   it('reads an agent\'s sign-in from the VM\'s report by its tool id', () => {
     const agents = [{ id: 'claude', signedIn: true }, { id: 'codex', signedIn: false }, { id: 'opencode', signedIn: null }];
     expect(['claude', 'codex', 'opencode', 'antigravity'].map(t => signedIn(agents, t))).toEqual([true, false, undefined, undefined]);
+  });
+});
+
+describe('files that still hold a secret', () => {
+  it('ask as one card per VM, in the order their first file came', () => {
+    const f = (id: string, hostId: string, vmName: string) => ({ id, hostId, vmId: vmName, vmName, hostName: hostId, path: `/root/${id}`, secrets: ['db'], type: 'text' as const, size: 1 });
+    const groups = filesByVm([f('1', 'pc', 'atlas'), f('2', 'lab', 'atlas'), f('3', 'pc', 'Atlas'), f('4', 'pc', 'pebble')]);
+    expect(groups.map(g => g.map(x => x.id))).toEqual([['1', '3'], ['2'], ['4']]);
+    expect(filesByVm([])).toEqual([]);
   });
 });

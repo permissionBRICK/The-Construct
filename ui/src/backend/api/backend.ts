@@ -2,7 +2,7 @@ import createClient, { type Client } from 'openapi-fetch';
 import type { paths as AgentPaths } from '../generated/agent';
 import type { paths as EnginePaths } from '../generated/engine';
 import type {
-  AgentId, Backend, CreateVmRequest, Feature, FirstRunRequest, Host, HostProbe, HostUser, HostVm, Job, JobKind, Open, Prefs, ProfileSave, SettingsPatch, SignIn, SignInInput, State, Upgrade,
+  AgentId, Backend, CreateVmRequest, Feature, FileAction, FirstRunRequest, Host, HostProbe, HostUser, HostVm, Job, JobKind, Open, Prefs, ProfileSave, SettingsPatch, SignIn, SignInInput, State, Upgrade,
   T3Thread, VaultMode, VaultRequest, Vm, WinKey,
 } from '../types';
 import { followEvents, type AgentEventData } from './events';
@@ -10,7 +10,7 @@ import { openExternal } from '../../ui/shell';
 import { agentList, agentSwitches, DEFAULT_AGENTS } from '../../model/settings';
 import {
   updateRunning, allowanceOf, codeGroups, hostVersion, jobKey, problemText, splitJobKey, toCert, toConfig, toDevice, toHostJob, toHostUser, toHostVm, toJob,
-  toMedia, toStatus, toUpdates, toUsage, toVm, toWindows, vmKey, toSecret, toLeases, toVaultEvent, toApproval, toEntryRequest, toProfile, splitRequestKey, requestKey, VM_JOB_KINDS,
+  toMedia, toStatus, toUpdates, toUsage, toVm, toWindows, vmKey, toSecret, toLeases, toVaultEvent, toApproval, toEntryRequest, toVaultFile, toProfile, splitRequestKey, requestKey, VM_JOB_KINDS,
   settingsFields, withDesired, codingAgents, toLink, toEverything, hostKind, toIsos, toRepair, repairable, upgradeStep, toUpgradeItem, toUpstream,
   type RepairSession, type UpstreamView, type RepairLine, type UpgradeView, type AgentSignIn,
   type DeviceItem, type ProfileResponse, type AuditEntry, type EngineView, type Health, type HostUpdateStatus, type HttpsStatus, type JobResponse, type MediaItem, type TokenSummary,
@@ -214,7 +214,7 @@ export class ApiBackend implements Backend {
     const p = store.get<Partial<Prefs>>(PREFS_KEY, {});
     this.s = {
       device: { name: '' }, version: '', release: null, vms: [], hosts: [], projects: [], sync: { when: '–', remote: '', rev: '' }, jobs: [],
-      vaultRequests: [], secrets: [], leases: [], devices: [], history: [], vaultModes: [], problems: {}, pairing: null, revocation: null, handout: null,
+      vaultRequests: [], vaultFiles: [], secrets: [], leases: [], devices: [], history: [], vaultModes: [], problems: {}, pairing: null, revocation: null, handout: null,
       prefs: { channel: 'stable', theme: p.theme ?? 'auto', scheme: p.scheme ?? 'green', autoUpdate: false, startWithOs: false, notifications: false },
       upgrade: null, movedNotes: [], notice: null, na: API_GAPS, firstRun: null, everything: null, signIn: null, upstream: null,
     };
@@ -472,10 +472,12 @@ export class ApiBackend implements Backend {
     return this.s.vms.find(v => v.hostId === engine && v.name.toLowerCase() === name.toLowerCase())?.id ?? '';
   }
 
-  /** The pending approvals and entry requests of every engine; an engine that does not answer keeps its own. */
+  /** The pending approvals, entry requests and files that still hold a secret, of every engine; an engine that does not
+      answer keeps its own. */
   private async loadRequests() {
     if (!this.registered) return;
-    const [approvals, entries] = await Promise.allSettled([ok(this.agent.GET('/api/vault/approvals')), ok(this.agent.GET('/api/vault/entry-requests'))]);
+    const [approvals, entries, files] = await Promise.allSettled([ok(this.agent.GET('/api/vault/approvals')), ok(this.agent.GET('/api/vault/entry-requests')),
+      ok(this.agent.GET('/api/vault/files'))]);
     const unreachable = new Set<string>();
     const fresh: VaultRequest[] = [];
     const failed: string[] = [];
@@ -493,7 +495,17 @@ export class ApiBackend implements Backend {
       return unreachable.has(engine) || (r.kind === 'lease' ? approvals.status === 'rejected' : entries.status === 'rejected');
     });
     const ids = new Set(fresh.map(r => r.id));
-    this.emit({ vaultRequests: [...keep.filter(r => !ids.has(r.id) && !this.answeredKeys.has(r.id)), ...fresh.filter(r => !this.answeredKeys.has(r.id))] });
+    let vaultFiles = this.s.vaultFiles;
+    if (files.status === 'fulfilled') {
+      files.value.unreachable.forEach(e => unreachable.add(e));
+      const found = files.value.files.map(f => toVaultFile(f, this.vmIdOf(f.engine, f.vm)));
+      const seen = new Set(found.map(f => f.id));
+      vaultFiles = [...vaultFiles.filter(f => unreachable.has(f.hostId) && !seen.has(f.id)), ...found];
+    } else failed.push(errText(files.reason));
+    this.emit({
+      vaultRequests: [...keep.filter(r => !ids.has(r.id) && !this.answeredKeys.has(r.id)), ...fresh.filter(r => !this.answeredKeys.has(r.id))],
+      vaultFiles: vaultFiles.filter(f => !this.answeredKeys.has(f.id)),
+    });
     const names = [...unreachable].map(id => this.slices.get(id)?.view.name ?? id);
     this.problem('requests', failed[0] ?? (names.length ? `Not reachable: ${names.join(', ')}` : null));
     this.watchRequests();
@@ -792,6 +804,7 @@ export class ApiBackend implements Backend {
       case 'notices': void this.loadDismissed(); return;
       case 'connections': void this.loadConnections(); return;
       case 'vault.approval.added': case 'vault.approval.ended': case 'vault.entry-request.added': case 'vault.entry-request.ended':
+      case 'vault.file.added': case 'vault.file.ended':
         // Answered on another surface (or at the engine): it leaves this one at once, also where the engine is not read.
         if (type.endsWith('ended') && engine && id) this.ended(requestKey(engine, id));
         void this.loadRequests();
@@ -1402,10 +1415,11 @@ export class ApiBackend implements Backend {
     }
   }
 
-  /** A vault request that ended elsewhere leaves the screen; a read under way does not bring it back. */
+  /** A vault request (or a file) that ended elsewhere leaves the screen; a read under way does not bring it back. */
   private ended(key: string) {
     this.answeredKeys.add(key);
     if (this.s.vaultRequests.some(r => r.id === key)) this.emit({ vaultRequests: this.s.vaultRequests.filter(r => r.id !== key) });
+    if (this.s.vaultFiles.some(f => f.id === key)) this.emit({ vaultFiles: this.s.vaultFiles.filter(f => f.id !== key) });
   }
 
   /** T3 Code, VS Code or an SSH terminal on this device, through the agent; T3 Code on one thread where the desktop app can. */
@@ -1773,6 +1787,28 @@ export class ApiBackend implements Backend {
   private async answeredWith(key: string, done: boolean) {
     if (!done) { this.answeredKeys.delete(key); await this.loadRequests(); }
     await this.loadVault();
+  }
+
+  /** Takes the file off the screen at once and answers it at the engine that found it. One decided meanwhile elsewhere
+      stays away; one whose answer failed comes back. */
+  answerFile(key: string, action: FileAction) {
+    const f = this.s.vaultFiles.find(x => x.id === key);
+    if (!f) return;
+    this.answeredKeys.add(key);
+    this.emit({ vaultFiles: this.s.vaultFiles.filter(x => x.id !== key) });
+    const [engine, id] = splitRequestKey(key);
+    const name = f.path.split('/').pop() || f.path;
+    void (async () => {
+      try {
+        await ok(this.agent.POST('/api/vault/files/{engine}/{id}', { params: { path: { engine, id } }, body: { action } }));
+        this.note(`${action === 'keep' ? 'Kept' : action === 'redact' ? 'Redacting' : 'Deleting'} ${name}`);
+      } catch (e) {
+        if (e instanceof ApiError && e.status === 404 && e.code === 'not-found') { this.note(`${name}: decided already`); return; }
+        this.note(errText(e));
+        this.answeredKeys.delete(key);
+        await this.loadRequests();
+      }
+    })();
   }
 
   enterSecret(key: string, value: string | null) {

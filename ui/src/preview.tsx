@@ -13,7 +13,7 @@ import './styles/preview.css';
    switches, a start state, and buttons that make the fake backend do what an agent or a release would. */
 
 const SURFS: [Surface, string][] = [['pop', 'Pop-out'], ['win', 'Window'], ['phone', 'Phone'], ['alone', 'Vault alone']];
-const DEMOS: [Demo, string][] = [['lease', 'Vault request'], ['enter', 'Agent asks for a secret'], ['release', 'Release out'], ['change', 'Change waits'], ['fail-next', 'Next job fails']];
+const DEMOS: [Demo, string][] = [['lease', 'Vault request'], ['enter', 'Agent asks for a secret'], ['file', 'Secret left in a file'], ['release', 'Release out'], ['change', 'Change waits'], ['fail-next', 'Next job fails']];
 
 function Preview() {
   const q = new URLSearchParams(location.search);

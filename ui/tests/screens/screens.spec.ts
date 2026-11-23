@@ -23,10 +23,13 @@ const SHOTS: [Surf, string, string, string?][] = [
   ['pop', 'warned', 'warned'],
   ['pop', 'change-waits', 'changed'],
   ['pop', 'vault-request', 'lease'],
+  // Files a scrub found still holding a secret: one yellow card per VM, Redact all for several.
+  ['pop', 'vault-files', 'files'],
   ['pop', 'job', 'job'],
   ['pop', 'repair', 'repair'],
   ['alone', 'vault-request', 'lease'],
   ['alone', 'new-secret', 'enter'],
+  ['alone', 'vault-file', 'file'],
   ['alone', 'signed-out', 'signed-out'],
   ['pop', 'signed-out', 'signed-out'],
   ['win', 'signed-out', 'signed-out'],
@@ -53,6 +56,7 @@ const SHOTS: [Surf, string, string, string?][] = [
   ['win', 'sign-in-browser', 'sign-in-browser', 'settings/agents'],
   ['win', 'sign-in-key', 'sign-in-key', 'settings/agents'],
   ['win', 'vault', 'calm', 'vault'],
+  ['win', 'vault-files', 'files', 'vault'],
   ['win', 'devices', 'calm', 'devices'],
   ['win', 'backups', 'calm', 'backups'],
   ['win', 'pair', 'pair-confirm', 'pair'],
@@ -76,6 +80,7 @@ const SHOTS: [Surf, string, string, string?][] = [
   ['win', 'first-run-restart', 'first-run-restart'],
   ['phone', 'home', 'calm'],
   ['phone', 'vault-request', 'enter'],
+  ['phone', 'vault-files', 'files'],
   ['phone', 'projects', 'calm', 'projects'],
   ['phone', 'vault', 'calm', 'vault'],
   ['phone', 'construct', 'update', 'app'],
@@ -304,5 +309,45 @@ test('cards popped alone give way to the next one and close the surface only whe
   await expect(card).not.toHaveAttribute('aria-label', first ?? '');
   expect(await closes()).toBe(0);
   await card.getByRole('button', { name: 'Dismiss' }).click();
+  await expect.poll(closes).toBe(1);
+});
+
+test('files that still hold a secret are answered in the vault card: Delete asks in place, Redact all takes the rest', async ({ page }) => {
+  await open(page, 'win', 'files', 'light', 'vault');
+  const card = page.getByRole('alertdialog', { name: 'Secrets in files on atlas' });
+  const first = card.getByRole('group', { name: '/root/.secrets/forge.json' });
+  await first.getByRole('button', { name: 'Delete' }).click();
+  await first.getByRole('button', { name: 'Cancel' }).click();
+  await expect(first.getByRole('button', { name: 'Keep' })).toBeVisible();
+  await first.getByRole('button', { name: 'Keep' }).click();
+  await expect(page.getByRole('status')).toHaveText('Kept forge.json');
+  await expect(first).toHaveCount(0);
+  // One file left: its own Redact is the coloured one, and there is no Redact all.
+  await expect(card.getByRole('button', { name: 'Redact all' })).toHaveCount(0);
+  await expect(card.getByRole('button', { name: 'Redact', exact: true })).toHaveClass(/pri/);
+  await card.getByRole('button', { name: 'Delete' }).click();
+  await card.getByRole('button', { name: 'Delete' }).click();
+  await expect(page.getByRole('status')).toHaveText('Deleting .env.local');
+  await expect(card).toHaveCount(0);
+
+  await open(page, 'pop', 'files', 'dark');
+  await page.getByRole('button', { name: 'Redact all' }).click();
+  await expect(page.getByRole('alertdialog')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Control panel' })).toBeVisible();
+});
+
+test('the lone vault card of a VM\'s files stays until each file is answered, then closes the surface', async ({ page }) => {
+  await page.addInitScript(() => {
+    const sent: unknown[] = [];
+    (window as unknown as { __sent: unknown[] }).__sent = sent;
+    (window as unknown as { chrome: unknown }).chrome = { webview: { postMessage: (m: unknown) => { sent.push(m); } } };
+  });
+  await open(page, 'alone', 'files', 'dark');
+  const closes = () => page.evaluate(() => (window as unknown as { __sent: { type: string }[] }).__sent.filter(m => m.type === 'close').length);
+  const card = page.getByRole('alertdialog', { name: 'Secrets in files on atlas' });
+  await card.getByRole('group', { name: '/root/.secrets/forge.json' }).getByRole('button', { name: 'Redact' }).click();
+  await expect(card.getByRole('group')).toHaveCount(1);
+  expect(await closes()).toBe(0);
+  await card.getByRole('button', { name: 'Redact', exact: true }).click();
   await expect.poll(closes).toBe(1);
 });

@@ -38,9 +38,13 @@ public sealed record VaultSyncView(long Revision, string? Mode, string? KeyCheck
 public sealed partial class VaultHostService(IVaultStore store, IVmRepository vms, IHypervisorDriver driver,
     IVaultKeyProtector protector, IClock clock, IVaultRecords? records = null, ChangeFeed? changes = null) : IVaultUnlocks
 {
-    /// <summary>Change types of vault requests on the engine's stream (owner's account only): filed, and answered or gone.</summary>
+    /// <summary>
+    /// Change types of vault requests on the engine's stream (owner's account only): filed, and answered or gone. A file
+    /// decision is filed when a scrub finds a file outside the agent logs that still holds a secret.
+    /// </summary>
     public const string ApprovalAdded = "vault.approval.added", ApprovalEnded = "vault.approval.ended",
-        EntryRequestAdded = "vault.entry-request.added", EntryRequestEnded = "vault.entry-request.ended";
+        EntryRequestAdded = "vault.entry-request.added", EntryRequestEnded = "vault.entry-request.ended",
+        FileAdded = "vault.file.added", FileEnded = "vault.file.ended";
 
     private void Notify(string type, string id, string vm, string owner) => changes?.Publish(type, id, vm, owner, ownerOnly: true);
 

@@ -185,6 +185,25 @@ export interface VaultRequest {
   ttlSeconds?: number | null;
 }
 
+/** A file on a VM that still holds secrets after their lease ended, as a scrub found it (agent logs are redacted
+    without asking and never listed). It waits for keep, redact or delete and never expires. */
+export interface VaultFile {
+  /** `engine/id`, as a request's. */
+  id: string;
+  hostId: string;
+  vmId: string;
+  /** The VM and the host as the engine that found the file names them. */
+  vmName: string;
+  hostName: string;
+  path: string;
+  /** The secrets found in it. */
+  secrets: string[];
+  type: 'text' | 'sqlite' | 'binary';
+  /** Bytes, as the scan found it; 0 when unknown. */
+  size: number;
+}
+export type FileAction = 'keep' | 'redact' | 'delete';
+
 export interface Secret { name: string; note: string; usedBy: string[]; last: string; auto: boolean }
 /** A host's vault mode: `available` holds the vault key and serves approved requests; `locked` waits for a device. */
 export interface VaultMode { hostId: string; hostName: string; mode: 'available' | 'locked' | null; problem?: string | null }
@@ -389,6 +408,8 @@ export interface State {
   sync: { when: string; remote: string; rev: string };
   jobs: Job[];
   vaultRequests: VaultRequest[];
+  /** Files on the user's VMs that still hold a secret, oldest first: they ask like a vault request, one card per VM. */
+  vaultFiles: VaultFile[];
   secrets: Secret[];
   leases: Lease[];
   devices: Device[];
@@ -534,6 +555,8 @@ export interface Backend {
   answerLease(requestId: string, allow: boolean, ttlSeconds?: number): void;
   /** `value` null declines the request. */
   enterSecret(requestId: string, value: string | null): void;
+  /** Keep leaves the file as it is; redact replaces the secrets in it, delete removes it, on the VM's next scrub. */
+  answerFile(fileId: string, action: FileAction): void;
   addSecret(name: string, note: string, value: string): void;
   /** A new value for an existing secret. */
   replaceSecret(name: string, value: string): void;

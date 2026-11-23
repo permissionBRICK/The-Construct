@@ -1626,6 +1626,89 @@
         }
       }
     },
+    "/api/vault/files": {
+      "get": {
+        "tags": [
+          "vault"
+        ],
+        "description": "Files on the user's VMs that a scrub found still holding a secret after its lease ended: path, the secrets' names, type and size, never the content. Agent logs are redacted without asking and are not listed. Each file waits for keep, redact or delete and never expires.",
+        "operationId": "ListVaultFiles",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VaultFilesView"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentProblem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/vault/files/{engine}/{id}": {
+      "post": {
+        "tags": [
+          "vault"
+        ],
+        "description": "keep leaves the file as it is; redact replaces the secrets in it and delete removes it, on the VM's next scrub. On a locked engine a redact first unlocks the VM; a VM that is not running keeps the redaction until its next unlock. 404 not-found: no such file, or it was decided already.",
+        "operationId": "DecideVaultFile",
+        "parameters": [
+          {
+            "name": "engine",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FileDecision"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentProblem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/vault/engines/{engine}/mode": {
       "get": {
         "tags": [
@@ -3756,6 +3839,17 @@
           }
         }
       },
+      "FileDecision": {
+        "required": [
+          "action"
+        ],
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string"
+          }
+        }
+      },
       "ForwardView": {
         "required": [
           "id",
@@ -5093,6 +5187,75 @@
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/VaultEntryRequestItem"
+            }
+          },
+          "unreachable": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "VaultFileItem": {
+        "required": [
+          "engine",
+          "engineName",
+          "id",
+          "vm",
+          "path",
+          "names",
+          "type",
+          "size",
+          "createdAt"
+        ],
+        "type": "object",
+        "properties": {
+          "engine": {
+            "type": "string"
+          },
+          "engineName": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "vm": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "names": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "type": {
+            "type": "string"
+          },
+          "size": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "createdAt": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "VaultFilesView": {
+        "required": [
+          "files",
+          "unreachable"
+        ],
+        "type": "object",
+        "properties": {
+          "files": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/VaultFileItem"
             }
           },
           "unreachable": {

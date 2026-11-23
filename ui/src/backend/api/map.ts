@@ -1,7 +1,7 @@
 import type { components as E } from '../generated/engine';
 import type { components as A } from '../generated/agent';
 import { AGENTS, agentSwitches, DEFAULT_AGENTS } from '../../model/settings';
-import type { Agent, Backup, Device, Everything, Forward, Host, HostJob, HostUpdate, HostUser, HostVm, Job, JobKind, Lease, Power, Profile, Repair, RepairMessage, Secret, SettingsPatch, Upgrade, Upstream, VaultEvent, VaultRequest, Vm, VmSettings, WinGuest, WinKey } from '../types';
+import type { Agent, Backup, Device, Everything, Forward, Host, HostJob, HostUpdate, HostUser, HostVm, Job, JobKind, Lease, Power, Profile, Repair, RepairMessage, Secret, SettingsPatch, Upgrade, Upstream, VaultEvent, VaultFile, VaultRequest, Vm, VmSettings, WinGuest, WinKey } from '../types';
 
 /* From what the agent and the engines report to the pieces of `State`. Pure functions, no I/O: each takes
    the responses it needs and leaves out what they do not say. */
@@ -28,6 +28,7 @@ export type SecretView = A['schemas']['SecretView'];
 export type SecretHistoryItem = A['schemas']['SecretHistoryItem'];
 export type ApprovalItem = A['schemas']['VaultApprovalItem'];
 export type EntryRequestItem = A['schemas']['VaultEntryRequestItem'];
+export type VaultFileItem = A['schemas']['VaultFileItem'];
 export type ProfileResponse = E['schemas']['ProfileResponse'];
 export type DesiredResponse = E['schemas']['VmDesiredStateResponse'];
 export type DesiredState = E['schemas']['VmDesiredState'];
@@ -607,6 +608,11 @@ export function toApproval(a: ApprovalItem, vmId: string): VaultRequest {
     id: requestKey(a.engine, a.id), kind: 'lease', secret: a.names.join(', '), vmId, vmName: a.vm, hostName: a.engineName,
     reason: a.reason, span: a.ttlSeconds ? spanText(a.ttlSeconds) : a.uses ? `${a.uses} use${a.uses === 1 ? '' : 's'}` : '', action: a.action, ttlSeconds: a.ttlSeconds ?? null,
   };
+}
+
+export function toVaultFile(f: VaultFileItem, vmId: string): VaultFile {
+  const type = f.type === 'sqlite' || f.type === 'binary' ? f.type : 'text';
+  return { id: requestKey(f.engine, f.id), hostId: f.engine, vmId, vmName: f.vm, hostName: f.engineName, path: f.path, secrets: [...f.names], type, size: Number(f.size) || 0 };
 }
 
 /** 7200 → `2 h`, 900 → `15 min`, 86400 → `24 h`. */

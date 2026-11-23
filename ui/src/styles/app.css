@@ -288,6 +288,14 @@ html[data-surf="alone"] body { background: transparent; }
 .app .sft button:hover { color: var(--fg); background: var(--pn); }
 .app .sft .v { margin-left: auto; align-self: center; padding-right: 8px; color: var(--dim); font: 500 11.5px var(--mono); white-space: nowrap; }
 .app .alone { padding: 12px; }
+/* a file that still holds a secret, in the vault's card: its whole path, then the secrets and the answers */
+.app .vf { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.app .vf + .vf { border-top: 1px solid var(--ln); padding-top: 10px; }
+.app .vfp { overflow-wrap: anywhere; color: var(--fg); }
+.app .vfa { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 6px; }
+.app .vfs { flex: 1 1 110px; min-width: 0; color: var(--dim); overflow-wrap: anywhere; }
+.app .vfs .nw { white-space: nowrap; }
+.app .vfs .tg { margin-left: 8px; vertical-align: 1px; }
 /* the pop-out never scrolls sideways (finding 18); the shell sizes it to its content (finding 7) */
 .app.s-pop { overflow-x: hidden; }
 .app .blk > .confirm { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }

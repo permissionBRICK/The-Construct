@@ -197,6 +197,7 @@ export function sampleState(): State {
     sync: { when: '3 min ago', remote: 'orchard', rev: 'a41c9e2' },
     jobs: [],
     vaultRequests: [],
+    vaultFiles: [],
     secrets: [
       { name: 'forge-token', note: 'Git forge, push access for the release pipeline of webshop and toolkit; rotate it after every handover to another team', usedBy: ['atlas'], last: 'now', auto: false },
       { name: 'staging-db', note: 'Staging database', usedBy: ['harbor'], last: '2 d', auto: false },

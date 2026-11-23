@@ -9,8 +9,8 @@ namespace Construct.Agent.Windows;
 /// <summary>
 /// The tray (11.2): a single click opens the pop-out by the tray, a double click the window, the menu
 /// opens the window, the key vault, start with Windows and quit. While the pop-out is closed and the window
-/// is not in front, a new vault request (an approval or a secret an agent asked for) pops the vault card alone,
-/// and so does a lost sign-in (S36), once per loss while the agent runs.
+/// is not in front, a new vault request (an approval, a secret an agent asked for, or a file a scrub found still
+/// holding a secret) pops the vault card alone, and so does a lost sign-in (S36), once per loss while the agent runs.
 /// </summary>
 internal sealed class TrayShell : ApplicationContext, IAgentShell
 {
@@ -202,6 +202,8 @@ internal sealed class TrayShell : ApplicationContext, IAgentShell
             var ids = new List<string>();
             ids.AddRange((await Task.Run(() => _agent.ApprovalsAsync(CancellationToken.None))).Approvals.Select(a => "a:" + a.Engine + "/" + a.Id));
             ids.AddRange((await Task.Run(() => _agent.EntryRequestsAsync(CancellationToken.None))).Requests.Select(r => "e:" + r.Engine + "/" + r.Id));
+            // A file a scrub found still holding a secret waits until answered: it pops once per agent run.
+            ids.AddRange((await Task.Run(() => _agent.VaultFilesAsync(CancellationToken.None))).Files.Select(f => "f:" + f.Engine + "/" + f.Id));
             var fresh = ids.Where(_seenRequests.Add).ToArray();
             _seenRequests.IntersectWith(ids);
             // A lost sign-in pops once: its id carries the time of the loss, so only a new loss pops again.

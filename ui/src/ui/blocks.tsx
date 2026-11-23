@@ -1,10 +1,11 @@
 import { useState } from 'preact/hooks';
-import type { AgentId, Everything, Job, SignIn, VaultRequest, Vm } from '../backend/types';
+import type { AgentId, Everything, FileAction, Job, SignIn, VaultFile, VaultRequest, Vm } from '../backend/types';
 import { spanChoices, spanText } from '../backend/api/map';
 import { doneWord, failedTitle, jobWord, mainAction, repairWhen, running } from '../model/vm';
 import { shortVersion, versionParts } from '../model/update';
 import { AGENTS } from '../model/settings';
 import { linkParts, lostSignIns } from '../model/signin';
+import { filesByVm } from '../model/vault';
 import { openExternal } from './shell';
 import { Icon } from './icons';
 import { Bar, Btn, Confirm, Field, Pip, Switch, Tag, UpTag, useFollow } from './kit';
@@ -70,9 +71,43 @@ export function EverythingBlock({ e }: { e: Everything }) {
   );
 }
 
+/** Files on one VM that a scrub found still holding secrets after their lease ended, in the vault's yellow card: one
+    line per file with the secrets in it. Redact is the usual answer (with several files, Redact all); Delete asks in
+    place. */
+export function FilesCard({ files, onDone }: { files: VaultFile[]; onDone?: (id: string) => void }) {
+  const { be } = useApp();
+  const answer = (f: VaultFile, action: FileAction) => { be.answerFile(f.id, action); onDone?.(f.id); };
+  const one = files.length === 1;
+  const vm = files[0];
+  return (
+    <div class="blk warn ask" role="alertdialog" aria-label={`Secrets in files on ${vm.vmName}`}>
+      <div class="bh"><Icon n="key" /><b>Secrets in files</b><span>{vm.vmName} · {vm.hostName}</span></div>
+      {files.map(f => (
+        <div key={f.id} class="vf" role="group" aria-label={f.path}>
+          <code class="vfp" title={f.size ? `${f.path} · ${sizeText(f.size)}` : f.path}>{f.path}</code>
+          <div class="vfa">
+            <span class="vfs">{f.secrets.map((n, i) => <span>{i ? ', ' : ''}<span class="nw">{n}</span></span>)}{f.type !== 'text' && <em class="tg">{f.type === 'sqlite' ? 'database' : 'binary'}</em>}</span>
+            <Btn sm onClick={() => answer(f, 'keep')}>Keep</Btn>
+            <Confirm label="Delete" onYes={() => answer(f, 'delete')} />
+            <Btn sm kind={one ? 'pri' : ''} onClick={() => answer(f, 'redact')}>Redact</Btn>
+          </div>
+        </div>
+      ))}
+      {!one && <Btn kind="pri" onClick={() => files.forEach(f => answer(f, 'redact'))}>Redact all</Btn>}
+    </div>
+  );
+}
+
+const sizeText = (b: number) => (b < 1024 ? `${b} B` : b < 1048576 ? `${(b / 1024).toFixed(1)} KB` : `${(b / 1048576).toFixed(1)} MB`);
+
 export function VaultCards() {
   const { s } = useApp();
-  return <>{s.vaultRequests.map(r => <VaultCard key={r.id} r={r} />)}</>;
+  return (
+    <>
+      {s.vaultRequests.map(r => <VaultCard key={r.id} r={r} />)}
+      {filesByVm(s.vaultFiles).map(g => <FilesCard key={g[0].hostId + '/' + g[0].vmName} files={g} />)}
+    </>
+  );
 }
 
 /** A lost sign-in (S36), like the vault's card: the agent was signed in and the VM reports it signed out. Sign in
