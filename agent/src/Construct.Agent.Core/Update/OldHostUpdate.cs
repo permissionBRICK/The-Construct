@@ -70,10 +70,19 @@ public sealed class OldHostUpdate(IDeviceEngines engines, Func<string, string, C
     /// Starts the update (staged with auto-apply, or the staged one applied) and waits until the host answers as the new
     /// stack (<c>GET /engine</c>) and is healthy with the offered commit; null then, otherwise what went wrong. The new
     /// stack answers already while it finishes the update (maintenance) and may still roll back then: that is a failure.
-    /// The host restarts in between: no answer is waited out.
+    /// The host restarts in between: no answer is waited out. <paramref name="progress"/> sees how far it is (a percentage that
+    /// only grows) and a word: updating, restarting, finishing.
     /// </summary>
-    public async Task<string?> RunAsync(string engine, OldHostOffer offer, CancellationToken ct)
+    public async Task<string?> RunAsync(string engine, OldHostOffer offer, CancellationToken ct, Action<int, string>? progress = null)
     {
+        var shown = 0;
+        void Report(int percent, string word)
+        {
+            shown = Math.Max(shown, Math.Clamp(percent, 0, 99));
+            progress?.Invoke(shown, word);
+        }
+
+        Report(0, "Updating");
         var key = "construct-agent-" + Guid.NewGuid().ToString("N");
         string updateId;
         try
@@ -96,7 +105,8 @@ public sealed class OldHostUpdate(IDeviceEngines engines, Func<string, string, C
             return $"Update not started ({failure.Status})";
         }
 
-        var until = time.GetUtcNow() + Limit;
+        var started = time.GetUtcNow();
+        var until = started + Limit;
         while (time.GetUtcNow() < until)
         {
             await Task.Delay(PollInterval, time, ct).ConfigureAwait(false);
@@ -104,14 +114,19 @@ public sealed class OldHostUpdate(IDeviceEngines engines, Func<string, string, C
             {
                 await engines.GetAsync(engine, "engine", ct).ConfigureAwait(false);
                 if (await HealthyAsync(engine, offer.Commit, ct).ConfigureAwait(false)) return null;
+                Report(85, "Finishing");
                 continue; // still finishing the update
             }
             catch (AgentFailure failure) when (failure.Status == 404 && failure.Code != "no-engine")
             {
-                // Still the old stack, or again after a rollback: its own status says how the update went.
+                // Still the old stack, or again after a rollback: its own status says how the update went. The bar creeps
+                // towards half while it downloads and stages (a few minutes).
+                var minutes = (time.GetUtcNow() - started).TotalMinutes;
+                Report(5 + (int)(45 * minutes / (minutes + 3)), "Updating");
             }
             catch (AgentFailure)
             {
+                Report(60, "Restarting");
                 continue; // restarting
             }
 
