@@ -133,6 +133,7 @@ remove_old_python_link() {
   if python_link_ours; then
     rm -f "${PYTHON_DEFAULT_LINK}"
     ok "Removed Construct's old link ${PYTHON_DEFAULT_LINK}; python3 is the distro's again"
+    note "A venv made through it (home = ${PYTHON_DEFAULT_LINK%/*} in pyvenv.cfg) no longer starts; make it again"
   elif [[ -e "${PYTHON_DEFAULT_LINK}" || -L "${PYTHON_DEFAULT_LINK}" ]]; then
     warn "${PYTHON_DEFAULT_LINK} was not made by Construct; leaving it, so python3 in shells is not the distro's"
   fi

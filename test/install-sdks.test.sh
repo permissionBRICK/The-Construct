@@ -182,6 +182,7 @@ for request in '["3.14"]' '["3.12"]'; do
   run LOCKED_UPDATES=0
   ok "Construct's old python3 link is removed (request ${request})" gone
   ok "  and the run says so" grep -q "Removed Construct's old link" "${tmp}/out"
+  ok "  naming venvs made through it" grep -q "home = ${tmp}/local-bin in pyvenv.cfg" "${tmp}/out"
   ok "  without failing" rc_is 0
 done
 

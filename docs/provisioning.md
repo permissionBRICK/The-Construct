@@ -455,7 +455,8 @@ the distro's `/usr/bin/python3` for every shell; a requested version is `python3
 the requesting profile's `provisionCommands` get the newest version that profile requested as
 `python3` and `python`. A request names a minor version (`"3.14"`, `"3"` is the distro's); patch
 versions are not pinned. The `/usr/local/bin/python3` link earlier versions made is removed on
-the next provision.
+the next provision; a venv made through it (`home = /usr/local/bin` in its `pyvenv.cfg`) no
+longer starts and has to be made again.
 
 ## AI tool setup (`bin/ui-setup.sh`)
 
