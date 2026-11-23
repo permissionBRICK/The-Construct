@@ -16,7 +16,7 @@ namespace Constructd.Core.Logic;
 public static class VaultCrypto
 {
     public const int KeyBytes = 32, NonceBytes = 12, TagBytes = 16;
-    public const string CheckText = "construct-vault-check", CheckAad = "check";
+    public const string CheckText = VaultSeal.CheckText, CheckAad = VaultSeal.CheckAad;
 
     public static string EntryAad(string name, long updatedAt) => VaultSeal.EntryAad(name, updatedAt);
 
@@ -25,7 +25,7 @@ public static class VaultCrypto
     /// <summary>Throws <see cref="CryptographicException"/> for a wrong key, a tampered value or a wrong AAD.</summary>
     public static byte[] Open(ReadOnlySpan<byte> key, string sealedValue, string aad) => VaultSeal.Open(key, sealedValue, aad);
 
-    public static string KeyCheck(ReadOnlySpan<byte> key) => Seal(key, Encoding.UTF8.GetBytes(CheckText), CheckAad);
+    public static string KeyCheck(ReadOnlySpan<byte> key) => VaultSeal.KeyCheck(key);
 
     /// <summary>True when <paramref name="keyCheck"/> was sealed with <paramref name="key"/>.</summary>
     public static bool Verify(ReadOnlySpan<byte> key, string keyCheck)

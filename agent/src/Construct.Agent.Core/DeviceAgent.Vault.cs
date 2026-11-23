@@ -244,7 +244,8 @@ public sealed partial class DeviceAgent
 
     /// <summary>
     /// Allows or denies one approval. On an engine in <c>locked</c> mode an allow first unlocks the VM that asked, so
-    /// the request it allows can be served: in <c>locked</c> mode a VM waits for a device (8.2).
+    /// the request it allows can be served: in <c>locked</c> mode a VM waits for a device (8.2). That holds for a vault in
+    /// the engine's table too (an engine outside the account's store, E12), which the Companion unlocked the same way.
     /// </summary>
     /// <param name="ttlSeconds">With an allow of a lease request: the duration the user chose (1 minute to 24 hours); null keeps the VM's.</param>
     public async Task DecideApprovalAsync(string engineId, string id, bool allow, CancellationToken ct, int? ttlSeconds = null)
@@ -256,7 +257,7 @@ public sealed partial class DeviceAgent
         {
             var pending = (await ApprovalsAsync(ct).ConfigureAwait(false)).Approvals.FirstOrDefault(a => a.Engine == engineId && a.Id == id)
                 ?? throw new AgentFailure(404, "not-found", "No such request.");
-            if (!mode.UnlockedVms.Contains(pending.Vm, StringComparer.OrdinalIgnoreCase)) await UnlockVmAsync(engineId, pending.Vm, ct).ConfigureAwait(false);
+            if (!mode.UnlockedVms.Contains(pending.Vm, StringComparer.OrdinalIgnoreCase)) await UnlockAsync(entry, pending.Vm, mode.Records, ct).ConfigureAwait(false);
         }
 
         await EngineSendAsync(entry, HttpMethod.Post, $"api/v1/vault/approvals/{Uri.EscapeDataString(id)}",
@@ -300,7 +301,7 @@ public sealed partial class DeviceAgent
                 ?? throw new AgentFailure(404, "not-found", "No such file.");
             if (!mode.UnlockedVms.Contains(vm, StringComparer.OrdinalIgnoreCase))
             {
-                try { await UnlockVmAsync(engineId, vm, ct).ConfigureAwait(false); }
+                try { await UnlockAsync(entry, vm, mode.Records, ct).ConfigureAwait(false); }
                 catch (AgentFailure e) when (e.Code == "vm-not-running") { }
             }
         }
@@ -310,13 +311,17 @@ public sealed partial class DeviceAgent
     }
 
     /// <summary>
-    /// The engine's vault mode when it keeps this account's vault as records and is <c>locked</c>: a VM there holds
-    /// <c>K</c> only while a device has unlocked it. Null otherwise, also for a host of the old release, which has no
-    /// <c>/vault/mode</c> and no records.
+    /// The engine's vault mode for this account when it is <c>locked</c>: a VM there holds <c>K</c> only while a device has
+    /// unlocked it, whether the engine keeps the vault as records or in its table. Null otherwise, also for a host of the
+    /// old release, which has no <c>/vault/mode</c>.
     /// </summary>
-    private async Task<VaultModeView?> LockedModeAsync(string engineId, CancellationToken ct)
+    private async Task<VaultModeView?> LockedModeAsync(string engineId, CancellationToken ct) =>
+        await ModeOrNullAsync(engineId, ct).ConfigureAwait(false) is { Mode: "locked" } mode ? mode : null;
+
+    // The engine's vault mode; null for a host of the old release, which has no /vault/mode (and keeps the vault in its table).
+    private async Task<VaultModeView?> ModeOrNullAsync(string engineId, CancellationToken ct)
     {
-        try { return await VaultModeAsync(engineId, ct).ConfigureAwait(false) is { Records: true, Mode: "locked" } mode ? mode : null; }
+        try { return await VaultModeAsync(engineId, ct).ConfigureAwait(false); }
         catch (AgentFailure e) when (e.Status == 404) { return null; }
     }
 
@@ -386,22 +391,48 @@ public sealed partial class DeviceAgent
             body?["records"]?.GetValue<bool>() ?? false, (body?["unlockedVms"] as JsonArray ?? []).Select(v => v?.GetValue<string>() ?? "").ToArray());
     }
 
-    /// <summary>Switches an engine's vault mode: <c>available</c> grants it <c>K</c>, <c>locked</c> withdraws it (8.2).</summary>
+    /// <summary>
+    /// Switches an engine's vault mode: <c>available</c> gives it <c>K</c>, <c>locked</c> withdraws it (8.2). A vault kept as
+    /// records gets <c>K</c> sealed to the engine's host key. A vault in the engine's table (an engine outside the account's
+    /// store, E12, or a host of the old release) gets its settings as the Companion set them: the key itself for
+    /// <c>available</c>, and the key's check, which the table keeps from its first setting on.
+    /// </summary>
     public async Task<VaultModeView> SetVaultModeAsync(string engineId, string mode, CancellationToken ct)
     {
         if (mode is not ("available" or "locked")) throw new AgentFailure(400, "invalid-mode", "available or locked.");
         var entry = Find(engineId) ?? throw NoEngine();
-        object body = mode == "available" ? new { mode, grant = await KeyGrantAsync(entry, ct).ConfigureAwait(false) } : new { mode };
-        await EngineSendAsync(entry, HttpMethod.Put, "api/v1/vault/mode", body, ct).ConfigureAwait(false);
-        return await VaultModeAsync(engineId, ct).ConfigureAwait(false);
+        if (await ModeOrNullAsync(engineId, ct).ConfigureAwait(false) is { Records: true })
+        {
+            object body = mode == "available" ? new { mode, grant = await KeyGrantAsync(entry, ct).ConfigureAwait(false) } : new { mode };
+            await EngineSendAsync(entry, HttpMethod.Put, "api/v1/vault/mode", body, ct).ConfigureAwait(false);
+        }
+        else
+        {
+            var keys = await OpenKeysAsync(ct).ConfigureAwait(false);
+            await EngineSendAsync(entry, HttpMethod.Put, "api/v1/vault/settings",
+                new { mode, key = mode == "available" ? Convert.ToBase64String(keys.Vault) : null, keyCheck = VaultSeal.KeyCheck(keys.Vault) }, ct).ConfigureAwait(false);
+        }
+
+        return await ModeOrNullAsync(engineId, ct).ConfigureAwait(false) ?? new VaultModeView(engineId, mode, mode == "available", false, []);
     }
 
-    /// <summary>Hands a running VM on a <c>locked</c> engine <c>K</c>, sealed to that engine's host key, for as long as it runs.</summary>
+    /// <summary>Hands a running VM on a <c>locked</c> engine <c>K</c> for as long as it runs (<see cref="UnlockAsync"/>).</summary>
     public async Task UnlockVmAsync(string engineId, string vm, CancellationToken ct)
     {
         var entry = Find(engineId) ?? throw NoEngine();
-        await EngineSendAsync(entry, HttpMethod.Post, $"api/v1/vms/{Uri.EscapeDataString(vm)}/vault/unlock",
-            new { grant = await KeyGrantAsync(entry, ct).ConfigureAwait(false) }, ct).ConfigureAwait(false);
+        await UnlockAsync(entry, vm, await ModeOrNullAsync(engineId, ct).ConfigureAwait(false) is { Records: true }, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Unlocks a VM: where the engine keeps the vault as records, with <c>K</c> sealed to its host key; where it keeps it in its
+    /// table, with the key itself, as the Companion unlocked each VM it started or connected to.
+    /// </summary>
+    private async Task UnlockAsync(EngineEntry entry, string vm, bool records, CancellationToken ct)
+    {
+        object body = records
+            ? new { grant = await KeyGrantAsync(entry, ct).ConfigureAwait(false) }
+            : new { key = Convert.ToBase64String((await OpenKeysAsync(ct).ConfigureAwait(false)).Vault) };
+        await EngineSendAsync(entry, HttpMethod.Post, $"api/v1/vms/{Uri.EscapeDataString(vm)}/vault/unlock", body, ct).ConfigureAwait(false);
     }
 
     private async Task<object> KeyGrantAsync(EngineEntry entry, CancellationToken ct)

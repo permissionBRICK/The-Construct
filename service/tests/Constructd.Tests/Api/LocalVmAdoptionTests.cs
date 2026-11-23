@@ -168,6 +168,50 @@ public sealed class LocalVmAdoptionTests : IDisposable
         Assert.Equal(options.Iso.SeedUser, (await targets.ResolveAsync(vm, CancellationToken.None))!.User);
     }
 
+    [Theory]
+    [InlineData(VmState.Off)]
+    [InlineData(VmState.Saved)]
+    [InlineData(VmState.Paused)]
+    public async Task A_stopped_vm_is_started_waited_for_and_then_adopted_and_stays_running(VmState stopped)
+    {
+        // Field run of Move over: the local VM was off, and the adoption refused it ("must be running"); nothing started it.
+        var guest = new FakeGuest();
+        await using var services = Services(guest);
+        await services.GetRequiredService<IUserStore>().CreateAsync(new User("alice", Role.Admin, 10, DateTimeOffset.UtcNow), CancellationToken.None);
+        var driver = services.GetRequiredService<FakeHypervisorDriver>();
+        driver.SetState("agent-vm", stopped);
+
+        var adopted = await AdoptAsync(services);
+
+        Assert.True(adopted.Exit == 0, adopted.Error);
+        // Started, waited for on its SSH port, read again; only then the guest is reached (identity, switch-over).
+        Assert.Equal(["facts:agent-vm", "start:agent-vm", "wait:agent-vm", "facts:agent-vm"], driver.Calls.Where(c => !c.StartsWith("start-with-host:", StringComparison.Ordinal)));
+        Assert.Equal(VmState.Running, driver.StateOf("agent-vm"));
+        var vm = (await services.GetRequiredService<IVmRepository>().GetAsync("agent-vm", CancellationToken.None))!;
+        Assert.Equal(VmState.Running, vm.State);
+        Assert.Equal(2, guest.Calls.Count);
+        Assert.Contains("Starting the VM", adopted.Error + adopted.Output);
+    }
+
+    [Fact]
+    public async Task A_started_vm_that_does_not_answer_keeps_running_and_nothing_is_registered()
+    {
+        var guest = new FakeGuest();
+        await using var services = Services(guest);
+        await services.GetRequiredService<IUserStore>().CreateAsync(new User("alice", Role.Admin, 10, DateTimeOffset.UtcNow), CancellationToken.None);
+        var driver = services.GetRequiredService<FakeHypervisorDriver>();
+        driver.SetState("agent-vm", VmState.Off);
+        driver.Reachable = false;
+
+        var adopted = await AdoptAsync(services);
+
+        Assert.Equal(AdminExitCode.Failed, adopted.Exit);
+        Assert.Contains("did not answer over SSH", adopted.Error);
+        Assert.Equal(VmState.Running, driver.StateOf("agent-vm"));
+        Assert.Empty(guest.Calls);
+        Assert.Empty(await services.GetRequiredService<IVmRepository>().ListAsync(null, CancellationToken.None));
+    }
+
     [Fact]
     public async Task A_guest_that_is_not_this_vm_is_left_alone_and_gets_no_token()
     {
@@ -199,7 +243,7 @@ public sealed class LocalVmAdoptionTests : IDisposable
     }
 
     [Theory]
-    [InlineData("off")]
+    [InlineData("changing")]
     [InlineData("missing")]
     [InlineData("user")]
     [InlineData("other-vm")]
@@ -210,7 +254,7 @@ public sealed class LocalVmAdoptionTests : IDisposable
         var users = services.GetRequiredService<IUserStore>();
         await users.CreateAsync(new User("alice", scenario == "user" ? Role.User : Role.Admin, 10, DateTimeOffset.UtcNow), CancellationToken.None);
         var driver = services.GetRequiredService<FakeHypervisorDriver>();
-        if (scenario == "off") driver.SetState("agent-vm", VmState.Off);
+        if (scenario == "changing") driver.SetState("agent-vm", VmState.Unknown);
         if (scenario == "missing") driver.Facts.Clear();
         if (scenario == "other-vm")
             await services.GetRequiredService<IVmRepository>().AddAsync(new Vm("agent-vm", "alice", 2, 4, 50, DateTimeOffset.UtcNow, VmState.Running, null, null,

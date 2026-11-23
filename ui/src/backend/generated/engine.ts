@@ -799,6 +799,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/vms/{name}/old-client-key": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put: operations["HandOverOldClientKey"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/host/lan-access": {
         parameters: {
             query?: never;
@@ -2227,6 +2243,22 @@ export interface paths {
         };
         get?: never;
         put: operations["PutEngineGrants"];
+        post?: never;
+        delete: operations["WithdrawEngineGrants"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/engine/participation": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["GetEngineParticipation"];
+        put?: never;
         post?: never;
         delete?: never;
         options?: never;
@@ -4601,6 +4633,9 @@ export interface components {
             engineId: string;
             hostPublicKey: string;
         };
+        EngineParticipationResponse: {
+            takesPart: boolean;
+        };
         EngineRegistration: {
             engineId: string;
             hostPublicKey: string;
@@ -5141,6 +5176,14 @@ export interface components {
             settings: null | components["schemas"]["JsonObject"];
             instanceState: null | components["schemas"]["JsonObject"];
             sshPrivateKey: null | string;
+        };
+        LocalAdoptionEndpointsOldClientKeyRequest: {
+            sshPrivateKey: null | string;
+            settings: null | components["schemas"]["JsonObject"];
+            instanceState: null | components["schemas"]["JsonObject"];
+        };
+        LocalAdoptionEndpointsOldClientKeyResponse: {
+            status: string;
         };
         /** @enum {string} */
         MaintenanceState: "open" | "draining" | "maintenance";
@@ -8830,6 +8873,41 @@ export interface operations {
             };
         };
     };
+    HandOverOldClientKey: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": null | components["schemas"]["LocalAdoptionEndpointsOldClientKeyRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LocalAdoptionEndpointsOldClientKeyResponse"];
+                };
+            };
+            /** @description An error, as a Problem document. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
     GetLanAccess: {
         parameters: {
             query?: never;
@@ -11149,6 +11227,62 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description An error, as a Problem document. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    WithdrawEngineGrants: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description An error, as a Problem document. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    GetEngineParticipation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EngineParticipationResponse"];
+                };
             };
             /** @description An error, as a Problem document. */
             default: {

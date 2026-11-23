@@ -91,6 +91,9 @@ public sealed class ProvisionJobTests
         await using var h = await ProvisionHarness.StartAsync();
         var engine = h.App.Service<Constructd.Sync.Participation.EngineKeyStore>();
         using var keys = Construct.Keys.AccountKeys.Create();
+        // The account's store is this engine's: its first device registered here.
+        using var device = Construct.Keys.ParticipantKey.Generate();
+        Assert.NotNull(h.App.Service<Constructd.Store.Identity.StoreDirectory>().EnrollFirst("alice", "laptop", device.PublicKey, null));
         foreach (var grant in Construct.Keys.EngineGrants.For(keys, engine.HostKey.PublicKey, engine.EngineId, "alice", "locked")) engine.PutGrant("alice", grant);
 
         var job = await h.RunAsync("click-keys");

@@ -236,7 +236,11 @@ public sealed partial class DeviceAgent : IDisposable
         Changed();
     }
 
-    /// <summary>Grants the engine its keys (8.7: <c>D</c>, and <c>K</c> when <paramref name="vaultMode"/> is <c>available</c>) and enrols this device there.</summary>
+    /// <summary>
+    /// Grants the engine its keys (8.7: <c>D</c>, and <c>K</c> when <paramref name="vaultMode"/> is <c>available</c>) and enrols
+    /// this device there. An engine outside the account's store gets no keys (E12, <see cref="TakesPart"/>): it keeps the
+    /// user's sign-in and its own vault, whose mode stays as it is.
+    /// </summary>
     public async Task<EngineView> ConnectEngineAsync(string id, string? vaultMode, CancellationToken ct)
     {
         EngineEntry entry;
@@ -258,8 +262,9 @@ public sealed partial class DeviceAgent : IDisposable
 
     /// <summary>
     /// Learns the engine's identity, writes its <c>engine</c> record, grants keys when asked (or when
-    /// this device has no token there yet) and enrols. A failure to enrol leaves the engine usable with
-    /// the user's sign-in and is reported by <see cref="EngineView.Enrolled"/>.
+    /// this device has no token there yet) to an engine that takes part in the account's store, and enrols.
+    /// A failure to enrol leaves the engine usable with the user's sign-in and is reported by
+    /// <see cref="EngineView.Enrolled"/>.
     /// </summary>
     private async Task ConnectLockedAsync(EngineEntry entry, string? vaultMode, CancellationToken ct)
     {
@@ -276,7 +281,13 @@ public sealed partial class DeviceAgent : IDisposable
         }
 
         await WriteEngineRecordAsync(entry, ct).ConfigureAwait(false);
-        if (vaultMode is not null || entry.DeviceToken is null)
+        if (!TakesPart(entry) && !await EngineTakesPartAsync(entry, ct).ConfigureAwait(false))
+        {
+            // E12: a grant here would make the engine serve the account's vault from its own empty store and start a
+            // second account store; it keeps the user's sign-in and its table instead. What an earlier version granted goes.
+            await WithdrawGrantsAsync(entry, ct).ConfigureAwait(false);
+        }
+        else if (vaultMode is not null || entry.DeviceToken is null)
         {
             var keys = await OpenKeysAsync(ct).ConfigureAwait(false);
             var grants = EngineGrants.For(keys, ParticipantPublicKey.Parse(entry.HostPublicKey!), entry.EngineId!, _state.Account!, vaultMode ?? "locked");
@@ -288,6 +299,73 @@ public sealed partial class DeviceAgent : IDisposable
 
         if (entry.DeviceToken is null) await EnrollLockedAsync(entry, ct).ConfigureAwait(false);
         else await RegisterSshKeyLockedAsync(entry, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Whether an engine takes part in the account's store (8.7, E12) and is granted <c>D</c> and <c>K</c>: the engine that
+    /// holds the store, by identity (another address of it counts), or one that enrolled this device, which it can only do
+    /// reading the account's device records. Any other engine, such as a shared host while the store is this user's PC,
+    /// keeps the user's sign-in and keeps the vault in its table, as a host of the old release does.
+    /// </summary>
+    private bool TakesPart(EngineEntry entry)
+    {
+        if (entry.Id == _state.StoreEngine || entry.DeviceToken is not null) return true;
+        var store = _state.StoreEngine is { } id ? Find(id) : null;
+        return store?.EngineId is { } storeId && string.Equals(entry.EngineId, storeId, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Whether the engine says it takes part in the account's store (<c>GET /engine/participation</c>): one that syncs with
+    /// the store it is configured for needs <c>D</c> before it can enrol this device. An engine without the route (the
+    /// release before it) or one not reached counts as not taking part, so it gets no keys; the next connect asks again.
+    /// </summary>
+    private async Task<bool> EngineTakesPartAsync(EngineEntry entry, CancellationToken ct)
+    {
+        try
+        {
+            return (await EngineApi(entry).GetEngineParticipationAsync(ct).ConfigureAwait(false)).TakesPart;
+        }
+        catch (Exception ex) when (ex is ApiException or HttpRequestException or TaskCanceledException && !ct.IsCancellationRequested)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Withdraws the keys an earlier version of this agent granted engines outside the account's store (E12): once per
+    /// engine of the new release that does not take part, until that engine has answered. Run at start; a failure (an
+    /// engine not reached, one without the route) is that engine's alone and is tried again at the next start or connect.
+    /// </summary>
+    public async Task WithdrawStrayGrantsAsync(CancellationToken ct)
+    {
+        if (!_state.Registered) return;
+        EngineEntry[] engines;
+        lock (_state) engines = _state.Engines.Where(e => e.EngineId is not null && !e.GrantsWithdrawn && !TakesPart(e)).ToArray();
+        await Task.WhenAll(engines.Select(e => WithdrawGrantsAsync(e, ct))).ConfigureAwait(false);
+    }
+
+    // DELETE /engine/grants at one engine: the engine drops D and K of this account and its replica.
+    private async Task WithdrawGrantsAsync(EngineEntry entry, CancellationToken ct)
+    {
+        if (entry.GrantsWithdrawn || entry.EngineId is null) return;
+        try
+        {
+            await EngineApi(entry).WithdrawEngineGrantsAsync(ct).ConfigureAwait(false);
+        }
+        catch (ApiException ex) when (ex.StatusCode == 409)
+        {
+            // The engine takes part in the account's store after all (another address of it, or a store it names): its keys stay.
+        }
+        catch (Exception ex) when (ex is ApiException or HttpRequestException or TaskCanceledException && !ct.IsCancellationRequested)
+        {
+            return;
+        }
+
+        lock (_state)
+        {
+            entry.GrantsWithdrawn = true;
+            Save();
+        }
     }
 
     /// <summary>

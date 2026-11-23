@@ -3318,6 +3318,62 @@
         }
       }
     },
+    "/api/v1/vms/{name}/old-client-key": {
+      "put": {
+        "tags": [
+          "LocalAdoptionEndpoints"
+        ],
+        "operationId": "HandOverOldClientKey",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/LocalAdoptionEndpointsOldClientKeyRequest"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LocalAdoptionEndpointsOldClientKeyResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error, as a Problem document.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/host/lan-access": {
       "get": {
         "tags": [
@@ -6386,6 +6442,57 @@
         "responses": {
           "204": {
             "description": "No Content"
+          },
+          "default": {
+            "description": "An error, as a Problem document.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "EngineParticipationEndpoints"
+        ],
+        "operationId": "WithdrawEngineGrants",
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "description": "An error, as a Problem document.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/engine/participation": {
+      "get": {
+        "tags": [
+          "Constructd.Api"
+        ],
+        "operationId": "GetEngineParticipation",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EngineParticipationResponse"
+                }
+              }
+            }
           },
           "default": {
             "description": "An error, as a Problem document.",
@@ -10457,6 +10564,17 @@
           }
         }
       },
+      "EngineParticipationResponse": {
+        "required": [
+          "takesPart"
+        ],
+        "type": "object",
+        "properties": {
+          "takesPart": {
+            "type": "boolean"
+          }
+        }
+      },
       "EngineRegistration": {
         "required": [
           "engineId",
@@ -12846,6 +12964,53 @@
               "null",
               "string"
             ]
+          }
+        }
+      },
+      "LocalAdoptionEndpointsOldClientKeyRequest": {
+        "required": [
+          "sshPrivateKey",
+          "settings",
+          "instanceState"
+        ],
+        "type": "object",
+        "properties": {
+          "sshPrivateKey": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "settings": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/JsonObject"
+              }
+            ]
+          },
+          "instanceState": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/JsonObject"
+              }
+            ]
+          }
+        }
+      },
+      "LocalAdoptionEndpointsOldClientKeyResponse": {
+        "required": [
+          "status"
+        ],
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string"
           }
         }
       },

@@ -1,4 +1,5 @@
 using System.Security.Cryptography;
+using Construct.Keys;
 using Constructd.Api.Auth;
 using Constructd.Api.Composition;
 using Constructd.Api.Contracts;
@@ -13,7 +14,8 @@ namespace Constructd.Api.Endpoints;
 
 /// <summary>
 /// This engine as a participant (docs/plans/construct-platform-design.md 8.1, 8.4, 8.7): its host
-/// key, device enrolment and revocation, the keys devices grant it, and records read through it.
+/// key, device enrolment and revocation, the keys devices grant it (and their withdrawal where they do not belong),
+/// and records read through it.
 /// </summary>
 public static class EngineParticipationEndpoints
 {
@@ -43,6 +45,13 @@ public static class EngineParticipationEndpoints
 
         api.MapPut("/engine/grants", PutGrants)
             .RequireAuthorization(Policies.User).Audited("engine.grants").WithName("PutEngineGrants").Produces(StatusCodes.Status204NoContent);
+
+        api.MapDelete("/engine/grants", WithdrawGrants)
+            .RequireAuthorization(Policies.User).Audited("engine.grants.withdraw").WithName("WithdrawEngineGrants").Produces(StatusCodes.Status204NoContent);
+
+        api.MapGet("/engine/participation", (HttpContext http, EngineStores stores) =>
+                TypedResults.Ok(new EngineParticipationResponse(stores.TakesPart(http.User.NameOrEmpty()))))
+            .RequireAuthorization(Policies.User).WithName("GetEngineParticipation").Produces<EngineParticipationResponse>();
 
         api.MapGet("/sync/records/{id}", ReadRecordAsync)
             .RequireAuthorization(Policies.User).WithName("ReadSyncRecord").Produces<SyncRecordResponse>();
@@ -141,9 +150,12 @@ public static class EngineParticipationEndpoints
         return TypedResults.NoContent();
     }
 
-    private static IResult PutGrants([FromBody] EngineGrantsRequest request, HttpContext http, EngineKeyStore keys)
+    private static IResult PutGrants([FromBody] EngineGrantsRequest request, HttpContext http, EngineKeyStore keys, EngineStores stores)
     {
         if (request.Grants is not { Count: > 0 }) return Refused(400, "invalid-grant", "At least one grant.");
+        // E12: the keys go only to an engine that takes part in the account's store; anywhere else the account keeps the old routes.
+        if (!stores.TakesPart(http.User.NameOrEmpty()))
+            return Refused(409, "not-participating", "This engine does not take part in the account's store; it keeps the account's sign-in and its own vault.");
         try
         {
             foreach (var grant in request.Grants) keys.PutGrant(http.User.NameOrEmpty(), grant);
@@ -157,6 +169,26 @@ public static class EngineParticipationEndpoints
             return Refused(400, "invalid-grant", "A grant does not open under this engine's host key.");
         }
 
+        return TypedResults.NoContent();
+    }
+
+    /// <summary>
+    /// Withdraws the caller's grants from an engine that does not take part in the account's store (E12): <c>D</c> and
+    /// <c>K</c> of every epoch and the replica profile sync kept against this engine's own store. The account's vault is
+    /// the table again, as on a host of the old release. Records written to this engine's store for the account stay:
+    /// without <c>D</c> nothing here opens them, and a secret a guest added while the keys were here has no other copy.
+    /// Refused on an engine that takes part, so its keys stay; idempotent.
+    /// </summary>
+    private static IResult WithdrawGrants(HttpContext http, EngineKeyStore keys, EngineStores stores, Constructd.Api.Profiles.ProfileSync sync)
+    {
+        var account = http.User.NameOrEmpty();
+        if (stores.TakesPart(account)) return Refused(409, "account-store", "This engine takes part in the account's store; its keys stay.");
+        var granted = keys.GrantingAccounts(EngineGrants.Records).Contains(account, StringComparer.Ordinal)
+            || keys.GrantingAccounts(EngineGrants.Vault).Contains(account, StringComparer.Ordinal);
+        keys.DeleteGrant(account, EngineGrants.Records);
+        keys.DeleteGrant(account, EngineGrants.Vault);
+        sync.Drop(account);
+        http.SetAuditDetail($"granted={(granted ? "yes" : "no")}");
         return TypedResults.NoContent();
     }
 

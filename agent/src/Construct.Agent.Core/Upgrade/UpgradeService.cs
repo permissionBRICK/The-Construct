@@ -64,6 +64,7 @@ public sealed class UpgradeService
         _engines = engines;
         _setup = setup;
         Bridge = new BridgeFile(Path.Combine(options.DataDirectory, "bridge.json"));
+        ReopenStaleConversion();
         // The first-device setup of an upgrade takes the old vault key as K (8.2, 13.1).
         agent.SetupVaultKey = SetupVaultKey;
     }
@@ -85,6 +86,9 @@ public sealed class UpgradeService
 
     /// <summary>How an old host's update is followed; tests make it quick.</summary>
     public TimeSpan OldHostPoll { get; set; } = TimeSpan.FromSeconds(5);
+
+    /// <summary>How often the old client's key goes again to a VM on a moved host that was started and boots; tests make it quick.</summary>
+    public TimeSpan StartedVmPoll { get; set; } = TimeSpan.FromSeconds(10);
 
     private OldHostUpdate OldHostUpdate(IDeviceEngines engines) =>
         new(engines, ShipsAgent ?? ((_, _, _) => Task.FromResult(false)), _options.Time) { PollInterval = OldHostPoll };
@@ -114,10 +118,22 @@ public sealed class UpgradeService
         return legacy.ReadVault().Key;
     }
 
+    /// <summary>
+    /// A converter before this one could finish the move as converted with "host-vms:&lt;host&gt;" marked done right after
+    /// asking a moved host to reprovision, which that host could not do. Such a move is open again (converting), so the
+    /// dialog offers Move over once more and the converter redoes the host's row; it finishes it as converted itself.
+    /// </summary>
+    private void ReopenStaleConversion()
+    {
+        if (Bridge.Read() is { Stage: BridgeState.Converted } bridge && bridge.Done.Any(d => d.StartsWith("host-vms:", StringComparison.Ordinal)))
+            Bridge.Update(b => b with { Stage = "converting" });
+    }
+
     // ---- the view ----
 
     public UpgradeView View()
     {
+        ReopenStaleConversion();
         var bridge = Bridge.Read();
         LegacyState? legacy;
         string? error;
@@ -407,7 +423,7 @@ public sealed class UpgradeService
             _agent.Events.Publish("upgrade", null, JsonSerializer.SerializeToNode(item, Http.AgentJson.Options));
         })
         {
-            BeforeItem = BeforeItem, OldHosts = OldHostUpdate(_engines),
+            BeforeItem = BeforeItem, OldHosts = OldHostUpdate(_engines), StartedVmPoll = StartedVmPoll,
             Overall = p => { lock (_gate) _convertProgress = p; },
         };
         var converted = await converter.RunAsync(legacy, ct).ConfigureAwait(false);

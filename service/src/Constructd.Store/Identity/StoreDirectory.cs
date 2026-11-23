@@ -168,6 +168,19 @@ public sealed class StoreDirectory : IDisposable
         }
     }
 
+    /// <summary>
+    /// Whether this store is the account's: a device of it registered here (revoked ones count). Account names compare
+    /// without case, as user names do.
+    /// </summary>
+    public bool Holds(string account)
+    {
+        lock (_lock)
+        {
+            using var command = Command("SELECT 1 FROM store_devices WHERE account = $a COLLATE NOCASE LIMIT 1", ("$a", account));
+            return command.ExecuteScalar() is not null;
+        }
+    }
+
     public IReadOnlyList<DeviceEntry> Devices(string account)
     {
         lock (_lock)

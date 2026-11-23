@@ -334,7 +334,15 @@ In the reworked platform (`docs/plans/construct-platform-design.md` 8.2, 9.1, 10
 your account's records: each secret is a `secret` record, sealed with the account's record key, carrying
 today's entry with its value sealed with the vault key `K`. Your devices (the device agent) read and
 write them; a host keeps them for every user whose device granted it the record key, and every other user
-keeps the vault above unchanged. `construct secret` works the same on the VM. A host writes a secret only
+keeps the vault above unchanged. `construct secret` works the same on the VM.
+
+Only a host that takes part in your account's store gets those keys: the host that holds the store (your PC's
+own engine after the move), or one configured to sync against it. A shared host on the new release whose store
+is elsewhere keeps your sign-in and the vault the Companion left in its table: its VMs read those entries, and
+your devices answer their approvals and unlock them with `K` as the Companion did. Such a host refuses the
+record key (`409 not-participating`), and a device withdraws what an earlier version granted it
+(`DELETE /api/v1/engine/grants`, which also removes what the host wrote for your account in its own store). The
+device agent does not push changes into that table: it keeps the entries of the Companion's last sync. A host writes a secret only
 for these reasons, each recorded with who caused it: a VM adds a new name, a VM turns auto-approve off, a
 VM replaces, deletes or turns auto-approve on a secret after a device approved, or a device enters a value
 an agent asked for (`ask`). The mode is the host's per account: `available` while a device has granted

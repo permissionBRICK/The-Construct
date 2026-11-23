@@ -127,6 +127,9 @@ public sealed class AgentHost : IAsyncDisposable
         return host;
     }
 
+    /// <summary>The withdrawal of keys an earlier version granted outside the account's store, started at start (E12).</summary>
+    public Task StrayGrants { get; private set; } = Task.CompletedTask;
+
     /// <summary>Starts the API, then the device features (VM links, update checks).</summary>
     public async Task StartAsync(CancellationToken ct = default)
     {
@@ -134,6 +137,12 @@ public sealed class AgentHost : IAsyncDisposable
         Device.Start();
         Upgrade.Start();
         Upstream.Start();
+        StrayGrants = Task.Run(async () =>
+        {
+            try { await Agent.WithdrawStrayGrantsAsync(App.Lifetime.ApplicationStopping).ConfigureAwait(false); }
+            catch (Exception ex) when (ex is OperationCanceledException or ObjectDisposedException or AgentFailure or IOException or UnauthorizedAccessException
+                or CryptographicException) { }
+        });
     }
 
     /// <summary>
@@ -154,6 +163,7 @@ public sealed class AgentHost : IAsyncDisposable
         Upgrade.Dispose();
         EngineSetup.Dispose();
         await App.StopAsync().ConfigureAwait(false);
+        await StrayGrants.ConfigureAwait(false);
         await App.DisposeAsync().ConfigureAwait(false);
         Agent.Dispose();
     }

@@ -33,8 +33,11 @@ public interface IProvisionTargets
 /// <summary>
 /// The driver's endpoint, as the seed user (the configured account for an external VM), with the
 /// bootstrap key next to <c>Iso:BootstrapPublicKeyPath</c> — the PowerShell's bootstrap path. A VM the
-/// engine adopted from the old client has no seed user: it is reached as root with the old client's key
-/// the adoption kept (<see cref="AdoptedKeyPath"/>); its first provision adds the bootstrap key for root.
+/// old client made has no seed user the engine can use: it is reached as root with the old client's key the engine
+/// keeps for it (<see cref="AdoptedKeyPath"/>), which the adoption of a local VM stores and the old client hands over
+/// for a VM of an old host that updated in place (<see cref="OldClientKeys"/>). Its provisions run on the root path,
+/// which leaves root's keys as they are, so that key keeps reaching the VM until the VM is deleted or rebuilt
+/// (<see cref="ForgetAdoptedKey"/>); the VM built again is the engine's own, reached as the seed user.
 /// </summary>
 public sealed class ProvisionTargets(IHypervisorDriver driver, ConstructdOptions options) : IProvisionTargets
 {
@@ -51,8 +54,26 @@ public sealed class ProvisionTargets(IHypervisorDriver driver, ConstructdOptions
         return new SshTarget(endpoint.SshHost, endpoint.SshPort, listed?.User ?? options.Iso.SeedUser, key, known);
     }
 
-    /// <summary>Where the adoption keeps the old client's root key for a VM (in the engine's own data directory).</summary>
+    /// <summary>Where the engine keeps the old client's root key for a VM (in the engine's own data directory).</summary>
     public static string AdoptedKeyPath(ConstructdOptions options, string vm) => Path.Combine(KeyDirectory(options), vm + "_root");
+
+    /// <summary>A private key as the engine stores it: LF line ends, one final newline (ssh refuses a key without it).</summary>
+    public static string KeyText(string privateKey) => privateKey.Replace("\r\n", "\n", StringComparison.Ordinal).TrimEnd() + "\n";
+
+    /// <summary>
+    /// Writes <paramref name="privateKey"/> to <paramref name="path"/> readable by the engine's account only, as ssh
+    /// requires of a key file: created with mode 0600 on Linux (and set so when the file was there), while on Windows
+    /// the engine's data directory is only its own and the administrators'.
+    /// </summary>
+    public static async Task WriteKeyAsync(string path, string privateKey, CancellationToken ct)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        var file = new FileStreamOptions { Mode = FileMode.Create, Access = FileAccess.Write, Share = FileShare.None };
+        if (!OperatingSystem.IsWindows()) file.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
+        await using (var stream = new FileStream(path, file))
+            await stream.WriteAsync(System.Text.Encoding.UTF8.GetBytes(KeyText(privateKey)), ct);
+        if (!OperatingSystem.IsWindows()) File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+    }
 
     private static string KeyDirectory(ConstructdOptions options) => Path.Combine(Path.GetDirectoryName(Path.GetFullPath(options.DatabasePath))!, "ssh");
 

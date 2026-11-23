@@ -75,7 +75,8 @@ public sealed record VaultKeyGrant(long Epoch, byte[] Sealed)
 /// <summary>
 /// The vault of an account in the new stack (plan 9.1, 9.6): <c>secret</c> records in this engine's store, sealed
 /// with <c>D</c>, each carrying today's entry with its payload sealed with <c>K</c>. An account is in the new stack
-/// here once a device granted this engine <c>D</c>; every other user keeps the <see cref="IVaultStore"/> table.
+/// here once a device granted this engine <c>D</c> and this engine's store is the account's; every other user keeps
+/// the <see cref="IVaultStore"/> table.
 /// </summary>
 public interface IVaultRecords
 {
