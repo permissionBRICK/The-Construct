@@ -3,6 +3,7 @@ using System.Text.Json.Nodes;
 using Construct.Agent.Tests.Support;
 using Construct.Agent.Upgrade;
 using Constructd.Core.Abstractions;
+using Constructd.Core.Configuration;
 using Constructd.Core.Domain;
 using Constructd.Fakes;
 using Constructd.Store.Records;
@@ -43,6 +44,13 @@ public sealed class UpgradeTests
             new Dictionary<string, string> { ["projects/web.json"] = """{"name":"web","repos":[{"url":"https://example.test/web.git"}],"provisionCommands":["yarn install"]}""" });
         f.Vault([("github", "ghp_Fixture_Secret_1", "octo"), ("auto-npm", "npm_Fixture_Secret_2", null)], leases: 1);
         f.BackupKey();
+    }
+
+    /// <summary>A row of the dialog: its state and message.</summary>
+    private static (string State, string? Message) Row(JsonNode view, string id)
+    {
+        var row = view["items"]!.AsArray().SingleOrDefault(i => i!["id"]!.GetValue<string>() == id) ?? throw new Xunit.Sdk.XunitException($"No row {id}: {view["items"]!.ToJsonString()}");
+        return (row["state"]!.GetValue<string>(), row["message"]?.GetValue<string>());
     }
 
     [Fact]
@@ -96,9 +104,10 @@ public sealed class UpgradeTests
         // The upstream links work in the new stack: no note about them (R8).
         Assert.DoesNotContain(view["notes"]!.AsArray(), n => n!.GetValue<string>().Contains("upstream", StringComparison.OrdinalIgnoreCase));
         Assert.Equal("1 tracked", view["items"]!.AsArray().Single(i => i!["id"]!.GetValue<string>() == "upstream")!["message"]!.GetValue<string>());
-        // Before its adoption no engine runs the VM: the account key goes on over the old client's SSH. The adoption
-        // enrols it as well; after it the old key comes off through the engine, which checked the account key is there.
-        Assert.Equal(["agent-vm:construct backup recipients add --label construct-account"], rig.Platform.VmCalls.Select(c => c.Instance + ":" + c.Command));
+        // The account key goes on once the engine runs the VM (after its switch-over), through the engine: nothing over the
+        // old client's SSH. The old key comes off through the engine too, which checked the account key is there.
+        Assert.Empty(rig.Platform.VmCalls);
+        Assert.Equal(("done", "Enrolled"), Row(view, "recipient:agent-vm"));
         var accountFingerprint = System.Security.Cryptography.SHA256.HashData(PemSpki(await rig.Agent.Host.Agent.BackupPublicKeyAsync(CancellationToken.None)));
         Assert.Equal([Convert.ToHexStringLower(accountFingerprint)], rig.Guest.Recipients);
 
@@ -184,6 +193,46 @@ public sealed class UpgradeTests
         Assert.True(done["progress"] is null, "the bar goes with the running step");
         row = done["items"]!.AsArray().Single(i => i!["id"]!.GetValue<string>() == "reprovision:agent-vm")!;
         Assert.Equal(("done", "On the new version"), (row["state"]!.GetValue<string>(), row["message"]!.GetValue<string>()));
+    }
+
+    [Fact]
+    public async Task A_local_VM_that_is_off_is_started_adopted_and_reprovisioned_and_its_account_key_row_ends_enrolled()
+    {
+        // Field run of Move over: the VM was off. The account key row ran first over SSH ("Not reached (exit 255); retried
+        // later") and the adoption refused the VM; nothing started it.
+        await using var rig = await UpgradeRig.CreateAsync(SingleVm);
+        var driver = rig.Local.Services.GetRequiredService<FakeHypervisorDriver>();
+        driver.SetState("agent-vm", VmState.Off);
+        rig.Platform.VmExit = _ => driver.StateOf("agent-vm") == VmState.Running ? 0 : 255;
+        await rig.EngineStepAsync();
+        await rig.SetupAsync();
+
+        var view = await rig.ConvertAsync();
+
+        Assert.Equal("converted", view["stage"]!.GetValue<string>());
+        Assert.Equal(("done", "Switched over"), Row(view, "vm:agent-vm"));
+        Assert.Equal(("done", "Enrolled"), Row(view, "recipient:agent-vm"));
+        Assert.Equal(("done", "On the new version"), Row(view, "reprovision:agent-vm"));
+        Assert.Contains("start:agent-vm", driver.Calls);
+        Assert.Equal(VmState.Running, driver.StateOf("agent-vm"));
+        Assert.Empty(rig.Platform.VmCalls);
+    }
+
+    [Fact]
+    public async Task A_failed_adoption_says_the_engines_reason()
+    {
+        await using var rig = await UpgradeRig.CreateAsync(SingleVm);
+        var driver = rig.Local.Services.GetRequiredService<FakeHypervisorDriver>();
+        driver.SetState("agent-vm", VmState.Off);
+        driver.Reachable = false;
+        await rig.EngineStepAsync();
+        await rig.SetupAsync();
+
+        var view = await rig.ConvertAsync();
+
+        var (state, message) = Row(view, "vm:agent-vm");
+        Assert.Equal("failed", state);
+        Assert.Contains("did not answer over SSH", message);
     }
 
     [Fact]
@@ -423,9 +472,9 @@ public sealed class UpgradeTests
         var state = await rig.Agent.GetAsync("api/state");
         var added = state["engines"]!.AsArray().Single(e => e!["url"]!.GetValue<string>() == remote.Url)!;
         Assert.True(added["enrolled"]!.GetValue<bool>() || added["signedIn"]!.GetValue<bool>());
-        // The account key reached every VM, then the old key came off each: from the adopted VMs through this PC's
-        // engine, from the one the shared host does not run under that name over the old client's SSH.
-        Assert.Equal(["agent-vm", "far", "work"], rig.Platform.VmCalls.Where(c => c.Command.Contains("add")).Select(c => c.Instance).Order());
+        // The account key reached every VM, then the old key came off each: on the adopted VMs through this PC's engine
+        // (after their switch-over), on the one the shared host does not run under that name over the old client's SSH.
+        Assert.Equal(["far"], rig.Platform.VmCalls.Where(c => c.Command.Contains("add")).Select(c => c.Instance).Order());
         Assert.Equal(["far"], rig.Platform.VmCalls.Where(c => c.Command.Contains("remove")).Select(c => c.Instance));
         Assert.DoesNotContain(rig.Fingerprint!, rig.Guest.Recipients);
         Assert.Contains(view["items"]!.AsArray(), i => i!["id"]!.GetValue<string>() == $"unrecipient:work:{rig.Fingerprint}" && i["state"]!.GetValue<string>() == "done");
@@ -753,7 +802,7 @@ public sealed class UpgradeTests
         Assert.Equal("Old Construct; moves next", Message("host:"));
         // Enrolled where the host can enrol this device; a second engine cannot while the store is this PC's (E12): signed in.
         Assert.Contains(Message("host-update:"), new[] { "Moved, enrolled", "Moved, signed in" });
-        Assert.Equal("None of yours", Message("host-vms:"));
+        Assert.Equal("None of yours", Message("host-reprovision:"));
         Assert.Empty(view["oldHosts"]!.AsArray());
         var added = (await rig.Agent.GetAsync("api/state"))["engines"]!.AsArray().Single(e => e!["url"]!.GetValue<string>() == remote.Url)!;
         Assert.True(added["enrolled"]!.GetValue<bool>() || added["signedIn"]!.GetValue<bool>());
@@ -763,7 +812,7 @@ public sealed class UpgradeTests
         // A second run moves nothing again and starts no reprovision there.
         var again = await rig.ConvertAsync();
         Assert.DoesNotContain(again["items"]!.AsArray(), i => i!["id"]!.GetValue<string>().StartsWith("host-update:", StringComparison.Ordinal));
-        Assert.Equal("skipped", again["items"]!.AsArray().Single(i => i!["id"]!.GetValue<string>().StartsWith("host-vms:", StringComparison.Ordinal))!["state"]!.GetValue<string>());
+        Assert.Equal("skipped", again["items"]!.AsArray().Single(i => i!["id"]!.GetValue<string>().StartsWith("host-reprovision:", StringComparison.Ordinal))!["state"]!.GetValue<string>());
         Assert.Equal(1, old.Stages);
     }
 
@@ -807,6 +856,179 @@ public sealed class UpgradeTests
         var again = await rig.ConvertAsync();
         Assert.Equal("done", again["items"]!.AsArray().Single(i => i!["id"]!.GetValue<string>().StartsWith("host-update:", StringComparison.Ordinal))!["state"]!.GetValue<string>());
         Assert.DoesNotContain(again["notes"]!.AsArray(), n => n!.GetValue<string>().StartsWith(LegacyConverter.HostNote("127.0.0.1"), StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// An old host the user administers with one VM of theirs ("far"), which the engine there reaches only as root with the old
+    /// client's key (the old provisioning removed the bootstrap key from the seed user), and the PC's old install pointing at it.
+    /// </summary>
+    private static async Task<(UpgradeRig Rig, EngineHost Remote, OldUntilStaged Old, OldHostGuest Guest)> OldHostWithVmAsync()
+    {
+        var old = new OldUntilStaged();
+        var guest = new OldHostGuest();
+        var remote = new EngineHost(services =>
+        {
+            services.AddSingleton<Microsoft.AspNetCore.Hosting.IStartupFilter>(old);
+            services.AddSingleton<ISshRunner>(guest);
+        }).AddSource(OldUntilStaged.NewCommit);
+        var remoteToken = await remote.AddUserAsync("alice", Role.Admin);
+        await remote.Services.GetRequiredService<IVmRepository>().AddAsync(new Vm("far", "alice", 2, 4, 50, DateTimeOffset.UtcNow.AddDays(-30),
+            VmState.Running, null, null, IdlePolicy.Disabled, Vm.NoForwards, TokenKind: VmTokenKind.Primary), 10, CancellationToken.None);
+        remote.Services.GetRequiredService<FakeHypervisorDriver>().SetState("far", VmState.Running);
+        var rig = await UpgradeRig.CreateAsync(f =>
+        {
+            SingleVm(f);
+            f.SshKey("construct_far_ed25519");
+            f.Instances(new JsonObject
+            {
+                ["version"] = 1, ["defaultInstance"] = "agent-vm",
+                ["instances"] = new JsonObject
+                {
+                    ["far"] = new JsonObject
+                    {
+                        ["backend"] = "hyperv-remote", ["sshHost"] = "127.0.0.1", ["sshPort"] = 2201,
+                        ["service"] = new JsonObject { ["url"] = remote.Url, ["auth"] = "token" },
+                    },
+                },
+            });
+            // The old client provisioned "far" from this PC with these choices.
+            f.Write(Path.Combine("The-Construct", "instances", "far.json"), """{"version":1,"instance":"far","projects":["api"],"t3code":true}""");
+            f.RemoteHost(remote.Url, remote.Pin, remoteToken);
+        });
+        rig.Agent.Host.Upgrade.ShipsAgent = (_, tag, _) => Task.FromResult(tag == "host-" + OldUntilStaged.NewCommit);
+        rig.Agent.Host.Upgrade.OldHostPoll = TimeSpan.FromMilliseconds(50);
+        await rig.EngineStepAsync();
+        await rig.SetupAsync();
+        return (rig, remote, old, guest);
+    }
+
+    [Fact]
+    public async Task The_VMs_of_a_moved_old_host_get_the_old_clients_key_first_and_their_reprovision_is_waited_for()
+    {
+        // Field run: the old host updated itself, then the row asked for the reprovision and said "1 reprovisioning" at
+        // once. The engine there dialled the seed user, which the old provisioning had locked out, and nothing ran.
+        var (rig, remote, old, guest) = await OldHostWithVmAsync();
+        using var _ = remote;
+        await using var __ = rig;
+        var hold = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        guest.Inner.HoldProvision = hold;
+        var slug = LegacyState.Slug(remote.Url);
+
+        await rig.Agent.PostAsync("api/upgrade/convert", null, HttpStatusCode.Accepted);
+        // The row waits for the job and shows it.
+        JsonNode? row = null;
+        var until = DateTime.UtcNow + TimeSpan.FromSeconds(30);
+        while (row?["percent"] is null || row["state"]!.GetValue<string>() != "running")
+        {
+            Assert.True(DateTime.UtcNow < until, "the row never showed the running reprovision: " + row?.ToJsonString());
+            await Task.Delay(50);
+            row = (await rig.Agent.GetAsync("api/upgrade"))["items"]!.AsArray().SingleOrDefault(i => i!["id"]!.GetValue<string>() == "host-reprovision:" + slug);
+        }
+
+        Assert.False(rig.Agent.Host.Upgrade.Work.IsCompleted);
+        hold.SetResult();
+        await rig.Agent.Host.Upgrade.Work;
+        var view = await rig.Agent.GetAsync("api/upgrade");
+
+        Assert.True(old.Staged);
+        Assert.Equal("converted", view["stage"]!.GetValue<string>());
+        Assert.Equal(("done", "On the new version"), Row(view, "host-reprovision:" + slug));
+        Assert.Equal(1, guest.Inner.Provisions);
+        // The key reached the engine (and the VM as root) before the job: the job dialled root with it, never the seed user.
+        var options = remote.Services.GetRequiredService<ConstructdOptions>();
+        var kept = Constructd.Api.Jobs.ProvisionTargets.AdoptedKeyPath(options, "far");
+        Assert.Equal(LegacyFixture.PrivateKeyText, File.ReadAllText(kept));
+        Assert.Contains(guest.Admitted, target => target.IdentityFile == kept);
+        Assert.Contains(guest.Inner.Commands, c => c.Contains("bin/provision.sh", StringComparison.Ordinal));
+        var jobs = await remote.Services.GetRequiredService<IJobQueryStore>().ListAsync(CancellationToken.None);
+        Assert.Equal(JobState.Succeeded, Assert.Single(jobs, j => j.Kind == "provision" && j.VmName == "far").State);
+        // The old stack stored no settings for the VM: the old client's are its settings now.
+        var desired = (await remote.Services.GetRequiredService<IVmDesiredStateSource>().GetDesiredAsync("far", CancellationToken.None))!.Desired;
+        Assert.Equal(["api"], desired.Projects);
+        Assert.Equal(("Ada", "true"), (desired.Settings.GitUserName, desired.Settings.T3Code));
+        rig.AssertNoSecretInAgentFiles();
+        Assert.DoesNotContain("PRIVATE KEY", File.ReadAllText(rig.Agent.Host.Upgrade.Bridge.Path), StringComparison.Ordinal);
+
+        // A second run starts no job there.
+        var again = await rig.ConvertAsync();
+        Assert.Equal("skipped", Row(again, "host-reprovision:" + slug).State);
+        Assert.Equal(1, guest.Inner.Provisions);
+    }
+
+    [Fact]
+    public async Task A_failed_reprovision_on_a_moved_host_fails_its_row_and_Move_over_again_redoes_it()
+    {
+        var (rig, remote, _, guest) = await OldHostWithVmAsync();
+        using var _ = remote;
+        await using var __ = rig;
+        guest.Inner.FailProvisions = 1;
+        var slug = LegacyState.Slug(remote.Url);
+
+        var first = await rig.ConvertAsync();
+        var (state, message) = Row(first, "host-reprovision:" + slug);
+        Assert.Equal("failed", state);
+        Assert.StartsWith("far: Reprovision failed", message);
+        Assert.NotEqual("converted", first["stage"]!.GetValue<string>());
+        Assert.Equal(["host-reprovision:" + slug], first["items"]!.AsArray().Where(i => i!["state"]!.GetValue<string>() == "failed").Select(i => i!["id"]!.GetValue<string>()));
+
+        var second = await rig.ConvertAsync();
+        Assert.Equal(("done", "On the new version"), Row(second, "host-reprovision:" + slug));
+        Assert.Equal("converted", second["stage"]!.GetValue<string>());
+        Assert.Equal(2, guest.Inner.Provisions);
+    }
+
+    [Fact]
+    public async Task A_host_VMs_row_saved_as_done_by_the_converter_that_did_not_wait_is_done_again_with_the_key_first()
+    {
+        // The state the field PC kept: the host moved ("host-update:" done) and "host-vms:<host>" saved as done with
+        // "1 reprovisioning", while the engine there had no key for the VM and ran nothing.
+        var (rig, remote, _, guest) = await OldHostWithVmAsync();
+        using var _ = remote;
+        await using var __ = rig;
+        var slug = LegacyState.Slug(remote.Url);
+        await rig.ConvertAsync();
+        var options = remote.Services.GetRequiredService<ConstructdOptions>();
+        File.Delete(Constructd.Api.Jobs.ProvisionTargets.AdoptedKeyPath(options, "far"));
+        var bridge = rig.Agent.Host.Upgrade.Bridge;
+        bridge.Update(b => b with
+        {
+            Stage = "converting",
+            Done = [.. b.Done.Where(d => !d.StartsWith("host-reprovision:", StringComparison.Ordinal)), "host-vms:" + slug],
+        });
+        Assert.Equal(1, guest.Inner.Provisions);
+
+        var view = await rig.ConvertAsync();
+
+        Assert.Equal(("done", "On the new version"), Row(view, "host-reprovision:" + slug));
+        Assert.Equal(2, guest.Inner.Provisions);
+        Assert.True(File.Exists(Constructd.Api.Jobs.ProvisionTargets.AdoptedKeyPath(options, "far")));
+        Assert.DoesNotContain(bridge.Read().Done, d => d.StartsWith("host-vms:", StringComparison.Ordinal));
+        Assert.Contains("host-reprovision:" + slug, bridge.Read().Done);
+        Assert.Equal("converted", view["stage"]!.GetValue<string>());
+    }
+
+    /// <summary>
+    /// A guest on an old host: its sshd admits root with the old client's key only (the old provisioning removed the
+    /// bootstrap key from the seed user, and the engine has no other key); what it admits, <see cref="AdoptableGuest"/> answers.
+    /// </summary>
+    private sealed class OldHostGuest : ISshRunner
+    {
+        public AdoptableGuest Inner { get; } = new();
+
+        public List<SshTarget> Admitted { get; } = [];
+
+        private bool Admits(SshTarget target)
+        {
+            var admitted = target.User == "root" && target.IdentityFile is { } file && File.Exists(file) && File.ReadAllText(file) == LegacyFixture.PrivateKeyText;
+            if (admitted) lock (Admitted) Admitted.Add(target);
+            return admitted;
+        }
+
+        public Task<int> RunAsync(SshTarget target, string command, string? standardInput, IProgress<string>? lines, TimeSpan timeout, CancellationToken ct) =>
+            Admits(target) ? Inner.RunAsync(target, command, standardInput, lines, timeout, ct) : Task.FromResult(255);
+
+        public Task CopyAsync(SshTarget target, string localPath, string remotePath, CancellationToken ct) =>
+            Admits(target) ? Inner.CopyAsync(target, localPath, remotePath, ct) : throw new InvalidOperationException("ssh: closed before authentication");
     }
 
     [Fact]

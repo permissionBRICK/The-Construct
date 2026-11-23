@@ -8,8 +8,11 @@ using Construct.Agent.Protection;
 namespace Construct.Agent.Upgrade;
 
 /// <summary>One VM of the old client's registry (<c>instances.json</c>, or the implicit default).</summary>
-/// <param name="Settings">For a local VM: the install's <c>.construct-settings.json</c> (git identity, and the default VM's own keys).</param>
-/// <param name="InstanceState">For a named local VM: its <c>instances\&lt;name&gt;.json</c>; null for the default VM.</param>
+/// <param name="Settings">The install's <c>.construct-settings.json</c> (git identity, and the default VM's own keys).</param>
+/// <param name="InstanceState">
+/// For a named VM: its <c>instances\&lt;name&gt;.json</c> (an empty object when the old client saved none); null for the
+/// default VM. A VM on a host has one too: the old client provisioned it from this PC.
+/// </param>
 public sealed record LegacyInstance(string Name, bool Local, string SshHost, int SshPort, string KeyName, string ConfigBranch,
     string? ServiceUrl, JsonObject? Settings, JsonObject? InstanceState);
 
@@ -161,8 +164,8 @@ public sealed class LegacyState
             var service = raw["service"] is JsonObject s ? Text(s, "url") : null;
             if (!local && service is null) continue;
             JsonObject? state = null;
-            if (local && !isDefault) state = ReadObject(Path.Combine(Root, "instances", name + ".json")) ?? new JsonObject();
-            list.Add(new LegacyInstance(name, local, host, port, keyName, branch, service is null ? null : NormalizeUrl(service), local ? settings : null, state));
+            if (!isDefault) state = ReadObject(Path.Combine(Root, "instances", name + ".json")) ?? new JsonObject();
+            list.Add(new LegacyInstance(name, local, host, port, keyName, branch, service is null ? null : NormalizeUrl(service), settings, state));
         }
 
         return list.OrderBy(i => i.Name, StringComparer.Ordinal).ToArray();

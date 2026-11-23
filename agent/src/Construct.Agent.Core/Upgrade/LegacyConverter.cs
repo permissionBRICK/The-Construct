@@ -14,8 +14,9 @@ namespace Construct.Agent.Upgrade;
 /// then the old client's autoinstall images go and its entry scripts are replaced. It can be run
 /// again at any point: an item listed as done in <c>bridge.json</c>, or already present where it goes, is
 /// left alone. A shared host of the old stack that the user administers moves to the new version through its own update
-/// when it offers it (R5). Its last steps switch the local VMs over to the engine (the adopt job) and reprovision each
-/// adopted VM with the engine's guest payload, and each moved host's VMs, so the move leaves them on the new version; then
+/// when it offers it (R5). Its last steps switch the local VMs over to the engine (the adopt job, which starts a VM that is
+/// off) and reprovision each adopted VM with the engine's guest payload, and each moved host's VMs (after handing the
+/// engine there the old client's key for them), so the move leaves them on the new version; then
 /// <c>{stage: converted}</c> is written, and only after that the old backup key comes off the VMs, the old client's
 /// autoinstall images are deleted and its entry scripts become the new Construct's (<see cref="OldInstallScripts"/>).
 /// Messages are a few words (R6).
@@ -34,6 +35,12 @@ public sealed class LegacyConverter(DeviceAgent agent, IDeviceEngines engines, D
     /// <summary>How long the reprovision of one adopted VM may take.</summary>
     public TimeSpan ReprovisionTimeout { get; init; } = TimeSpan.FromMinutes(60);
 
+    /// <summary>How long a VM on a moved host that had to be started may boot before the old client's key reaches it.</summary>
+    public TimeSpan StartedVmWait { get; init; } = TimeSpan.FromMinutes(5);
+
+    /// <summary>The pause between two tries to hand the old client's key to a VM that boots.</summary>
+    public TimeSpan StartedVmPoll { get; init; } = TimeSpan.FromSeconds(10);
+
     /// <summary>Moves a shared host of the old stack through its own update (R5); null: none is moved.</summary>
     public OldHostUpdate? OldHosts { get; init; }
 
@@ -50,6 +57,15 @@ public sealed class LegacyConverter(DeviceAgent agent, IDeviceEngines engines, D
     {
         if (!agent.IsRegistered || agent.RecoveryUnconfirmed) throw new AgentFailure(409, "not-registered", "Set up the recovery code first: the converted records are sealed under the account's keys.");
         var start = bridge.Read();
+        // A converter before this one marked "host-vms:<host>" done right after asking a moved host to reprovision, without
+        // knowing whether it did (it could not: the engine there did not reach the old host's VMs). That row is
+        // "host-reprovision:<host>" now, and it runs again with the old client's keys; the old mark goes.
+        if (start.Done.Any(StaleHostVms))
+        {
+            bridge.Update(b => b with { Done = b.Done.Where(d => !StaleHostVms(d)).ToArray() });
+            start = bridge.Read();
+        }
+
         _done = start.Done.ToHashSet(StringComparer.Ordinal);
         var store = start.StoreEngine ?? agent.StoreEngineId ?? throw new AgentFailure(409, "no-store", "This device has no store yet.");
         bridge.Update(b => b with { Stage = b.Stage == BridgeState.Converted ? b.Stage : "converting", From = legacy.InstallFolder, Items = [] });
@@ -73,11 +89,14 @@ public sealed class LegacyConverter(DeviceAgent agent, IDeviceEngines engines, D
         Progress(copy * copying.Length / (copying.Length + 2));
         var legacyKeys = await BackupKeysAsync(legacy, ct).ConfigureAwait(false);
         Progress(copy * (copying.Length + 1) / (copying.Length + 2));
-        await RecipientsAsync(legacy, instances, start.LocalEngine, ct).ConfigureAwait(false);
+        await RecipientsAsync(legacy, instances.Where(i => !i.Local), start.LocalEngine, ct).ConfigureAwait(false);
         Progress(copy);
         await LocalVmsAsync(legacy, instances, start.LocalEngine, copy, ct).ConfigureAwait(false);
+        // A local VM's account key after its switch-over, when the engine runs it (and it runs: the adoption starts a VM
+        // that is off); before it, the VM may be off and nothing reaches it.
+        await RecipientsAsync(legacy, instances.Where(i => i.Local), start.LocalEngine, ct).ConfigureAwait(false);
         await ReprovisionAsync(instances, start.LocalEngine, ct).ConfigureAwait(false);
-        await HostVmsAsync(legacy, ct).ConfigureAwait(false);
+        await HostVmsAsync(legacy, instances, ct).ConfigureAwait(false);
 
         var complete = _items.All(i => i.State is not "failed");
         if (complete && bridge.Read().Stage != BridgeState.Converted)
@@ -96,6 +115,8 @@ public sealed class LegacyConverter(DeviceAgent agent, IDeviceEngines engines, D
     }
 
     /// <summary>The bar moves to <paramref name="percent"/>, never back, named by the running row.</summary>
+    private static bool StaleHostVms(string id) => id.StartsWith("host-vms:", StringComparison.Ordinal);
+
     private void Progress(double percent)
     {
         _percent = Math.Max(_percent, (int)Math.Round(Math.Clamp(percent, 0, 100)));
@@ -141,13 +162,15 @@ public sealed class LegacyConverter(DeviceAgent agent, IDeviceEngines engines, D
             item = new UpgradeItem(id, label, "failed", $"Unexpected failure ({ex.GetType().Name}).");
         }
 
-        if (remember && item.State is "done" or "skipped")
-        {
-            _done.Add(id);
-            bridge.Update(b => b with { Done = b.Done.Contains(id) ? b.Done : [.. b.Done, id] });
-        }
-
+        if (remember && item.State is "done" or "skipped") Remember(id);
         Report(item);
+    }
+
+    /// <summary>Saves <paramref name="id"/> as done at once: a later run leaves it alone.</summary>
+    private void Remember(string id)
+    {
+        _done.Add(id);
+        bridge.Update(b => b with { Done = b.Done.Contains(id) ? b.Done : [.. b.Done, id] });
     }
 
     /// <summary>
@@ -262,19 +285,127 @@ public sealed class LegacyConverter(DeviceAgent agent, IDeviceEngines engines, D
             return ("done", known.Enrolled ? "Moved, enrolled" : known.SignedIn ? "Moved, signed in" : "Moved; sign in from Settings");
         }, running: "Updating");
 
-    /// <summary>R5: the user's VMs on each host moved to the new version (in this run or an earlier one), reprovisioned as Update does.</summary>
-    private async Task HostVmsAsync(LegacyState legacy, CancellationToken ct)
+    /// <summary>
+    /// R5: the user's VMs on each host moved to the new version (in this run or an earlier one), reprovisioned one after the
+    /// other and waited for, as the adopted VMs are; the row shows the running job and fails when one of them does. The old
+    /// host never dialled its guests (the old client on the PC provisioned them as root with its own key per VM), so the
+    /// engine there reaches none of them until it has that key: it goes to the engine first, for each VM the old client
+    /// here knows, with the old client's settings for it. A VM done is remembered on its own, so Move over again redoes only
+    /// the ones that failed.
+    /// </summary>
+    private async Task HostVmsAsync(LegacyState legacy, IReadOnlyList<LegacyInstance> instances, CancellationToken ct)
     {
         foreach (var host in legacy.Hosts().Where(h => _done.Contains("host-update:" + h.Slug)))
         {
-            await ItemAsync("host-vms:" + host.Slug, $"VMs on {new Uri(host.Url).Host} on the new version", async () =>
+            var id = "host-reprovision:" + host.Slug;
+            var label = $"VMs on {new Uri(host.Url).Host} on the new version";
+            await ItemAsync(id, label, async () =>
             {
                 var engine = agent.EngineIdFor(host.Url) ?? throw new AgentFailure(404, "no-engine", "The host is not added.");
-                var count = (await engines.PostAsync(engine, "me/vms/reprovision", null, ct).ConfigureAwait(false))?["vms"] is JsonArray vms ? vms.Count : 0;
-                return ("done", count == 0 ? "None of yours" : $"{count} reprovisioning");
-            }).ConfigureAwait(false);
+                var me = (await engines.GetAsync(engine, "whoami", ct).ConfigureAwait(false))?["name"]?.GetValue<string>() ?? "";
+                var mine = ((await engines.GetAsync(engine, "vms?kind=primary", ct).ConfigureAwait(false)) as JsonArray ?? [])
+                    .Where(v => string.Equals(Text(v, "owner"), me, StringComparison.OrdinalIgnoreCase) && v?["deleting"]?.GetValue<bool>() != true)
+                    .Select(v => Text(v, "name")).OfType<string>().Order(StringComparer.Ordinal).ToArray();
+                if (mine.Length == 0) return ("done", "None of yours");
+
+                var failed = new List<string>();
+                var from = _percent;
+                for (var i = 0; i < mine.Length; i++)
+                {
+                    var (vm, at) = (mine[i], i);
+                    var done = $"{id}/{vm}";
+                    if (_done.Contains(done)) continue;
+                    void Running(int percent, string step)
+                    {
+                        Progress(from + (99 - from) * (at + percent / 100.0) / mine.Length);
+                        Report(new UpgradeItem(id, label, "running", mine.Length == 1 ? step : $"{vm}: {step}", (100 * at + percent) / mine.Length));
+                    }
+
+                    var instance = instances.FirstOrDefault(x => !x.Local && x.Name == vm && x.ServiceUrl is { } url && agent.EngineIdFor(url) == engine);
+                    Running(0, "Handing over the old key");
+                    string? problem;
+                    try
+                    {
+                        problem = instance is null ? null : await HandOverKeyAsync(legacy, instance, engine, ct).ConfigureAwait(false);
+                        problem ??= await ReprovisionVmAsync(engine, vm, Running, ct).ConfigureAwait(false);
+                    }
+                    catch (AgentFailure failure)
+                    {
+                        // This VM's alone: the next one still runs.
+                        problem = failure.Message;
+                    }
+
+                    if (problem is null) Remember(done);
+                    else failed.Add($"{vm}: {problem}");
+                }
+
+                // The VMs kept running; Move over again retries the ones that failed.
+                if (failed.Count > 0) return ("failed", string.Join("; ", failed));
+                return ("done", mine.Length == 1 ? "On the new version" : $"{mine.Length} on the new version");
+            }, running: "Starting").ConfigureAwait(false);
         }
     }
+
+    /// <summary>
+    /// Hands the old client's root key for <paramref name="instance"/> (and its settings, for an engine that stores none) to
+    /// the engine on its host, which keeps it only once it reached the VM as root, and keeps a key it has that works. Null
+    /// when the engine has it or reaches the VM anyway, else why not. A VM that is off is started first, as its reprovision
+    /// would be, and the key goes again while it boots. An engine without the route goes on: the reprovision says.
+    /// </summary>
+    private async Task<string?> HandOverKeyAsync(LegacyState legacy, LegacyInstance instance, string engine, CancellationToken ct)
+    {
+        var keyFile = legacy.KeyFile(instance);
+        if (!File.Exists(keyFile)) return null;
+        var vm = Uri.EscapeDataString(instance.Name);
+        var body = new JsonObject
+        {
+            ["sshPrivateKey"] = File.ReadAllText(keyFile), ["settings"] = instance.Settings?.DeepClone(), ["instanceState"] = instance.InstanceState?.DeepClone(),
+        };
+        try
+        {
+            var refused = await SendAsync().ConfigureAwait(false);
+            if (refused?.Code == "vm-not-running")
+            {
+                try { await engines.PostAsync(engine, $"vms/{vm}/power", new JsonObject { ["action"] = "start" }, ct).ConfigureAwait(false); }
+                catch (AgentFailure failure) { return $"Not started ({failure.Code})"; }
+                var until = DateTimeOffset.UtcNow + StartedVmWait;
+                do
+                {
+                    await Task.Delay(StartedVmPoll, ct).ConfigureAwait(false);
+                    refused = await SendAsync().ConfigureAwait(false);
+                }
+                while (refused?.Code is "key-rejected" or "vm-not-running" or "vm-endpoint-unknown" && DateTimeOffset.UtcNow < until);
+            }
+
+            return refused switch
+            {
+                null or { Status: 404 } or { Code: "unsupported-capability" } => null,
+                { Code: "key-rejected" } => "The old client's key does not reach it",
+                { Code: "vm-not-running" } => "It does not run",
+                { Code: "vm-endpoint-unknown" } => "The host has no address for it",
+                _ => $"Old key not taken ({refused.Code})",
+            };
+        }
+        finally
+        {
+            body["sshPrivateKey"] = null;
+        }
+
+        async Task<AgentFailure?> SendAsync()
+        {
+            try
+            {
+                await engines.SendAsync(engine, HttpMethod.Put, $"vms/{vm}/old-client-key", body, ct).ConfigureAwait(false);
+                return null;
+            }
+            catch (AgentFailure failure)
+            {
+                return failure;
+            }
+        }
+    }
+
+    private static string? Text(JsonNode? node, string key) => node?[key] is JsonValue v && v.TryGetValue<string>(out var text) ? text : null;
 
     // ---- profiles (9.4) ----
 
@@ -496,9 +627,9 @@ public sealed class LegacyConverter(DeviceAgent agent, IDeviceEngines engines, D
     /// <summary>
     /// The account's <c>B.pub</c> enrolled on every VM reached, before any old key comes off (13.2): through the engine
     /// that runs the VM (<c>POST /vms/{name}/backup-recipients</c>); over SSH with the old client's key only for a VM no
-    /// engine reaches yet (a local VM before its adoption, a host not added). A VM not reached is retried by a later run.
+    /// engine reaches (a local VM whose adoption failed, a host not added). A VM not reached is retried by a later run.
     /// </summary>
-    private async Task RecipientsAsync(LegacyState legacy, IReadOnlyList<LegacyInstance> instances, string? localEngine, CancellationToken ct)
+    private async Task RecipientsAsync(LegacyState legacy, IEnumerable<LegacyInstance> instances, string? localEngine, CancellationToken ct)
     {
         if (legacy.BackupKeyFiles().Count == 0) return;
         foreach (var instance in instances)
@@ -621,11 +752,11 @@ public sealed class LegacyConverter(DeviceAgent agent, IDeviceEngines engines, D
                 }
 
                 var job = started?["jobId"]?.GetValue<string>() ?? throw new AgentFailure(502, "adopt-failed", "The engine started no adoption job.");
-                var (state, _) = await WaitForJobAsync(localEngine, job, AdoptTimeout, TimeSpan.FromMilliseconds(500), ct).ConfigureAwait(false);
+                var (state, error) = await WaitForJobAsync(localEngine, job, AdoptTimeout, TimeSpan.FromMilliseconds(500), ct).ConfigureAwait(false);
                 if (instance.Settings?["micPassthrough"] is JsonValue mic && mic.TryGetValue<bool>(out var on) && on)
                     settings.Update(s => s.Mic.Contains($"{localEngine}/{instance.Name}") ? s : s with { Mic = [.. s.Mic, $"{localEngine}/{instance.Name}"] });
-                // It kept running.
-                return state == "succeeded" ? ("done", "Switched over") : ("failed", $"Adoption {state}; see its log");
+                // It runs (a VM that was off was started); the engine's reason says why one failed.
+                return state == "succeeded" ? ("done", "Switched over") : ("failed", $"Adoption {state}{(error is { Length: > 0 } ? ": " + error : "; see its log")}");
             }).ConfigureAwait(false);
         }
     }
@@ -676,28 +807,51 @@ public sealed class LegacyConverter(DeviceAgent agent, IDeviceEngines engines, D
             Progress(ReprovisionFrom + (ReprovisionTo - ReprovisionFrom) * at / local.Length);
             await ItemAsync(id, label, async () =>
             {
-                var answer = await agent.StartVmJobAsync(localEngine, instance.Name,
-                    new JsonObject { ["kind"] = "provision", ["requestId"] = Guid.NewGuid().ToString("D") }, ct).ConfigureAwait(false);
-                var body = Parse(answer.Body);
-                if (answer.Status is < 200 or >= 300)
-                    return ("failed", "Not started: " + (body?["title"]?.GetValue<string>() ?? $"the engine answered {answer.Status}"));
-                var job = body?["jobId"]?.GetValue<string>() ?? throw new AgentFailure(502, "provision-failed", "The engine started no reprovision job.");
                 // The row shows the job's own percentage and step (R7); the bar moves with it.
-                (int, string)? shown = null;
-                var (state, error) = await WaitForJobAsync(localEngine, job, ReprovisionTimeout, TimeSpan.FromSeconds(2), ct, read =>
+                var problem = await ReprovisionVmAsync(localEngine, instance.Name, (percent, step) =>
                 {
-                    if (read["overall"] is not JsonObject overall || overall["percent"] is not JsonValue p || !p.TryGetValue<int>(out var percent)) return;
-                    var step = overall["label"] is JsonValue l && l.TryGetValue<string>(out var text) && text.Length > 0 ? text : "Reprovisioning";
-                    if (shown == (percent, step)) return;
-                    shown = (percent, step);
-                    Progress(ReprovisionFrom + (ReprovisionTo - ReprovisionFrom) * (at + Math.Clamp(percent, 0, 100) / 100.0) / local.Length);
-                    Report(new UpgradeItem(id, label, "running", step, Math.Clamp(percent, 0, 100)));
-                }).ConfigureAwait(false);
+                    Progress(ReprovisionFrom + (ReprovisionTo - ReprovisionFrom) * (at + percent / 100.0) / local.Length);
+                    Report(new UpgradeItem(id, label, "running", step, percent));
+                }, ct).ConfigureAwait(false);
                 // The VM kept running; Move over again retries a failure, as Reprovision on the VM's page would.
-                return state == "succeeded"
-                    ? ("done", "On the new version")
-                    : ("failed", $"Reprovision {state}{(error is { Length: > 0 } ? ": " + error : "")}");
+                return problem is null ? ("done", "On the new version") : ("failed", problem);
             }, running: "Starting").ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>
+    /// Reprovisions <paramref name="vm"/> at <paramref name="engine"/> through the agent's job route (which adds this device's
+    /// clone credentials) and waits for it: null when it succeeded, else why not. <paramref name="running"/> sees the job's
+    /// percentage and step as they change. A job that already runs on the VM (one started before its key arrived) is waited
+    /// for first, then this one runs.
+    /// </summary>
+    private async Task<string?> ReprovisionVmAsync(string engine, string vm, Action<int, string> running, CancellationToken ct)
+    {
+        for (var attempt = 0; ; attempt++)
+        {
+            var answer = await agent.StartVmJobAsync(engine, vm,
+                new JsonObject { ["kind"] = "provision", ["requestId"] = Guid.NewGuid().ToString("D") }, ct).ConfigureAwait(false);
+            var body = Parse(answer.Body);
+            if (answer.Status == 409 && attempt == 0 && Text(body, "code") == "operation-in-progress" && Text(body, "jobId") is { Length: > 0 } other)
+            {
+                running(0, "Waiting for the VM's running job");
+                await WaitForJobAsync(engine, other, ReprovisionTimeout, TimeSpan.FromSeconds(2), ct).ConfigureAwait(false);
+                continue;
+            }
+
+            if (answer.Status is < 200 or >= 300) return "Not started: " + (Text(body, "title") ?? $"the engine answered {answer.Status}");
+            var job = Text(body, "jobId") ?? throw new AgentFailure(502, "provision-failed", "The engine started no reprovision job.");
+            (int, string)? shown = null;
+            var (state, error) = await WaitForJobAsync(engine, job, ReprovisionTimeout, TimeSpan.FromSeconds(2), ct, read =>
+            {
+                if (read["overall"] is not JsonObject overall || overall["percent"] is not JsonValue p || !p.TryGetValue<int>(out var percent)) return;
+                var step = overall["label"] is JsonValue l && l.TryGetValue<string>(out var text) && text.Length > 0 ? text : "Reprovisioning";
+                percent = Math.Clamp(percent, 0, 100);
+                if (shown == (percent, step)) return;
+                shown = (percent, step);
+                running(percent, step);
+            }).ConfigureAwait(false);
+            return state == "succeeded" ? null : $"Reprovision {state}{(error is { Length: > 0 } ? ": " + error : "")}";
         }
     }
 

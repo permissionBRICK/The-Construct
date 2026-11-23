@@ -799,6 +799,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/vms/{name}/old-client-key": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put: operations["HandOverOldClientKey"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/host/lan-access": {
         parameters: {
             query?: never;
@@ -5142,6 +5158,14 @@ export interface components {
             instanceState: null | components["schemas"]["JsonObject"];
             sshPrivateKey: null | string;
         };
+        LocalAdoptionEndpointsOldClientKeyRequest: {
+            sshPrivateKey: null | string;
+            settings: null | components["schemas"]["JsonObject"];
+            instanceState: null | components["schemas"]["JsonObject"];
+        };
+        LocalAdoptionEndpointsOldClientKeyResponse: {
+            status: string;
+        };
         /** @enum {string} */
         MaintenanceState: "open" | "draining" | "maintenance";
         MediaConfig: {
@@ -8817,6 +8841,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["JobStartAnswer"];
+                };
+            };
+            /** @description An error, as a Problem document. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    HandOverOldClientKey: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": null | components["schemas"]["LocalAdoptionEndpointsOldClientKeyRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LocalAdoptionEndpointsOldClientKeyResponse"];
                 };
             };
             /** @description An error, as a Problem document. */

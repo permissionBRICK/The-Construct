@@ -79,6 +79,12 @@ public sealed class EngineHost : WebApplicationFactory<Program>
     public EngineHost WithSource()
     {
         ((Constructd.Fakes.FakeReleaseInfo)Services.GetRequiredService<IReleaseInfo>()).Installed = new InstalledRelease(Commit, "1.0.0-test", null, "test");
+        return AddSource(Commit);
+    }
+
+    /// <summary>The source of <paramref name="commit"/> in the fake release source, for a release this engine runs later (after an update).</summary>
+    public EngineHost AddSource(string commit)
+    {
         using var bytes = new MemoryStream();
         using (var zip = new System.IO.Compression.ZipArchive(bytes, System.IO.Compression.ZipArchiveMode.Create, true))
         {
@@ -88,9 +94,9 @@ public sealed class EngineHost : WebApplicationFactory<Program>
             s.Write("#!/bin/bash\n"u8);
         }
 
-        var uri = new Uri("https://github.com/test/repo/" + Commit);
+        var uri = new Uri("https://github.com/test/repo/" + commit);
         var releases = Services.GetRequiredService<Constructd.Fakes.FakeReleaseSource>();
-        releases.SourceAssets[Commit] = new(Commit, "host-" + Commit, uri, bytes.Length, Convert.ToHexStringLower(SHA256.HashData(bytes.ToArray())));
+        releases.SourceAssets[commit] = new(commit, "host-" + commit, uri, bytes.Length, Convert.ToHexStringLower(SHA256.HashData(bytes.ToArray())));
         releases.Assets[uri] = bytes.ToArray();
         return this;
     }

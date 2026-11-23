@@ -29,8 +29,9 @@ public sealed record LocalAdoptionResult(string Name, string Owner, int? SshPort
 /// <c>bin/adopt-host.py</c>, done by the engine itself. The VM is registered with the CPU, memory and
 /// disk Hyper-V reports, the old client's provisioning choices become its stored desired state, and the
 /// guest gets the service settings and its VM token through <c>bin/adopt-host.py</c>, which verifies
-/// the engine from inside the guest and restores its files when it fails. Nothing here powers the VM
-/// off, changes its hardware or deletes anything; a repeat resumes the same VM and refuses another.
+/// the engine from inside the guest and restores its files when it fails. A VM that is off, saved or paused
+/// is started first and stays running. Nothing here powers the VM off, changes its hardware or deletes
+/// anything; a repeat resumes the same VM and refuses another.
 /// The admin CLI (<c>vms adopt-local</c>) and the <c>adopt-vm</c> job both run this.
 /// </summary>
 public static class LocalVmAdoption
@@ -69,7 +70,8 @@ public static class LocalVmAdoption
         progress.Report($"Reading VM '{name}' from Hyper-V");
         var facts = await services.GetRequiredService<IVmFactsDriver>().GetFactsAsync(name, ct)
             ?? throw new VmAdoptionException("not-found", $"Hyper-V has no VM named '{name}'.");
-        if (facts.State != VmState.Running) throw new VmAdoptionException("conflict", "The existing VM must be running before adoption.");
+        if (facts.State is not (VmState.Running or VmState.Off or VmState.Saved or VmState.Paused))
+            throw new VmAdoptionException("conflict", "Hyper-V reports the VM neither running nor stopped; retry once it is.");
         if (!Guid.TryParse(facts.Id, out var incarnation)) throw new VmAdoptionException("conflict", "Hyper-V reported no usable VM id.");
         var ramMb = (int)(facts.MemoryBytes / (1024 * 1024));
         var diskGb = (int)Math.Ceiling(facts.DiskBytes / (double)(1L << 30));
@@ -80,6 +82,9 @@ public static class LocalVmAdoption
             !string.Equals(current.Owner, user.Name, StringComparison.OrdinalIgnoreCase) ||
             current.Incarnation != incarnation.ToString("D")))
             throw new VmAdoptionException("conflict", "This name already belongs to a different managed VM.");
+        // A VM the old client left off, saved or paused is started here (its owner expects the move to bring it up) and
+        // stays running: the reprovision follows.
+        if (facts.State != VmState.Running) facts = await StartAsync(services, options, name, progress, ct);
         if (current is null)
         {
             current = new Vm(name, user.Name, facts.Cpu, (int)Math.Ceiling(ramMb / 1024d), diskGb, clock.UtcNow, facts.State, null, null,
@@ -128,8 +133,38 @@ public static class LocalVmAdoption
         }
         await services.GetRequiredService<IAuditLog>().AppendAsync(new AuditEntry(clock.UtcNow, actor, "vm.adopt", name, AuditOutcome.Success,
             "existing Hyper-V VM, guest enrolled; owner=" + user.Name), ct);
-        progress.Report("VM adopted; it kept running throughout");
+        progress.Report("VM adopted; it keeps running");
         return new LocalAdoptionResult(name, user.Name, port, incarnation.ToString("D"), facts.Cpu, ramMb, diskGb, serviceUrl);
+    }
+
+    /// <summary>
+    /// Starts the VM (Hyper-V's start also resumes a saved or paused VM; it works by name, so the engine need not know the
+    /// VM yet) and waits, as a provision that starts its VM does, until the guest answers on its SSH port. Its facts once
+    /// it runs. A VM that started but does not answer in time keeps running.
+    /// </summary>
+    private static async Task<HypervisorVmFacts> StartAsync(IServiceProvider services, ConstructdOptions options, string name,
+        IProgress<string> progress, CancellationToken ct)
+    {
+        var driver = services.GetRequiredService<IHypervisorDriver>();
+        progress.Report("Starting the VM");
+        try
+        {
+            await driver.StartAsync(name, ct);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            throw new VmAdoptionException("conflict", "Hyper-V could not start the VM; start it in Hyper-V Manager to see why.");
+        }
+
+        if (await driver.GetStateAsync(name, ct) != VmState.Running)
+            throw new VmAdoptionException("conflict", "The VM did not start; start it in Hyper-V Manager to see why.");
+        var wait = TimeSpan.FromSeconds(Math.Max(1, options.StartedVmSshWaitSeconds));
+        progress.Report("Waiting for the VM to answer over SSH");
+        if (!await driver.WaitReachableAsync(name, wait, null, ct))
+            throw new VmAdoptionException("guest", $"The VM started but did not answer over SSH within {wait.TotalMinutes:0.#} minutes. It keeps running; retry once it is up.");
+        progress.Report("The VM answers over SSH");
+        return await services.GetRequiredService<IVmFactsDriver>().GetFactsAsync(name, ct)
+            ?? throw new VmAdoptionException("not-found", $"Hyper-V has no VM named '{name}'.");
     }
 
     /// <summary>The guest reached with the old client's key and proven to be this VM, with the coding agents it has.</summary>
@@ -142,16 +177,13 @@ public static class LocalVmAdoption
             ?? throw new VmAdoptionException("guest", "The VM has no SSH endpoint.");
         var ssh = services.GetRequiredService<ISshRunner>();
 
-        // The engine's own copy of the old client's key: ssh refuses a key file other accounts can
-        // read, and the engine's data directory is only its own and the administrators'.
+        // The engine's own copy of the old client's key, readable by the engine only (ssh refuses it otherwise).
         // Later jobs reach the VM with it too (ProvisionTargets): it has no seed user. Kept there only once it
         // proved to reach this VM, so a failed attempt never replaces a key that works.
         var keyFile = ProvisionTargets.AdoptedKeyPath(options, name);
         var keyDir = Path.GetDirectoryName(keyFile)!;
-        Directory.CreateDirectory(keyDir);
         var trial = keyFile + ".trial";
-        await File.WriteAllTextAsync(trial, privateKey.Replace("\r\n", "\n", StringComparison.Ordinal).TrimEnd() + "\n", ct);
-        if (!OperatingSystem.IsWindows()) File.SetUnixFileMode(trial, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+        await ProvisionTargets.WriteKeyAsync(trial, privateKey, ct);
         var target = new SshTarget(endpoint.SshHost, endpoint.SshPort, "root", trial, Path.Combine(keyDir, "known_hosts"));
 
         try

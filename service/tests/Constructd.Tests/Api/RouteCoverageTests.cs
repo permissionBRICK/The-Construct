@@ -118,6 +118,7 @@ public class RouteCoverageTests
         "GET /api/v1/host/lan-access",
         "PUT /api/v1/host/lan-access",
         "POST /api/v1/vms/{name}/adopt",
+        "PUT /api/v1/vms/{name}/old-client-key",
         "GET /api/v1/host/capacity",
         "GET /api/v1/host/capabilities",
         "GET /api/v1/host/config",
