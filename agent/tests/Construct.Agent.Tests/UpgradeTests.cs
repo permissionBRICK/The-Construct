@@ -996,15 +996,18 @@ public sealed class UpgradeTests
     /// An old host the user administers with one VM of theirs ("far"), which the engine there reaches only as root with the old
     /// client's key (the old provisioning removed the bootstrap key from the seed user), and the PC's old install pointing at it.
     /// </summary>
-    private static async Task<(UpgradeRig Rig, EngineHost Remote, OldUntilStaged Old, OldHostGuest Guest)> OldHostWithVmAsync(VmState state = VmState.Running)
+    private static async Task<(UpgradeRig Rig, EngineHost Remote, OldUntilStaged Old, OldHostGuest Guest)> OldHostWithVmAsync(VmState state = VmState.Running,
+        bool movedByItsAdmin = false)
     {
         var old = new OldUntilStaged();
         var guest = new OldHostGuest();
         var remote = new EngineHost(services =>
         {
-            services.AddSingleton<Microsoft.AspNetCore.Hosting.IStartupFilter>(old);
+            // Moved by its admin before this device: the new engine from the start, its old guests still locked to the old key.
+            if (!movedByItsAdmin) services.AddSingleton<Microsoft.AspNetCore.Hosting.IStartupFilter>(old);
             services.AddSingleton<ISshRunner>(guest);
-        }).AddSource(OldUntilStaged.NewCommit);
+        });
+        remote = movedByItsAdmin ? remote.WithSource() : remote.AddSource(OldUntilStaged.NewCommit);
         var remoteToken = await remote.AddUserAsync("alice", Role.Admin);
         await remote.Services.GetRequiredService<IVmRepository>().AddAsync(new Vm("far", "alice", 2, 4, 50, DateTimeOffset.UtcNow.AddDays(-30),
             state, null, null, IdlePolicy.Disabled, Vm.NoForwards, TokenKind: VmTokenKind.Primary), 10, CancellationToken.None);
@@ -1035,6 +1038,24 @@ public sealed class UpgradeTests
         await rig.EngineStepAsync();
         await rig.SetupAsync();
         return (rig, remote, old, guest);
+    }
+
+    [Fact]
+    public async Task The_VMs_on_a_host_its_admin_moved_earlier_get_the_old_clients_key_and_are_reprovisioned_too()
+    {
+        // A user of someone else's host: its admin moved it, so this device moves no host, but its VMs there still
+        // admit only the old client's key and have no settings on the engine.
+        var (rig, remote, _, guest) = await OldHostWithVmAsync(movedByItsAdmin: true);
+        using var _ = remote;
+        await using var __ = rig;
+        var slug = LegacyState.Slug(remote.Url);
+
+        var view = await rig.ConvertAsync();
+
+        Assert.Equal(("done", "On the new version"), Row(view, "host-reprovision:" + slug));
+        Assert.Equal(1, guest.Inner.Provisions);
+        Assert.True(File.Exists(Constructd.Api.Jobs.ProvisionTargets.AdoptedKeyPath(remote.Services.GetRequiredService<ConstructdOptions>(), "far")));
+        Assert.Equal("converted", view["stage"]!.GetValue<string>());
     }
 
     [Fact]

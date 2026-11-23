@@ -286,8 +286,9 @@ public sealed class LegacyConverter(DeviceAgent agent, IDeviceEngines engines, D
         }, running: "Updating");
 
     /// <summary>
-    /// R5: the user's VMs on each host moved to the new version (in this run or an earlier one), reprovisioned one after the
-    /// other and waited for, as the adopted VMs are; the row shows the running job and fails when one of them does. The old
+    /// R5: the user's VMs on each host on the new version (moved by this device, in this run or an earlier one, or already
+    /// moved by its admin), reprovisioned one after the other and waited for, as the adopted VMs are; the row shows the
+    /// running job and fails when one of them does. A host still on the old stack, or not reached, is left out. The old
     /// host never dialled its guests (the old client on the PC provisioned them as root with its own key per VM), so the
     /// engine there reaches none of them until it has that key: it goes to the engine first, for each VM the old client
     /// here knows, with the old client's settings for it. A VM done is remembered on its own, so Move over again redoes only
@@ -295,8 +296,12 @@ public sealed class LegacyConverter(DeviceAgent agent, IDeviceEngines engines, D
     /// </summary>
     private async Task HostVmsAsync(LegacyState legacy, IReadOnlyList<LegacyInstance> instances, CancellationToken ct)
     {
-        foreach (var host in legacy.Hosts().Where(h => _done.Contains("host-update:" + h.Slug)))
+        foreach (var host in legacy.Hosts())
         {
+            // Its admin may have moved it before this device came along: its VMs of this user need the old key just the same.
+            if (!_done.Contains("host-update:" + host.Slug) &&
+                (agent.EngineIdFor(host.Url) is not { } known || await agent.RunsOldStackAsync(known, ct).ConfigureAwait(false) != false))
+                continue;
             var id = "host-reprovision:" + host.Slug;
             var label = $"VMs on {new Uri(host.Url).Host} on the new version";
             await ItemAsync(id, label, async () =>
