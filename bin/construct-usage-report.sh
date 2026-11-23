@@ -31,6 +31,43 @@ cfg_resolve() {
   saved="$(cfg_saved "${key}")"
   printf '%s' "${saved:-${fallback}}"
 }
+# The installed coding agents and their versions ride along (the host shows them per VM): a JSON array in $1.
+# The first semver anywhere in --version's output, as the old panel's probe reads it.
+collect_agents() {
+  local out="$1" tool command version signin
+  printf '[]' >"${out}"
+  # The Antigravity CLI's command is agy; the host knows it as antigravity.
+  for tool in claude codex opencode antigravity t3; do
+    command="${tool}"
+    [[ "${tool}" != antigravity ]] || command=agy
+    command -v "${command}" >/dev/null 2>&1 || continue
+    version="$(timeout 20 "${command}" --version 2>&1 </dev/null | grep -oE '[0-9]+[.][0-9]+[.][0-9]+([-.+][0-9A-Za-z.+-]+)?' | head -1 | cut -c1-60 || true)"
+    [[ -n "${version}" ]] || continue
+    jq --arg t "${tool}" --arg v "${version}" '. + [{tool: $t, version: $v}]' "${out}" >"${out}.next" && mv "${out}.next" "${out}"
+  done
+  # Whether each is signed in, by the sign-in script's checks (an agent it could not check is left out).
+  signin="${SCRIPT_DIR}/lib/construct-agent-sign-in.py"
+  [[ -f "${signin}" ]] || signin="${SCRIPT_DIR}/construct-agent-sign-in.py"
+  if [[ -f "${signin}" ]] && timeout 120 python3 "${signin}" --status >"${out}.signed-in" 2>/dev/null &&
+    jq -e 'type == "object"' "${out}.signed-in" >/dev/null 2>&1; then
+    jq --slurpfile s "${out}.signed-in" 'map(. + (if ($s[0][.tool] | type) == "boolean" then {signedIn: $s[0][.tool]} else {} end))' \
+      "${out}" >"${out}.next" && mv "${out}.next" "${out}"
+  fi
+  rm -f -- "${out}.signed-in"
+}
+
+# --agents: only the agent report, printed instead of sent. The engine reads it at the end of a provision, reinstall or
+# restore, so the sign-in states are right the moment the job ends; no token usage is collected or sent.
+if [[ "${1:-}" == --agents ]]; then
+  command -v jq >/dev/null 2>&1 || { log "jq is unavailable"; exit 1; }
+  umask 077
+  agents_work="$(mktemp -d)" || exit 1
+  trap 'rm -r -- "${agents_work}"' EXIT
+  collect_agents "${agents_work}/agents.json"
+  jq -c . "${agents_work}/agents.json"
+  exit 0
+fi
+
 SERVICE_URL="$(cfg_resolve "${CONSTRUCT_SERVICE_URL:-}" CONSTRUCT_SERVICE_URL "")"
 SERVICE_URL="${SERVICE_URL%/}"
 INSTANCE_NAME="$(cfg_resolve "${CONSTRUCT_INSTANCE_NAME:-}" CONSTRUCT_INSTANCE_NAME \
@@ -80,8 +117,9 @@ for report in daily monthly; do
     mv "${work}/next.json" "${work}/days.json"
   done
 done
-jq -e 'length > 0' "${work}/days.json" >/dev/null || exit 0
-jq '{generatedAt: (now | todate), days: .}' "${work}/days.json" >"${work}/request.json" || exit 0
+collect_agents "${work}/agents.json"
+jq -e 'length > 0' "${work}/days.json" >/dev/null || jq -e 'length > 0' "${work}/agents.json" >/dev/null || exit 0
+jq --slurpfile agents "${work}/agents.json" '{generatedAt: (now | todate), days: ., agents: $agents[0]}' "${work}/days.json" >"${work}/request.json" || exit 0
 token="$(head -n 1 "${VM_TOKEN_FILE}" 2>/dev/null | tr -d '\r\n' || true)"
 [[ -n "${token}" ]] || { log "no usable VM token; not reporting usage"; exit 0; }
 ( umask 077; printf 'Authorization: %s %s\n' "${AUTH_SCHEME}" "${token}" >"${work}/headers" )

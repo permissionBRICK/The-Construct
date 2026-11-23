@@ -148,7 +148,7 @@ mechanism was never wired into any agent and has been removed.)
 
 Optional on either form:
 
-- `"agents"`: subset of `["claude", "claude-code", "codex", "opencode"]` — only
+- `"agents"`: subset of `["claude", "claude-code", "codex", "opencode", "antigravity"]` — only
   configure the server into those agents (default: all). List the same `name`
   twice with different `agents` to give an agent a different config.
 - `"enabled"`: set `false` to add the server **flagged disabled** (default
@@ -223,6 +223,10 @@ Behaviour:
 - **Environment** — runs as root with `config.env` sourced and the merged `AGENT_*`
   vars derived from `generated.json`, so `WORKSPACE_ROOT`, `AGENT_PROJECTS`,
   `AGENT_REPOS_JSON` (valid JSON), `AGENT_SDKS_JSON`, etc. are available.
+- **Python** — `python3` is the distro's. A profile that requests a Python version in
+  `sdks.python` gets the newest one it requested as `python3` and `python` in its own
+  commands; other profiles and agent shells reach it as `python3.X`. When that version
+  failed to install, the runner warns and the commands use the distro's `python3`.
 
 Keep dependent commands in the same profile. Declare shared system packages in
 `hostPackages` where applicable, so they are installed before parallel commands.
@@ -260,6 +264,8 @@ carries them over. A forward that should come back is declared in a profile:
 |---|---|
 | `port` | The port inside the VM, 1–65535 (required). |
 | `label` | Optional; shown in `construct expose --list` and the Construct client. |
+| `purpose` | Optional: what the forward is for, in a few words (`construct expose --purpose`). |
+| `source` | Optional: where the service lives, e.g. its repo path (`--source`). Without it the forward's source is this profile's file, `/opt/construct/projects/<profile>.json`, which asks for it again on every provision. |
 | `to` | `client` (default): a tunnel to the user's PC. `host`: a port on the host's LAN address, subject to the host service's host-forward permission. |
 | `https` | Optional, `true`: an [HTTPS forward](https-forwards.md) with the host's certificate. It is a host forward, so `to` is `host` or left out. |
 | `upstreamTls` | **Required** with `https`, not allowed without: `false` when the port serves plain HTTP (`--upstream-plain`), `true` when it speaks TLS itself (`--upstream-tls`). The host connects exactly that way and never guesses. |

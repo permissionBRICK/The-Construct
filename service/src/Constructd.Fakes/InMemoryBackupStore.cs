@@ -37,8 +37,8 @@ public sealed class InMemoryBackupStore : IBackupStore
     public Task<bool> CompleteAsync(string id, DateTimeOffset completedAt, long sizeBytes, string sha256, DateTimeOffset? pinnedUntil, CancellationToken ct) =>
         Update(id, b => b.IsOpen ? b with { State = BackupStates.Complete, CompletedAt = completedAt, SizeBytes = sizeBytes, Sha256 = sha256, PinnedUntil = pinnedUntil } : null);
 
-    public Task<bool> UnpinAsync(string id, CancellationToken ct) =>
-        Update(id, b => b.IsComplete ? b with { PinnedUntil = null } : null);
+    public Task<bool> SetPinAsync(string id, DateTimeOffset? pinnedUntil, CancellationToken ct) =>
+        Update(id, b => b.IsComplete ? b with { PinnedUntil = pinnedUntil } : null);
 
     public Task<bool> DeleteAsync(string id, CancellationToken ct)
     { lock (_gate) return Task.FromResult(_backups.Remove(id)); }

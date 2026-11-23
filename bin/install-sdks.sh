@@ -10,7 +10,14 @@
 #                PATH, so one version has to win; the highest builds the projects that
 #                pinned an older major, the reverse broke them (the generator warns when
 #                profiles disagree on the major).
-#   - python  -> python3 + venv + pip (version is best-effort)
+#   - python  -> EVERY requested minor version side by side, like .NET: the distro's own
+#                python3 (+ venv, pip) from Ubuntu, any other minor version from the
+#                deadsnakes PPA (python3.X + python3.X-venv). `python3` stays the distro's
+#                /usr/bin/python3 for every shell; a requested version is `python3.X`. Only
+#                the requesting profile's provisionCommands get it as `python3`
+#                (run-provision-commands.sh). A request names a minor version ("3.14"); "3"
+#                is the distro's. The python3 link earlier versions made at
+#                /usr/local/bin/python3 is removed.
 #   - dotnet  -> .NET SDKs via Microsoft's dotnet-install.sh, EVERY requested
 #                channel/version: SDKs are side-by-side by design in one install dir,
 #                and `dotnet` picks per project (global.json, else latest). A project
@@ -85,29 +92,8 @@ all_vers() {
   ' "${GENERATED_JSON}"
 }
 
-# Another apt run (unattended-upgrades, a parallel project group) may hold apt's locks.
-# DPkg::Lock::Timeout makes apt-get wait for the dpkg lock, but `apt-get update` does not
-# apply it to the package-list lock, so a run that fails on a held lock is retried until
-# the same timeout has passed. Its error output is shown once the attempt has ended. apt runs
-# in the C locale so that the lock error is recognized whatever language the caller uses.
-APT_LOCK_TIMEOUT="${APT_LOCK_TIMEOUT:-900}"
-APT_LOCK_RETRY_SECONDS="${APT_LOCK_RETRY_SECONDS:-5}"
-apt_get() {
-  local deadline=$((SECONDS + APT_LOCK_TIMEOUT)) errors rc
-  errors="$(mktemp)"
-  while :; do
-    rc=0
-    LC_ALL=C apt-get -o DPkg::Lock::Timeout="${APT_LOCK_TIMEOUT}" "$@" 2>"${errors}" || rc=$?
-    cat "${errors}" >&2
-    if (( rc != 0 )) && grep -q 'Could not get lock' "${errors}" && (( SECONDS < deadline )); then
-      note "apt is busy (another apt run holds its lock); retrying in ${APT_LOCK_RETRY_SECONDS} s"
-      sleep "${APT_LOCK_RETRY_SECONDS}"
-      continue
-    fi
-    rm -f "${errors}"
-    return "${rc}"
-  done
-}
+# apt-get that waits out apt's locks (another apt run, Ubuntu's apt-daily timer).
+. "$(dirname "${BASH_SOURCE[0]}")/apt-wait.sh"
 
 install_node() {
   local ver="$1" major
@@ -122,11 +108,82 @@ install_node() {
   apt_get install -y nodejs
 }
 
+SYSTEM_PYTHON="${SYSTEM_PYTHON:-/usr/bin/python3}"
+# Where the Debian packages (Ubuntu's and deadsnakes') put their python3.X.
+PYTHON_BIN_DIR="${PYTHON_BIN_DIR:-/usr/bin}"
+# Earlier versions pointed python3 at the newest requested version for every shell here.
+PYTHON_DEFAULT_LINK="${PYTHON_DEFAULT_LINK:-/usr/local/bin/python3}"
+PYTHON_PPA="${PYTHON_PPA:-ppa:deadsnakes/ppa}"
+APT_SOURCES_DIR="${APT_SOURCES_DIR:-/etc/apt/sources.list.d}"
+
+deb_installed() { [[ "$(dpkg-query -W -f='${Status}' "$1" 2>/dev/null)" == "install ok installed" ]]; }
+# Whether the configured repositories (a mirror included) offer a package.
+apt_offers() { local c; c="$(LC_ALL=C apt-cache policy "$1" 2>/dev/null | sed -n 's/^ *Candidate: *//p' | head -1)"; [[ -n "${c}" && "${c}" != "(none)" ]]; }
+# A link at PYTHON_DEFAULT_LINK to a packaged interpreter (PYTHON_BIN_DIR/python3.X) is
+# Construct's; anything else there was put by someone else and stays.
+python_link_ours() {
+  local target
+  [[ -L "${PYTHON_DEFAULT_LINK}" ]] || return 1
+  target="$(readlink "${PYTHON_DEFAULT_LINK}")"
+  [[ "${target%/*}" == "${PYTHON_BIN_DIR}" && "${target##*/}" =~ ^python3\.[0-9]+$ ]]
+}
+
+# python3 is the distro's for every shell: remove the link earlier versions made.
+remove_old_python_link() {
+  if python_link_ours; then
+    rm -f "${PYTHON_DEFAULT_LINK}"
+    ok "Removed Construct's old link ${PYTHON_DEFAULT_LINK}; python3 is the distro's again"
+    note "A venv made through it (home = ${PYTHON_DEFAULT_LINK%/*} in pyvenv.cfg) no longer starts; make it again"
+  elif [[ -e "${PYTHON_DEFAULT_LINK}" || -L "${PYTHON_DEFAULT_LINK}" ]]; then
+    warn "${PYTHON_DEFAULT_LINK} was not made by Construct; leaving it, so python3 in shells is not the distro's"
+  fi
+}
+
 install_python() {
-  local ver="${1:-3}"
-  step "Installing Python 3 toolchain (requested: ${ver})"
-  apt_get update
-  apt_get install -y python3 python3-venv python3-pip
+  local requested=("$@") distro v p minor seen=" " others="" missing=() extra=() updated=false need_ppa=false
+  [[ ${#requested[@]} -gt 0 ]] || requested=(3)
+  step "Installing Python (requested: ${requested[*]})"
+  for p in python3 python3-venv python3-pip; do deb_installed "${p}" || missing+=("${p}"); done
+  if [[ ${#missing[@]} -gt 0 ]]; then
+    apt_get update
+    updated=true
+    apt_get install -y "${missing[@]}"
+  fi
+  distro="$("${SYSTEM_PYTHON}" -c 'import sys; print("%d.%d" % sys.version_info[:2])')"
+  for v in "${requested[@]}"; do
+    if [[ ! "${v}" =~ ^3(\.([0-9]+))?(\.[0-9]+)?$ ]]; then
+      warn "Python ${v} is not a Python 3 version; skipped"
+      continue
+    fi
+    minor="${BASH_REMATCH[2]:+3.${BASH_REMATCH[2]}}"
+    minor="${minor:-${distro}}"
+    [[ -z "${BASH_REMATCH[3]}" ]] || warn "Python ${v}: patch versions are not pinned; the newest ${minor}.x is installed"
+    [[ "${seen}" != *" ${minor} "* ]] || continue
+    seen+="${minor} "
+    [[ "${minor}" == "${distro}" ]] || others+=" python${minor}"
+    # The distro's own version is the python3 packages above. Any other one needs both its
+    # interpreter and its venv package (without it, `python3 -m venv` cannot set up pip).
+    local before=${#extra[@]}
+    if [[ "${minor}" != "${distro}" ]]; then
+      for p in "python${minor}" "python${minor}-venv"; do deb_installed "${p}" || extra+=("${p}"); done
+    fi
+    (( ${#extra[@]} > before )) || note "Python ${minor} already installed"
+  done
+  if [[ ${#extra[@]} -gt 0 ]]; then
+    [[ "${updated}" == true ]] || apt_get update
+    # A configured repository (a mirror) may offer them already; the PPA only for what it does not.
+    for p in "${extra[@]}"; do apt_offers "${p}" || need_ppa=true; done
+    if [[ "${need_ppa}" == true ]] && ! grep -rqs deadsnakes "${APT_SOURCES_DIR}"; then
+      if ! command -v add-apt-repository >/dev/null 2>&1; then
+        apt_get install -y software-properties-common
+      fi
+      # --no-update: the update below waits for apt's locks, add-apt-repository's own does not.
+      LC_ALL=C add-apt-repository -y -n "${PYTHON_PPA}"
+      apt_get update
+    fi
+    apt_get install -y "${extra[@]}"
+  fi
+  ok "python3 is the distro's Python ${distro}${others:+; also installed:${others}}"
 }
 
 install_dotnet() {
@@ -173,9 +230,10 @@ EOF
 installed_any=false
 failed=0
 run_runtime() {
-  local title="$1" fn="$2" ver="$3" rc
+  local title="$1" fn="$2" rc
+  shift 2
   set +e
-  ( set -e; "${fn}" "${ver}" )
+  ( set -e; "${fn}" "$@" )
   rc=$?
   set -e
   if [[ "${rc}" -ne 0 ]]; then
@@ -190,8 +248,12 @@ if want node; then
 fi
 if want python; then
   installed_any=true
-  run_runtime "Python runtime installation" install_python "$(pick_ver python)"
+  # Side by side as well: every requested version; python3 stays the distro's.
+  mapfile -t python_requested < <(all_vers python)
+  run_runtime "Python runtime installation" install_python ${python_requested[@]+"${python_requested[@]}"}
 fi
+# Also when no profile asks for Python any more.
+run_runtime "Removing the old python3 link" remove_old_python_link
 if want dotnet; then
   installed_any=true
   # Side-by-side: every requested SDK, so a project whose global.json pins an older

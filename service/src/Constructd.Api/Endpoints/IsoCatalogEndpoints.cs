@@ -1,4 +1,5 @@
 using Constructd.Api.Auth;
+using Constructd.Api.Contracts;
 using Constructd.Core.Abstractions;
 using Constructd.Core.Configuration;
 using Constructd.Windows.Iso;
@@ -9,7 +10,7 @@ public static class IsoCatalogEndpoints
 {
     public static RouteGroupBuilder MapIsoCatalogEndpoints(this RouteGroupBuilder group)
     {
-        group.MapGet("/host/iso-catalog", Read).RequireAuthorization(Policies.Admin);
+        group.MapGet("/host/iso-catalog", Read).RequireAuthorization(Policies.Admin).Produces<IsoCatalogResponse>().WithName("HostIsoCatalog");
         return group;
     }
 
@@ -30,14 +31,11 @@ public static class IsoCatalogEndpoints
         var present = sourceFile is not null && files.FileExists(sourceFile);
         var entries = catalog.List();
         var current = entries.FirstOrDefault(e => e.IsCurrent && e.SizeBytes > 0);
-        return Results.Ok(new
-        {
-            mode = iso.Mode,
-            source = new { path, url, sha256Configured = !string.IsNullOrWhiteSpace(iso.Sha256), present,
-                sizeBytes = present ? (long?)files.FileLength(sourceFile!) : null },
-            current = current is null ? null : new { current.FileName, current.SizeBytes, current.Sidecar?.BuiltAt,
-                current.Sidecar?.SourceSha256, current.Sidecar?.BootstrapKeyFingerprint, current.Sidecar?.HostnameSource },
-            entries = entries.Select(e => new { e.FileName, e.SizeBytes, e.IsCurrent, e.Sidecar?.BuiltAt, sidecarReadable = e.Sidecar is not null })
-        });
+        return Results.Ok(new IsoCatalogResponse(
+            iso.Mode,
+            new IsoCatalogSource(path, url, !string.IsNullOrWhiteSpace(iso.Sha256), present, present ? files.FileLength(sourceFile!) : null),
+            current is null ? null : new IsoCatalogCurrent(current.FileName, current.SizeBytes, current.Sidecar?.BuiltAt,
+                current.Sidecar?.SourceSha256, current.Sidecar?.BootstrapKeyFingerprint, current.Sidecar?.HostnameSource),
+            [.. entries.Select(e => new IsoCatalogItem(e.FileName, e.SizeBytes, e.IsCurrent, e.Sidecar?.BuiltAt, e.Sidecar is not null))]));
     }
 }

@@ -160,19 +160,93 @@ public sealed class WslIsoBuilderTests
         Assert.Single(runner.Calls);
     }
 
+    private const string Sums = """
+        0c3e2a3f5b1f1e1c1d1e1f2021222324252627282930313233343536373839aa *ubuntu-24.04.5-desktop-amd64.iso
+        9bfd8a9d1b1e0e0f1a1b1c1d1e1f2021222324252627282930313233343536ab *ubuntu-24.04.5-live-server-amd64.iso
+        """;
+
     [Fact]
-    public async Task Neither_a_source_path_nor_a_url_is_a_configuration_error()
+    public async Task Without_a_configured_source_the_current_24_04_image_is_looked_up_downloaded_and_checked()
     {
-        var (builder, _, _, _) = Builder(o =>
+        var (builder, runner, files, downloader) = Builder(o =>
+        {
+            o.Iso.SourcePath = string.Empty;
+            o.Iso.SourceUrl = string.Empty;
+        });
+        downloader.Texts[new Uri("https://releases.ubuntu.com/24.04/SHA256SUMS")] = Sums;
+        downloader.DownloadedSha256 = "9bfd8a9d1b1e0e0f1a1b1c1d1e1f2021222324252627282930313233343536ab";
+        var older = @"C:\ProgramData\Construct\service\iso\ubuntu-24.04.4-live-server-amd64.iso";
+        files.WithBinary(older);
+        files.WithBinary(@"C:\ProgramData\Construct\service\iso\other-vm-autoinstall.iso");
+
+        await BuildAsync(builder);
+        await BuildAsync(builder, vmName: "other-vm");
+
+        // Downloaded once from the release directory, checked against SHA256SUMS, reused, and an older image goes.
+        var download = Assert.Single(downloader.Downloads);
+        Assert.Equal(new Uri("https://releases.ubuntu.com/24.04/ubuntu-24.04.5-live-server-amd64.iso"), download.Source);
+        Assert.True(files.FileExists(@"C:\ProgramData\Construct\service\iso\ubuntu-24.04.5-live-server-amd64.iso"));
+        Assert.False(files.FileExists(older));
+        Assert.Equal("9bfd8a9d1b1e0e0f1a1b1c1d1e1f2021222324252627282930313233343536ab",
+            files.ReadAllText(@"C:\ProgramData\Construct\service\iso\ubuntu-24.04.5-live-server-amd64.iso.sha256"));
+        Assert.Contains("/mnt/c/ProgramData/Construct/service/iso/ubuntu-24.04.5-live-server-amd64.iso", runner[1].Arguments);
+    }
+
+    [Fact]
+    public async Task A_looked_up_image_that_does_not_match_its_checksum_is_not_used()
+    {
+        var (builder, runner, _, downloader) = Builder(o =>
+        {
+            o.Iso.SourcePath = string.Empty;
+            o.Iso.SourceUrl = string.Empty;
+        });
+        downloader.Texts[new Uri("https://releases.ubuntu.com/24.04/SHA256SUMS")] = Sums;
+        downloader.DownloadedSha256 = "deadbeef";
+
+        var ex = await Assert.ThrowsAsync<IsoBuildException>(() => BuildAsync(builder));
+
+        Assert.Empty(runner.Calls);
+        Assert.Contains("SHA256SUMS", ex.Detail);
+    }
+
+    [Fact]
+    public async Task Offline_the_newest_image_an_earlier_lookup_kept_is_used_and_without_one_the_build_says_what_is_missing()
+    {
+        var (builder, runner, files, _) = Builder(o =>
         {
             o.Iso.SourcePath = string.Empty;
             o.Iso.SourceUrl = string.Empty;
         });
 
         var ex = await Assert.ThrowsAsync<IsoBuildException>(() => BuildAsync(builder));
+        Assert.Contains("releases.ubuntu.com", ex.Detail);
+        Assert.Contains("Constructd:Iso:SourceUrl", ex.Detail);
 
-        Assert.Contains("Constructd:Iso:SourcePath", ex.Detail);
+        // Only an image whose checksum was recorded at its download counts, and that checksum is checked again.
+        const string dir = @"C:\ProgramData\Construct\service\iso\";
+        files.WithBinary(dir + "ubuntu-24.04.3-live-server-amd64.iso", sha256: "aa");
+        files.WriteAllText(dir + "ubuntu-24.04.3-live-server-amd64.iso.sha256", "aa");
+        files.WithBinary(dir + "ubuntu-24.04.10-live-server-amd64.iso", sha256: "bb");
+        files.WriteAllText(dir + "ubuntu-24.04.10-live-server-amd64.iso.sha256", "bb");
+        files.WithBinary(dir + "ubuntu-24.04.11-live-server-amd64.iso", sha256: "cc");
+        await BuildAsync(builder);
+        Assert.Contains("/mnt/c/ProgramData/Construct/service/iso/ubuntu-24.04.10-live-server-amd64.iso", runner[0].Arguments);
+
+        // Changed since its download: refused, not used.
+        files.WithBinary(dir + "ubuntu-24.04.10-live-server-amd64.iso", sha256: "changed");
+        var changed = await Assert.ThrowsAsync<IsoBuildException>(() => BuildAsync(builder, vmName: "other-vm"));
+        Assert.Single(runner.Calls);
+        Assert.Contains("checksum", changed.Detail, StringComparison.OrdinalIgnoreCase);
     }
+
+    [Theory]
+    [InlineData("abc *ubuntu-24.04.5-live-server-amd64.iso", null)]
+    [InlineData("9bfd8a9d1b1e0e0f1a1b1c1d1e1f2021222324252627282930313233343536ab *ubuntu-24.04-live-server-amd64.iso", "ubuntu-24.04-live-server-amd64.iso")]
+    [InlineData("9bfd8a9d1b1e0e0f1a1b1c1d1e1f2021222324252627282930313233343536ab  ubuntu-24.04.6-live-server-amd64.iso\r", "ubuntu-24.04.6-live-server-amd64.iso")]
+    [InlineData("9bfd8a9d1b1e0e0f1a1b1c1d1e1f2021222324252627282930313233343536ab *ubuntu-24.10-live-server-amd64.iso", null)]
+    [InlineData("9bfd8a9d1b1e0e0f1a1b1c1d1e1f2021222324252627282930313233343536ab *ubuntu-24.04.5-live-server-arm64.iso", null)]
+    public void The_release_list_names_the_live_server_image_of_the_line(string sums, string? expected) =>
+        Assert.Equal(expected, UbuntuIsoIndex.Newest(sums)?.FileName);
 
     [Fact]
     public async Task A_failed_build_reports_a_message_that_cannot_carry_the_seed_password()

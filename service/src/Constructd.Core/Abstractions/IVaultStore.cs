@@ -65,3 +65,41 @@ public interface IVaultUnlocks
 {
     void Drop(string vmName);
 }
+
+/// <summary>A key sealed to this engine's host key by a device (plan 8.7): <c>K</c> for a mode switch or a VM unlock.</summary>
+public sealed record VaultKeyGrant(long Epoch, byte[] Sealed)
+{
+    public override string ToString() => $"VaultKeyGrant {{ Epoch = {Epoch} }}";
+}
+
+/// <summary>
+/// The vault of an account in the new stack (plan 9.1, 9.6): <c>secret</c> records in this engine's store, sealed
+/// with <c>D</c>, each carrying today's entry with its payload sealed with <c>K</c>. An account is in the new stack
+/// here once a device granted this engine <c>D</c>; every other user keeps the <see cref="IVaultStore"/> table.
+/// </summary>
+public interface IVaultRecords
+{
+    /// <summary>Whether <paramref name="owner"/>'s vault lives in records on this engine.</summary>
+    bool Hosts(string owner);
+
+    /// <summary>Every account whose vault lives in records here.</summary>
+    IReadOnlyList<string> Owners();
+
+    /// <summary><c>K</c> when a device granted it to this engine (<c>available</c> mode), else null. Callers zero it.</summary>
+    byte[]? GrantedKey(string owner);
+
+    /// <summary>Opens <c>K</c> sealed to this engine's host key; throws a <see cref="System.Security.Cryptography.CryptographicException"/> otherwise.</summary>
+    byte[] OpenKey(string owner, VaultKeyGrant grant);
+
+    /// <summary><c>available</c> keeps <paramref name="grant"/> (<c>K</c> sealed to the host key), <c>locked</c> withdraws <c>K</c>.</summary>
+    void SetMode(string owner, bool available, VaultKeyGrant? grant);
+
+    /// <summary>Every <c>secret</c> record, tombstones included, with its revision and provenance.</summary>
+    Task<IReadOnlyList<VaultEntry>> ListAsync(string owner, CancellationToken ct);
+
+    /// <summary>
+    /// Writes one entry (a tombstone when <see cref="VaultEntry.Deleted"/>) on <paramref name="baseRevision"/>;
+    /// false when the base was stale: the caller re-reads and re-applies its one change (9.6).
+    /// </summary>
+    Task<bool> WriteAsync(string owner, VaultEntry entry, long baseRevision, VaultProvenance provenance, IReadOnlyList<string> origins, CancellationToken ct);
+}

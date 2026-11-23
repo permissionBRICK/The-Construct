@@ -1,0 +1,142 @@
+using Constructd.Api.Infrastructure;
+using Constructd.Core.Domain;
+
+namespace Constructd.Api.Contracts;
+
+/// <summary>
+/// The secrets a provision run needs, kept in the job's RAM bag only (design 7.1, 7.4): never stored,
+/// never in a log, a progress line or an argument. A retried job is sent them again.
+/// </summary>
+/// <param name="VmTokenB64"><c>CONSTRUCT_VM_TOKEN_B64</c>: only for a run that installs a new VM token.</param>
+/// <param name="GitCloneCredentialsB64"><c>GIT_CLONE_CREDENTIALS_B64</c>: verified clone credentials.</param>
+/// <param name="ServeWebTokenB64"><c>VSCODE_SERVE_WEB_TOKEN_B64</c>: a saved serve-web token to keep.</param>
+/// <param name="SudoPassword">The connecting user's sudo password, when that user is not root and sudo asks for one.</param>
+/// <param name="BackupKey">A <c>restore</c> job's backup key <c>E</c> (<c>AGE-SECRET-KEY-1…</c>), unwrapped by a device.</param>
+public sealed record ProvisionSecretsRequest(
+    [property: ConstructSecret] string? VmTokenB64 = null,
+    [property: ConstructSecret] string? GitCloneCredentialsB64 = null,
+    [property: ConstructSecret] string? ServeWebTokenB64 = null,
+    [property: ConstructSecret] string? SudoPassword = null,
+    [property: ConstructSecret] string? BackupKey = null);
+
+/// <summary>
+/// <c>POST /vms/{name}/jobs</c>. <paramref name="Kind"/> is <c>provision</c>, <c>reinstall</c> or <c>restore</c>.
+/// A <c>reinstall</c> backs the VM up to its host, deletes and re-creates it with the settings it had
+/// (<paramref name="FreshImage"/>: with new install media), provisions it with the stored settings and
+/// restores the backup, all without a device. A <c>restore</c> restores the stored backup
+/// <paramref name="BackupId"/> into the running VM; its key comes in <c>secrets.backupKey</c>. <paramref name="RequestId"/>
+/// identifies the click: a repeat returns the job it started. <paramref name="Desired"/> replaces the
+/// VM's stored settings; without it the stored ones are used. <paramref name="Commit"/> pins the
+/// Construct source; the default is the engine's installed commit. <paramref name="DeferProjectCommands"/>
+/// runs the project checkout and commands as a second phase (a run followed by a restore).
+/// </summary>
+public sealed record VmJobRequest(
+    string Kind,
+    string RequestId,
+    string? Commit = null,
+    VmDesiredState? Desired = null,
+    bool? DeferProjectCommands = null,
+    ProvisionSecretsRequest? Secrets = null,
+    string? BackupId = null,
+    bool? FreshImage = null);
+
+/// <summary>The accepted job. <paramref name="Replayed"/> is true when the request id was seen before.</summary>
+public sealed record VmJobAcceptedResponse(string JobId, string Kind, bool Replayed);
+
+/// <summary>
+/// <c>GET /vms/{name}/provision-status</c>: the three facts of design 7.5, each with what it is
+/// computed from.
+/// </summary>
+/// <param name="SettingsChanged">A profile selection or setting changed since the last provision (a yellow dot on Reprovision).</param>
+/// <param name="NewerPayload">The engine would provision a different Construct commit than the guest has (Reprovision becomes Update).</param>
+/// <param name="HardwareChanged">A saved CPU or memory change waits for the next stop and start.</param>
+public sealed record ProvisionStatusResponse(
+    bool SettingsChanged,
+    bool NewerPayload,
+    bool HardwareChanged,
+    string? DesiredHash,
+    string? AvailableCommit,
+    VmAppliedState? Applied,
+    int? PendingCpu,
+    int? PendingRamGb);
+
+/// <summary>
+/// <c>GET</c>/<c>PUT /vms/{name}/desired</c>: the VM's stored settings, which every provision job uses unless its
+/// request carries its own. All fields are null while none are stored. <paramref name="Hash"/> is the value
+/// <c>provision-status</c> compares with what the guest was last provisioned with.
+/// </summary>
+public sealed record VmDesiredStateResponse(VmDesiredState? Desired, string? Hash, DateTimeOffset? UpdatedAt, string? UpdatedBy)
+{
+    public static VmDesiredStateResponse From(StoredDesiredState? stored) =>
+        new(stored?.Desired, stored?.Hash, stored?.UpdatedAt, stored?.UpdatedBy);
+}
+
+/// <summary>
+/// <c>POST /jobs/{id}/retry</c>. Optional: the secrets the job needs again, as on <c>POST /vms/{name}/jobs</c>
+/// (a restore's <c>backupKey</c> is required, the rest as before). <paramref name="BackupId"/>: only for a restore whose
+/// failed job recorded no backup (cut off by a restart before it ran); otherwise the failed job's backup is used.
+/// </summary>
+public sealed record JobRetryRequest(ProvisionSecretsRequest? Secrets = null, string? BackupId = null);
+
+/// <summary>
+/// One coding agent of a VM. <paramref name="Latest"/> is the newest release where it is published (null when unknown).
+/// <paramref name="SignedIn"/>: whether the agent is signed in, as the VM last reported it or a sign-in on it found; null
+/// when not known (T3 Code, or a VM that has not said). <paramref name="LostAt"/>: a lost sign-in (S36), when the VM
+/// reported the agent signed out after it was signed in; null when there is none, it was signed in again, or the owner
+/// dismissed it.
+/// </summary>
+public sealed record VmAgentResponse(string Tool, string Name, string Version, string? Latest, bool UpdateAvailable, bool? SignedIn = null,
+    DateTimeOffset? LostAt = null);
+
+/// <summary>
+/// <c>GET /agent-notices</c>: a lost sign-in on one of the caller's own VMs (S36). <paramref name="Agent"/> is the id the
+/// sign-in routes take (<c>claude-code</c>, <c>codex</c>, <c>opencode</c>, <c>antigravity</c>).
+/// </summary>
+public sealed record AgentNoticeResponse(string Vm, string Agent, string Name, DateTimeOffset At);
+
+/// <summary><c>GET /agent-notices</c>: the lost sign-ins on the caller's own VMs, oldest first.</summary>
+public sealed record AgentNoticesResponse(IReadOnlyList<AgentNoticeResponse> Notices);
+
+/// <summary>
+/// <c>GET /vms/{name}/agents</c>: the coding agents the VM last reported (with its token-usage report) and whether a
+/// newer release is out. <paramref name="ReportedAt"/> is null and the list empty while the VM has reported none.
+/// </summary>
+public sealed record VmAgentsResponse(DateTimeOffset? ReportedAt, IReadOnlyList<VmAgentResponse> Agents);
+
+/// <summary>
+/// A coding agent's sign-in on a VM (<c>/vms/{name}/agents/{agent}/sign-in</c>, design 11.8). <paramref name="Text"/> is
+/// what the agent's terminal shows now, whole, as its CLI wrote it (links and codes included), followed by what the
+/// script or the connection said besides; empty once the sign-in ended. <paramref name="Revision"/> counts its changes. <paramref name="State"/>:
+/// <c>running</c> or <c>ended</c>; <paramref name="Outcome"/> after the end: <c>done</c>, <c>failed</c>, <c>stopped</c>
+/// or <c>error</c>. <paramref name="SignedIn"/>: whether the agent is signed in, as the VM checked it at the end.
+/// </summary>
+/// <paramref name="Browser"/>: the last link the CLI opened while it runs (null otherwise), with the loopback port on the
+/// VM it sends the browser back to; a client that forwards that port from its own machine and opens the link signs in
+/// without a pasted code (design 11.8).
+public sealed record AgentSignInResponse(string Id, string Agent, string State, string? Outcome, string Text, long Revision,
+    bool? SignedIn, DateTimeOffset Started, DateTimeOffset? Ended, AgentSignInBrowser? Browser = null)
+{
+    public static AgentSignInResponse From(Constructd.Api.SignIn.AgentSignInSession s) =>
+        new(s.Id, s.Agent, s.Running ? "running" : "ended", s.Outcome, s.Text, s.Revision, s.SignedIn, s.Started, s.Ended,
+            s.Opened is { } opened ? new(opened.Url, opened.Port) : null);
+}
+
+/// <summary>A link a sign-in's CLI opened: <paramref name="Port"/> is the loopback port on the VM it returns to (1024-65535), if any.</summary>
+public sealed record AgentSignInBrowser(string Url, int? Port);
+
+/// <summary>
+/// <c>POST /vms/{name}/agents/{agent}/sign-in</c>, optional. <paramref name="Browser"/>: this client forwards a sign-in's
+/// loopback redirect from its own machine to the VM (a device agent): Codex then uses its browser sign-in instead of the
+/// device code. <paramref name="Provider"/>: <c>openrouter</c> for OpenCode, whose sign-in then asks for an OpenRouter API
+/// key (sent as <c>secret</c>) instead of showing OpenCode's own list.
+/// </summary>
+public sealed record AgentSignInStartRequest(bool? Browser = null, string? Provider = null);
+
+/// <summary>
+/// Input to a sign-in's terminal: <paramref name="Text"/> is typed and followed by Enter (empty: Enter alone),
+/// <paramref name="Key"/> (<c>up</c>, <c>down</c>) is pressed, for a list the sign-in shows, or <paramref name="Secret"/>
+/// (an API key) is typed and followed by Enter once the CLI's prompt no longer echoes, and never shown. One of the three.
+/// <paramref name="Session"/> (required) is the id of the sign-in it is meant for: input for one that is no longer the
+/// VM's latest is refused.
+/// </summary>
+public sealed record AgentSignInInputRequest(string? Text = null, string? Key = null, string? Session = null, string? Secret = null);

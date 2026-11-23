@@ -137,7 +137,10 @@ if [[ "${#project_json_args[@]}" -eq 0 ]]; then
   fi
 fi
 
-jq -s '
+# Each profile's resolved file, in the order of the jq inputs: a forward without a source of its
+# own points at the file that asks for it (the shipped default.json included).
+profile_files_json="$(printf '%s\n' "${project_json_args[@]}" | jq -R . | jq -sc .)"
+jq -s --argjson files "${profile_files_json}" '
   def unique_strings: map(select(type == "string" and length > 0)) | unique;
   # "24" < "26" < "3.12" as strings is meaningless for runtimes; compare numerically,
   # segment by segment, and keep the HIGHEST requested version first — install-sdks.sh
@@ -167,7 +170,8 @@ jq -s '
       # checkout-projects.sh does: explicit "directory", else the repo basename
       # without .git) so the runner can cd into the cloned repo before running it.
       # Empty when the profile declares no repos -> runner falls back to the
-      # workspace root.
+      # workspace root. python lists the Python versions THIS profile requests:
+      # the runner makes the newest one python3 for these commands.
       map(
         .name as $profile
         | (
@@ -176,9 +180,11 @@ jq -s '
             else ($repo.directory // ($repo.url | sub("\\.git$"; "") | sub(".*/"; "")))
             end
         ) as $dir
+        | ((.sdks // {}).python // [] | if type == "array" then . else [.] end | unique_strings) as $python
         | ((.provisionCommands // [])
            | map(select(type == "string" and length > 0))
-           | map({ profile: $profile, dir: $dir, command: . }))
+           | map({ profile: $profile, dir: $dir, command: . }
+                 + (if ($python | length) > 0 then { python: $python } else {} end)))
       )
       | add
     ),
@@ -188,12 +194,14 @@ jq -s '
     # target, same kind and name) is requested once, under the first profile that
     # declared it.
     forwards: (
-      [ .[] | .name as $profile
+      [ to_entries[] | $files[.key] as $file | .value | .name as $profile
         | (.forwards // [])[]
         | select(type == "object" and (.port | type) == "number")
         | (.https == true) as $https
         | { profile: $profile, port: .port, to: (if $https then "host" else (.to // "client") end), label: (.label // "") }
-          + (if $https then { https: true, upstreamTls: (.upstreamTls == true), name: (.name // "") } else {} end) ]
+          + (if $https then { https: true, upstreamTls: (.upstreamTls == true), name: (.name // "") } else {} end)
+          + (if (.purpose | type) == "string" and .purpose != "" then { purpose: .purpose } else {} end)
+          + { source: (if (.source | type) == "string" and .source != "" then .source else $file end) } ]
       | reduce .[] as $f ([]; if any(.[]; .port == $f.port and .to == $f.to
           and (.https // false) == ($f.https // false) and (.name // "") == ($f.name // "")) then . else . + [$f] end)
     ),
@@ -201,17 +209,17 @@ jq -s '
   }
 ' "${project_json_args[@]}" >"${RUNTIME_DIR}/generated.json"
 
-# For the SINGLE-SLOT runtimes (node from the NodeSource apt repo, the system python)
-# only one version can be installed, and profiles disagreeing on the MAJOR get the
-# highest (see merge_sdks) — but silently so is how a reinstall once built everything
-# against the wrong runtime for hours. Name the conflict and who causes it, so the
-# profile asking for the outdated major is found and fixed instead of rediscovered at
-# the next provision. .NET is exempt: install-sdks.sh installs every requested SDK
-# side by side, so disagreeing dotnet majors are not a conflict at all.
+# For the SINGLE-SLOT runtime (node from the NodeSource apt repo) only one version can be
+# installed, and profiles disagreeing on the MAJOR get the highest (see merge_sdks) — but
+# silently so is how a reinstall once built everything against the wrong runtime for
+# hours. Name the conflict and who causes it, so the profile asking for the outdated
+# major is found and fixed instead of rediscovered at the next provision. .NET and Python
+# are exempt: install-sdks.sh installs every requested version side by side, so
+# disagreeing versions are not a conflict at all.
 sdk_conflicts="$(jq -rs '
   [ .[] | .name as $profile
     | ((.sdks // {}) | to_entries[])
-    | select(.key == "node" or .key == "python")
+    | select(.key == "node")
     | { profile: $profile, key: .key,
         versions: ((if (.value | type) == "array" then .value else [.value] end)
                    | map(select(type == "string" and length > 0))) }
@@ -239,9 +247,11 @@ EOF
 if [[ -n "${host_packages}" ]]; then
   if [[ "${ALLOW_HOST_PACKAGES}" == "true" ]]; then
     step "Installing selected host packages: ${host_packages}"
-    apt-get update
+    # apt-get that waits out apt's locks: Ubuntu's apt-daily timer may hold them right after a boot.
+    . "$(dirname "${BASH_SOURCE[0]}")/apt-wait.sh"
+    apt_get update
     # shellcheck disable=SC2086
-    apt-get install -y ${host_packages}
+    apt_get install -y ${host_packages}
   else
     warn "Host packages requested but not installed because ALLOW_HOST_PACKAGES=false: ${host_packages}"
   fi

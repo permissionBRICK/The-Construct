@@ -90,6 +90,12 @@ elif action=='backup-failure':
 elif action=='bad-manifest':(stage/'package.zip').write_text('tampered')
 elif action=='database-mode':
     p=stage/'manifest.json';v=read(p);v['database'].update(minReadableBy=600,breakingMigrations=[600]);write(p,v)
+elif action=='keep-database':
+    h['restoreDatabase']=False;write(root/'handoff.json',h)
+elif action=='check-database-copy':
+    backup=pathlib.Path(read(rp)['backupPath'])
+    assert (backup/'constructd.db').read_text()=='preserved-db'
+    assert (backup/'constructd.db-wal').read_text()=='preserved-wal'
 elif action=='migrate':
     (b/'data/constructd.db').write_text('migrated');(b/'data/constructd.db-wal').unlink(missing_ok=True);(b/'data/constructd.db-shm').write_text('new-shm')
 elif action=='attempt':
@@ -192,6 +198,18 @@ run_update 0
 fixture_action assert rolledBackWithDatabase
 fixture_action check-rollback
 fixture_action check-database
+
+# The one-action update (POST /host/updates/run) writes restoreDatabase=false: a breaking release that
+# fails its health check gets its files back, the migrated database stays, the copy is kept.
+fixture keep-database
+fixture_action database-mode
+fixture_action keep-database
+fail_new=true; migrate=true
+run_update 0
+fixture_action assert rolledBack
+fixture_action check-rollback
+fixture_action check-binary-db
+fixture_action check-database-copy
 
 fixture recovery-failure
 fail_all=true

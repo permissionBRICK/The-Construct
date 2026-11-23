@@ -283,20 +283,24 @@ public sealed class MediaApiTests
     [Fact]
     public async Task Busy_acquire_does_not_block_delete_or_cleanup()
     {
+        // The transfer is held until the finally below, so a call that waited for the acquire would never
+        // return: the bound only turns such a hang into a failure. It is generous on purpose, since the
+        // cleanup alone waits a second for the busy gate and a loaded full run can take seconds more.
+        var Unblocked=TimeSpan.FromSeconds(60);
         using var inner=new FakeMediaTransfer(); var transfer=new BlockingTransfer(inner);
         await using var app=new TestApp(configureServices:services=> {services.AddSingleton<IMediaTransfer>(transfer); services.AddSingleton<IMediaFiles>(new MediaFileStore(inner.Root));});
         using var alice=await app.CreateUserClientAsync("alice"); await Configure(app);
         var item=MediaStorageTests.Item(Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes("alice:busy-key")))[..32]); item=item with {Path=app.Service<IMediaFiles>().PathFor(item.Id),State=MediaState.Transferring,JobId="busy-job"};
         await app.Service<IMediaStore>().AddAsync(item,default); var url=new Uri("https://public.example/media.iso"); inner.Sources[url]=Iso();
         var acquire=app.Service<MediaJobs>().AcquireAsync(item,url,HostAdminDefaults.Media,"alice",new Progress<string>(),default);
-        await transfer.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await transfer.Started.Task.WaitAsync(Unblocked);
         try
         {
-            var conflict=await alice.PostAsJsonAsync(Root+"/uploads",new {name="collision.iso",role="install",sizeBytes=40000,operationKey="busy-key"}).WaitAsync(TimeSpan.FromSeconds(2));
+            var conflict=await alice.PostAsJsonAsync(Root+"/uploads",new {name="collision.iso",role="install",sizeBytes=40000,operationKey="busy-key"}).WaitAsync(Unblocked);
             Assert.Equal(HttpStatusCode.Conflict,conflict.StatusCode);
-            var response=await alice.DeleteAsync(Root+"/"+item.Id).WaitAsync(TimeSpan.FromSeconds(2)); Assert.Equal(HttpStatusCode.Conflict,response.StatusCode);
+            var response=await alice.DeleteAsync(Root+"/"+item.Id).WaitAsync(Unblocked); Assert.Equal(HttpStatusCode.Conflict,response.StatusCode);
             Assert.Equal("media-not-ready",(await response.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("code").GetString());
-            var result=Assert.IsType<MediaCleanupResult>((await app.Service<MediaJobs>().CleanupAsync("system",null,default).WaitAsync(TimeSpan.FromSeconds(3))).Result);
+            var result=Assert.IsType<MediaCleanupResult>((await app.Service<MediaJobs>().CleanupAsync("system",null,default).WaitAsync(Unblocked)).Result);
             Assert.Contains(result.Retained,r=>r.Id==item.Id && r.Reason=="busy");
         }
         finally {transfer.Resume.TrySetResult(); await acquire;}

@@ -45,7 +45,8 @@ chmod +x "${tmp}/bin/systemctl"
 fixture_env=(env -i PATH="${tmp}/bin:${PATH}" SERVICE_CALLS="${tmp}/service-calls"
   CONFIG_FILE="${tmp}/config.env" REPO_DIR="${tmp}/repo"
   PROJECTS_STORE="${tmp}/projects" WORKSPACE_ROOT="${tmp}/workspace"
-  VSCODE_SERVE_WEB_TOKEN_FILE="${tmp}/absent-token" T3CODE_TLS_DIR="${tmp}/absent-tls")
+  VSCODE_SERVE_WEB_TOKEN_FILE="${tmp}/absent-token" T3CODE_TLS_DIR="${tmp}/absent-tls"
+  SSH_HOST_KEY_DIR="${tmp}/absent-ssh")
 
 for auth in true false; do
   "${fixture_env[@]}" EXPORT_HOME="${tmp}/source" INCLUDE_AUTH="${auth}" \
@@ -273,7 +274,7 @@ printf '0::/user.slice/user-0.slice/session-1.scope\n' >"${tmp}/session-cgroup"
 t3_env=(env -i PATH="${tmp}/t3bin:${PATH}" SERVICE_CALLS="${tmp}/stage-calls" CONSTRUCT_CGROUP_FILE="${tmp}/session-cgroup"
   CONFIG_FILE="${tmp}/config.env" REPO_DIR="${tmp}/repo" T3_RESUME_HELPER="${tmp}/no-resume-helper"
   PROJECTS_STORE="${tmp}/projects" WORKSPACE_ROOT="${tmp}/workspace"
-  VSCODE_SERVE_WEB_TOKEN_FILE="${tmp}/absent-token" T3CODE_TLS_DIR="${tmp}/absent-tls"
+  VSCODE_SERVE_WEB_TOKEN_FILE="${tmp}/absent-token" T3CODE_TLS_DIR="${tmp}/absent-tls" SSH_HOST_KEY_DIR="${tmp}/absent-ssh"
   EXPORT_HOME="${live}" INCLUDE_AUTH=true INCLUDE_HISTORY=true)
 
 stage="${tmp}/stage-backup"
@@ -313,6 +314,16 @@ rm -f "${tmp}/stage-calls"
 "${t3_env[@]}" EXPORT_REASON=reinstall STAGE_DIR="${tmp}/stage-reinstall" bash "${ROOT}/bin/export-config.sh" >/dev/null 2>&1
 ok 'reinstall + STAGE_DIR: T3 Code is still stopped and started' \
   test "$(grep -cE '^(stop|start) t3code-serve$' "${tmp}/stage-calls" 2>/dev/null)" = 2
+
+# OpenCode 2 keeps its sign-ins in opencode.db, so a sanitized backup (no auth) leaves
+# the database out like T3 Code's store; OpenCode 1's session files still go along.
+mkdir -p "${live}/.local/share/opencode/storage/session"
+printf '{}\n' >"${live}/.local/share/opencode/storage/session/s1.json"
+"${t3_env[@]}" INCLUDE_AUTH=false EXPORT_REASON=backup STAGE_DIR="${tmp}/stage-noauth" \
+  bash "${ROOT}/bin/export-config.sh" >"${tmp}/stage-noauth.log" 2>&1
+ok 'no auth: the OpenCode database (sessions and sign-ins) is left out' \
+  sh -c "test ! -e '${tmp}/stage-noauth/home/.local/share/opencode/opencode.db' && ! grep -q 'opencode.db' '${tmp}/stage-noauth/MANIFEST.txt'"
+ok 'no auth: OpenCode 1 session files are kept' test -f "${tmp}/stage-noauth/home/.local/share/opencode/storage/session/s1.json"
 
 # Reinstall export from a T3 Code terminal: stopping t3code-serve would end the export with
 # it and leave T3 down, so the server keeps running and its store is an online snapshot.
@@ -366,6 +377,133 @@ rc=0
   STAGE_DIR="${tmp}/stage-failed" EXPORT_REASON=backup bash "${ROOT}/bin/export-config.sh" >/dev/null 2>&1 || rc=$?
 ok 'a failing export with STAGE_DIR fails too' test "${rc}" -ne 0
 ok '... and leaves the STAGE_DIR to its caller' test -d "${tmp}/stage-failed"
+
+# ── SSH host keys: export, restore through the tarball, sshd restarted once ──
+keys="${tmp}/ssh-src"
+mkdir -p "${keys}" "${tmp}/sshbin"
+for t in ed25519 rsa; do
+  printf 'saved %s private\n' "${t}" >"${keys}/ssh_host_${t}_key"
+  printf 'saved %s public\n' "${t}" >"${keys}/ssh_host_${t}_key.pub"
+  chmod 600 "${keys}/ssh_host_${t}_key"
+done
+for auth in true false; do
+  "${fixture_env[@]}" SSH_HOST_KEY_DIR="${keys}" EXPORT_HOME="${tmp}/source" INCLUDE_AUTH="${auth}" \
+    INCLUDE_HISTORY=false OUT="${tmp}/ssh-${auth}.tar.gz" \
+    bash "${ROOT}/bin/export-config.sh" >/dev/null 2>&1
+  tar -tzf "${tmp}/ssh-${auth}.tar.gz" >"${tmp}/ssh-${auth}.members"
+done
+ok 'host keys: auth=true saves every ssh_host_* file' \
+  test "$(grep -c '^\./etc/ssh/ssh_host_' "${tmp}/ssh-true.members")" = 4
+ok 'host keys: auth=false saves none' sh -c "! grep -q 'etc/ssh' '${tmp}/ssh-false.members'"
+
+# The fresh VM: other keys, one type the old VM did not have.
+target="${tmp}/ssh-target"
+mkdir -p "${target}"
+for t in ed25519 ecdsa; do
+  printf 'fresh %s private\n' "${t}" >"${target}/ssh_host_${t}_key"
+  printf 'fresh %s public\n' "${t}" >"${target}/ssh_host_${t}_key.pub"
+done
+printf '#!/usr/bin/env bash\nexit 0\n' >"${tmp}/sshbin/sshd"
+# ssh.service is unknown here, sshd.service restarts (SSHD_UNIT_RC=1: that fails too).
+cat >"${tmp}/sshbin/systemctl" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"${SERVICE_CALLS}"
+case "$*" in
+  "try-restart sshd.service") exit "${SSHD_UNIT_RC:-0}" ;;
+esac
+exit 1
+STUB
+chmod +x "${tmp}/sshbin/sshd" "${tmp}/sshbin/systemctl"
+ssh_restore() { # <tarball> <log>
+  "${fixture_env[@]}" PATH="${tmp}/sshbin:${tmp}/bin:${PATH}" SERVICE_CALLS="${tmp}/ssh-calls" SSHD_UNIT_RC="${SSHD_UNIT_RC:-0}" \
+    SSH_HOST_KEY_DIR="${target}" BACKUP_TGZ="$1" EXPORT_HOME="${tmp}/ssh-home" \
+    bash "${ROOT}/bin/restore-config.sh" >"$2" 2>&1
+}
+rm -f "${tmp}/ssh-calls"
+ssh_restore "${tmp}/ssh-true.tar.gz" "${tmp}/ssh-restore.log"
+ok 'host keys: the saved keys replace the fresh ones' \
+  sh -c "cmp -s '${keys}/ssh_host_ed25519_key' '${target}/ssh_host_ed25519_key' && cmp -s '${keys}/ssh_host_rsa_key.pub' '${target}/ssh_host_rsa_key.pub'"
+ok 'host keys: a key type the backup lacks is removed' test ! -e "${target}/ssh_host_ecdsa_key"
+ok 'host keys: private keys 0600, public keys 0644' \
+  test "$(stat -c '%a' "${target}/ssh_host_rsa_key" "${target}/ssh_host_rsa_key.pub" | tr '\n' ' ')" = '600 644 '
+ok 'host keys: sshd is restarted once' test "$(grep -cx 'try-restart ssh.service' "${tmp}/ssh-calls")" = 1
+
+ok 'host keys: the restart tries sshd.service when ssh.service fails' grep -qx 'try-restart sshd.service' "${tmp}/ssh-calls"
+ok 'host keys: the restore says it restored them' grep -q 'restored SSH host keys' "${tmp}/ssh-restore.log"
+
+rm -f "${tmp}/ssh-calls"
+ssh_restore "${tmp}/ssh-true.tar.gz" "${tmp}/ssh-again.log"
+ok 'host keys: the same keys again restart nothing' sh -c "! grep -q 'try-restart' '${tmp}/ssh-calls' 2>/dev/null"
+
+rm -f "${tmp}/ssh-calls"
+ssh_restore "${tmp}/ssh-false.tar.gz" "${tmp}/ssh-old.log"
+ok 'host keys: a backup without host keys changes none and restarts nothing' \
+  sh -c "cmp -s '${keys}/ssh_host_ed25519_key' '${target}/ssh_host_ed25519_key' && ! grep -q 'try-restart' '${tmp}/ssh-calls' 2>/dev/null"
+
+# sshd cannot be restarted: the keys it runs with are put back, and nothing claims a restore.
+for t in ed25519 ecdsa; do printf 'fresh %s private\n' "${t}" >"${target}/ssh_host_${t}_key"; done
+rm -f "${target}/ssh_host_rsa_key" "${target}/ssh_host_rsa_key.pub"
+rc=0
+SSHD_UNIT_RC=1 ssh_restore "${tmp}/ssh-true.tar.gz" "${tmp}/ssh-norestart.log" || rc=$?
+ok 'host keys: a failed restart does not fail the restore' test "${rc}" = 0
+ok '... the previous keys are back' \
+  sh -c "grep -qx 'fresh ecdsa private' '${target}/ssh_host_ecdsa_key' && test ! -e '${target}/ssh_host_rsa_key'"
+ok '... and no restore is claimed' sh -c "! grep -q 'restored SSH host keys' '${tmp}/ssh-norestart.log'"
+
+# sshd refusing the saved keys: the VM keeps the keys it had, sshd is left alone.
+for t in ed25519 ecdsa; do printf 'fresh %s private\n' "${t}" >"${target}/ssh_host_${t}_key"; done
+rm -f "${target}/ssh_host_rsa_key" "${target}/ssh_host_rsa_key.pub"
+printf '#!/usr/bin/env bash\nexit 1\n' >"${tmp}/sshbin/sshd"
+rm -f "${tmp}/ssh-calls"
+rc=0
+ssh_restore "${tmp}/ssh-true.tar.gz" "${tmp}/ssh-refused.log" || rc=$?
+ok 'host keys: a refused key set does not fail the restore' test "${rc}" = 0
+ok '... the previous keys are back' \
+  sh -c "grep -qx 'fresh ecdsa private' '${target}/ssh_host_ecdsa_key' && grep -qx 'fresh ed25519 private' '${target}/ssh_host_ed25519_key' && test ! -e '${target}/ssh_host_rsa_key'"
+ok '... sshd is not restarted' sh -c "! grep -q 'try-restart' '${tmp}/ssh-calls' 2>/dev/null"
+ok '... and it is reported' grep -q 'sshd refused them' "${tmp}/ssh-refused.log"
+
+# ── Antigravity CLI: rules, config and settings always; chats and sign-in by their switches ──
+ag="${tmp}/ag-source"
+mkdir -p "${ag}/.gemini/config" "${ag}/.gemini/antigravity-cli/conversations" "${ag}/.gemini/antigravity-cli/brain/c1" \
+  "${ag}/.gemini/antigravity-cli/log" "${ag}/.gemini/antigravity-cli/builtin/skills" "${ag}/.config/antigravity"
+printf 'rules\n' >"${ag}/.gemini/AGENTS.md"
+printf '{"mcpServers":{}}\n' >"${ag}/.gemini/config/mcp_config.json"
+printf '{"toolPermission":"always-proceed"}\n' >"${ag}/.gemini/antigravity-cli/settings.json"
+printf 'chat\n' >"${ag}/.gemini/antigravity-cli/conversations/c1.pb"
+printf 'plan\n' >"${ag}/.gemini/antigravity-cli/brain/c1/plan.md"
+printf 'dummy-not-a-credential\n' >"${ag}/.gemini/antigravity-cli/auth.json"
+printf '{}\n' >"${ag}/.config/antigravity/plugin-secrets.json"
+printf 'log\n' >"${ag}/.gemini/antigravity-cli/log/cli.log"
+printf 'skill\n' >"${ag}/.gemini/antigravity-cli/builtin/skills/x.md"
+# T3 Code's own Antigravity home (one per provider instance).
+mkdir -p "${ag}/.t3/userdata/providers/antigravity/h1/antigravity-acp/conversations" "${ag}/.t3/userdata/providers/antigravity/h1/antigravity-acp/log"
+printf 'chat\n' >"${ag}/.t3/userdata/providers/antigravity/h1/antigravity-acp/conversations/t.pb"
+printf 'log\n' >"${ag}/.t3/userdata/providers/antigravity/h1/antigravity-acp/log/x.log"
+python3 -c 'import sqlite3, sys; c = sqlite3.connect(sys.argv[1]); c.execute("CREATE TABLE s(t)"); c.execute("INSERT INTO s VALUES (1)"); c.commit()' \
+  "${ag}/.gemini/antigravity-cli/conversation_summaries.db"
+for mode in all none; do
+  flag=true; [[ "${mode}" == none ]] && flag=false
+  "${fixture_env[@]}" EXPORT_HOME="${ag}" AI_TOOLS=antigravity INCLUDE_AUTH="${flag}" INCLUDE_HISTORY="${flag}" \
+    OUT="${tmp}/ag-${mode}.tar.gz" bash "${ROOT}/bin/export-config.sh" >"${tmp}/ag-${mode}.log" 2>&1
+  tar -tzf "${tmp}/ag-${mode}.tar.gz" >"${tmp}/ag-${mode}.members"
+done
+ok 'antigravity: rules, config and settings are always taken' \
+  sh -c "grep -qxF './home/.gemini/AGENTS.md' '${tmp}/ag-none.members' && grep -qxF './home/.gemini/config/mcp_config.json' '${tmp}/ag-none.members' && grep -qxF './home/.gemini/antigravity-cli/settings.json' '${tmp}/ag-none.members'"
+ok 'antigravity: chats and the summaries database go with history' \
+  sh -c "grep -qxF './home/.gemini/antigravity-cli/conversations/c1.pb' '${tmp}/ag-all.members' && grep -qxF './home/.gemini/antigravity-cli/brain/c1/plan.md' '${tmp}/ag-all.members' && grep -qxF './home/.gemini/antigravity-cli/conversation_summaries.db' '${tmp}/ag-all.members'"
+ok 'antigravity: the sign-in files go with auth' \
+  sh -c "grep -qxF './home/.gemini/antigravity-cli/auth.json' '${tmp}/ag-all.members' && grep -qxF './home/.config/antigravity/plugin-secrets.json' '${tmp}/ag-all.members'"
+ok 'antigravity: without history and auth neither chats nor sign-in are taken' \
+  sh -c "! grep -qE 'conversations|brain|conversation_summaries|auth.json|plugin-secrets' '${tmp}/ag-none.members'"
+ok 'antigravity: logs and the bundled skills are never taken' \
+  sh -c "! grep -qE 'antigravity-cli/(log|builtin)' '${tmp}/ag-all.members'"
+ok "antigravity: T3 Code's own Antigravity home goes with auth, without its logs" \
+  sh -c "grep -qxF './home/.t3/userdata/providers/antigravity/h1/antigravity-acp/conversations/t.pb' '${tmp}/ag-all.members' && ! grep -q 'antigravity-acp/log' '${tmp}/ag-all.members' && ! grep -q 'providers/antigravity' '${tmp}/ag-none.members'"
+"${fixture_env[@]}" BACKUP_TGZ="${tmp}/ag-all.tar.gz" EXPORT_HOME="${tmp}/ag-restored" \
+  bash "${ROOT}/bin/restore-config.sh" >"${tmp}/ag-restore.log" 2>&1
+ok 'antigravity: a restore brings the chats back and says so' \
+  sh -c "cmp -s '${ag}/.gemini/antigravity-cli/conversations/c1.pb' '${tmp}/ag-restored/.gemini/antigravity-cli/conversations/c1.pb' && grep -q 'restored chat history: .gemini/antigravity-cli/conversations' '${tmp}/ag-restore.log'"
 
 printf '\n  export-config fixture tests — %d/%d passed\n\n' "${pass}" "$((pass + fail))"
 [[ "${fail}" -eq 0 ]]

@@ -61,6 +61,19 @@ class Prebuilt(unittest.TestCase):
         else:
             destination.write_bytes(self.archive.read_bytes())
 
+    def test_a_large_download_reports_its_progress_for_the_host_bar(self):
+        out, target = io.StringIO(), io.BytesIO()
+        p.copy_with_progress(io.BytesIO(b'x' * (20 << 20)), target, 20 << 20, out)
+        self.assertEqual(20 << 20, len(target.getvalue()))
+        marks = [int(line.split()[1]) for line in out.getvalue().splitlines()]
+        self.assertTrue(all(line.startswith('::construct-progress ') for line in out.getvalue().splitlines()))
+        self.assertEqual(100, marks[-1])
+        self.assertEqual(sorted(marks), marks)
+        # A small file (a manifest) reports nothing.
+        small = io.StringIO()
+        p.copy_with_progress(io.BytesIO(b'{}'), io.BytesIO(), 2, small)
+        self.assertEqual('', small.getvalue())
+
     def test_install_then_reuse_downloads_only_manifest(self):
         p.install(self.fetch)
         self.assertEqual(2, len(self.calls))

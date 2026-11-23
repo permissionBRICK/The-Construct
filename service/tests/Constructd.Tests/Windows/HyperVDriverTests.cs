@@ -11,10 +11,9 @@ namespace Constructd.Tests.Windows;
 
 /// <summary>
 /// What the Hyper-V driver actually runs. Every operation is asserted twice: the exact
-/// <c>powershell.exe</c> argument vector, and the decoded script — which must go through
-/// <c>drivers\Load-ConstructDriver.ps1</c> and the contract function of <c>docs/drivers.md</c>, never
-/// a raw Hyper-V cmdlet. That is the property that keeps the service and the local install on one
-/// implementation.
+/// <c>powershell.exe</c> argument vector, and the decoded script — which must go through the
+/// driver's own <c>hyperv\HyperV.Driver.ps1</c> from the service package and the contract function of
+/// <c>docs/drivers.md</c>, never a raw Hyper-V cmdlet and never a Construct checkout.
 /// </summary>
 public sealed class HyperVDriverTests
 {
@@ -26,6 +25,15 @@ public sealed class HyperVDriverTests
         await driver.SetNestedAsync("work-vm", false, default);
         Assert.Contains("Get-ConstructVmNested -Name 'work-vm'", Script(runner[0]));
         Assert.Contains("Set-ConstructVmNested -Name 'work-vm' -Enabled $false", Script(runner[1]));
+    }
+    [Theory]
+    [InlineData(true, "$true")]
+    [InlineData(false, "$false")]
+    public async Task Start_with_host_goes_through_the_drivers_own_function(bool enabled, string literal)
+    {
+        var (driver, runner) = Driver(new RecordingProcessRunner().Respond(Ok("null")));
+        await driver.SetStartWithHostAsync("work-vm", enabled, default);
+        Assert.Contains("Set-ConstructVmStartWithHost -Name 'work-vm' -Enabled " + literal, Script(runner[0]), StringComparison.Ordinal);
     }
     [Fact]
     public async Task Cpu_change_uses_the_guarded_shared_driver_contract()
@@ -73,21 +81,38 @@ public sealed class HyperVDriverTests
     }
 
     [Fact]
-    public async Task Every_script_dot_sources_the_shared_lib_and_the_driver_loader()
+    public async Task Every_script_dot_sources_the_drivers_own_script_from_the_service_package()
     {
-        var (driver, runner) = Driver(new RecordingProcessRunner().Respond(Ok("null")));
+        // No checkout configured at all: the driver needs nothing outside the service package.
+        var (driver, runner) = Driver(new RecordingProcessRunner().Respond(Ok("null")), PlatformOptions.Create(o => o.ScriptsDir = ""));
 
         await driver.StopAsync("work-vm", CancellationToken.None);
         var script = Script(runner[0]);
 
-        Assert.Contains(@"'C:\Construct\lib\AgentVm.Common.ps1'", script, StringComparison.Ordinal);
-        Assert.Contains(@"'C:\Construct\drivers\Load-ConstructDriver.ps1'", script, StringComparison.Ordinal);
-        Assert.Contains("-Backend 'hyperv-local'", script, StringComparison.Ordinal);
+        Assert.Contains("$constructDriver = '" + Path.Combine(AppContext.BaseDirectory, "hyperv", "HyperV.Driver.ps1") + "'", script, StringComparison.Ordinal);
+        Assert.Contains(". $constructDriver", script, StringComparison.Ordinal);
+        Assert.DoesNotContain("AgentVm.Common.ps1", script, StringComparison.Ordinal);
+        Assert.DoesNotContain("Load-ConstructDriver", script, StringComparison.Ordinal);
         Assert.Contains("ConvertTo-Json $envelope -Compress", script, StringComparison.Ordinal);
 
         // No raw Hyper-V anywhere: that is the driver's job, on both entry points.
         Assert.DoesNotContain("Get-VM", script, StringComparison.Ordinal);
         Assert.DoesNotContain("New-VM", script, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Facts_come_from_the_drivers_read_only_function()
+    {
+        var (driver, runner) = Driver(new RecordingProcessRunner()
+            .Respond(Ok("""{"Id":"6f2a1c4e-9a43-4f63-8d1e-0c4f1d1b2a33","State":"Running","Cpu":6,"MemoryBytes":17179869184,"DiskBytes":274877906944,"BiosGuid":"{0B9A2D11-1C2B-4F7E-9E5A-2F63A0C1D2E3}"}"""))
+            .Respond(Ok("null")));
+
+        var facts = await driver.GetFactsAsync("work-vm", CancellationToken.None);
+
+        Assert.Contains("$result = Get-ConstructVmFacts -Name 'work-vm'", Script(runner[0]), StringComparison.Ordinal);
+        Assert.Equal(new HypervisorVmFacts("6f2a1c4e-9a43-4f63-8d1e-0c4f1d1b2a33", VmState.Running, 6, 16L << 30, 256L << 30,
+            "{0B9A2D11-1C2B-4F7E-9E5A-2F63A0C1D2E3}"), facts);
+        Assert.Null(await driver.GetFactsAsync("work-vm", CancellationToken.None));
     }
 
     [Fact]
@@ -112,12 +137,24 @@ public sealed class HyperVDriverTests
         Assert.Contains(@"$descriptor['IsoPath'] = 'C:\isos\work-vm-autoinstall.iso'", script, StringComparison.Ordinal);
         Assert.Contains("$descriptor['Nested'] = $true", script, StringComparison.Ordinal);
         Assert.Contains("$descriptor['AutomaticCheckpoints'] = $false", script, StringComparison.Ordinal);
+        // A VM that does not start with the host is created so; the driver's own default would start it.
+        Assert.Contains("$descriptor['AutomaticStartAction'] = 'Nothing'", script, StringComparison.Ordinal);
         Assert.Contains("New-ConstructVm -Descriptor $descriptor", script, StringComparison.Ordinal);
 
         // docs/drivers.md §3.3: New-ConstructVm leaves the VM off, so the caller starts it.
         Assert.True(
             script.IndexOf("New-ConstructVm", StringComparison.Ordinal) <
             script.IndexOf("Start-ConstructVm -Name 'work-vm'", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task Create_of_a_vm_that_starts_with_the_host_brings_it_back_if_it_was_running()
+    {
+        var (driver, runner) = Driver(new RecordingProcessRunner().Respond(Ok("null")));
+
+        await driver.CreateVmAsync(Descriptor with { StartWithHost = true }, progress: null, CancellationToken.None);
+
+        Assert.Contains("$descriptor['AutomaticStartAction'] = 'StartIfRunning'", Script(runner[0]), StringComparison.Ordinal);
     }
 
     [Fact]

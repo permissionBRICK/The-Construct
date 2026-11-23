@@ -13,14 +13,16 @@ internal static class HyperVChildScript
         "vm-incarnation-conflict", "disk-chain-invalid", "vm-identity-ambiguous", "vm-incarnation-changed", "storage-placement-unavailable"];
 
     // Descriptor data travels on stdin, never on argv or in dependency diagnostics.
-    internal static string Build(string scriptsDir, string function, string arguments)
+    // The three files the loader's "-Include ChildVm" used to dot-source, from the service package.
+    internal static string Build(string function, string arguments)
     {
-        var root = ArgumentGuard.WindowsPath(scriptsDir, "ScriptsDir").TrimEnd('\\', '/');
         return $$"""
             $ErrorActionPreference = 'Stop'
             $ProgressPreference = 'SilentlyContinue'
             try {
-                . {{PowerShellLiteral.Quote(root + @"\drivers\Load-ConstructDriver.ps1")}} -Backend 'hyperv-local' -Include ChildVm
+                {{HyperVScripts.DotSource(HyperVScripts.Driver)}}
+                {{HyperVScripts.DotSource(HyperVScripts.ChildVm)}}
+                {{HyperVScripts.DotSource(HyperVScripts.WindowsLicense)}}
                 $inputData = [Console]::In.ReadToEnd() | ConvertFrom-Json
                 $result = {{function}} {{arguments}}
                 $envelope = @{ ok = $true; value = $result }

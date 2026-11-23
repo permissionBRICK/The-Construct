@@ -17,6 +17,7 @@ public static class CapacityComposition
             services.AddSingleton<IHypervisorInventory>(sp => sp.GetRequiredService<FakeHypervisorInventory>());
         }
         else if (options.IsProxmox) services.AddSingleton<IHypervisorInventory, Constructd.Proxmox.ProxmoxInventory>();
+        else if (options.IsExternal) services.AddSingleton<IHypervisorInventory>(sp => sp.GetRequiredService<UnsupportedFeaturePlatform>());
         else services.AddSingleton<IHypervisorInventory, HyperVInventory>();
         if (options.EffectivePersistence == PersistenceMode.Sqlite)
         {

@@ -17,9 +17,9 @@ public static class PrimaryMemoryFloorEndpoints
     public static RouteGroupBuilder MapPrimaryMemoryFloorEndpoints(this RouteGroupBuilder api)
     {
         api.MapGet("/vms/{name}/memory-floor", (string name, HttpContext http, CancellationToken ct) => ReadOrSave(name, null, http, ct))
-            .RequireAuthorization(Policies.User);
+            .RequireAuthorization(Policies.User).Produces<PrimaryMemoryFloor.View>().WithName("GetVmMemoryFloor");
         api.MapPut("/vms/{name}/memory-floor", (string name, Request request, HttpContext http, CancellationToken ct) => ReadOrSave(name, request, http, ct))
-            .RequireAuthorization(Policies.Admin).Audited("vm.memory-floor");
+            .RequireAuthorization(Policies.Admin).Audited("vm.memory-floor").Produces<PrimaryMemoryFloor.View>().WithName("SetVmMemoryFloor");
         return api;
     }
 

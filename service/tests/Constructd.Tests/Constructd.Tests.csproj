@@ -23,6 +23,10 @@
     <ProjectReference Include="..\..\src\Constructd.Fakes\Constructd.Fakes.csproj" />
     <ProjectReference Include="..\..\src\Constructd.Windows\Constructd.Windows.csproj" />
     <ProjectReference Include="..\..\src\Constructd.Proxmox\Constructd.Proxmox.csproj" />
+    <ProjectReference Include="..\..\src\Constructd.Client\Constructd.Client.csproj" />
+    <ProjectReference Include="..\..\src\Constructd.Store\Constructd.Store.csproj" />
+    <ProjectReference Include="..\..\src\Constructd.Sync\Constructd.Sync.csproj" />
+    <ProjectReference Include="..\..\src\Construct.Keys\Construct.Keys.csproj" />
   </ItemGroup>
 
   <ItemGroup>
@@ -31,6 +35,7 @@
 
   <ItemGroup><None Update="Foundation/PreFeatureSchema.sql" CopyToOutputDirectory="PreserveNewest" /></ItemGroup>
   <ItemGroup><None Update="Windows/synthetic-windows.iso.gz.b64" CopyToOutputDirectory="PreserveNewest" /></ItemGroup>
-  <ItemGroup><Content Include="../../../test/fixtures/companion-parity/hostadmin-config-schema.json" Link="hostadmin-config-schema.json" CopyToOutputDirectory="PreserveNewest" /></ItemGroup>
+  <ItemGroup><None Update="Api/host-wire-shape.txt" CopyToOutputDirectory="PreserveNewest" /></ItemGroup>
+  <ItemGroup><Content Include="Foundation/hostadmin-config-schema.json" Link="hostadmin-config-schema.json" CopyToOutputDirectory="PreserveNewest" /></ItemGroup>
   <ItemGroup><Content Include="../../../test/fixtures/vault-patterns.json" Link="Vault/vault-patterns.json" CopyToOutputDirectory="PreserveNewest" /></ItemGroup>
 </Project>

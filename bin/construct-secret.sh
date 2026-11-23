@@ -33,6 +33,7 @@
 #                            [--file PATH] [--replace] [--auto-approve]
 #   construct secret delete  <name> [--reason TEXT]
 #   construct secret auto-approve <name> on|off [--reason TEXT]
+#   construct secret ask     <name> --description TEXT [--reason TEXT]   (hosted only)
 #   (every command also takes --wait SEC; aliases: ls, relinquish, rm)
 #
 # Exit codes (documented in bin/construct's header too):
@@ -107,6 +108,7 @@ Usage: construct secret list   [--json]
                                 [--for DURATION] [--file PATH] [--replace] [--auto-approve]
        construct secret delete  <name> [--reason TEXT]
        construct secret auto-approve <name> on|off [--reason TEXT]
+       construct secret ask     <name> --description TEXT [--reason TEXT]
 Every command also takes --wait SEC.
 
 The key vault lives in the Construct Companion on the user's PC. This VM sees a
@@ -134,6 +136,13 @@ Commands:
   auto-approve       on: ask the user to auto-approve a secret (agents on all
                      their VMs then read it without asking, and no VM is
                      scrubbed of it). off: require approval again, at once.
+  ask                Ask the user to enter a secret the vault does not hold
+                     yet (an account, a token only they have). Answers at
+                     once; the user pastes the value on one of their devices.
+                     Until then `list` shows the name as "requested"; once it
+                     exists, request it like any secret. The request lapses
+                     after a day. Only on a VM of a host service whose vault
+                     the user's devices keep.
 
 Options:
   --uses N             request: the lease ends after N gets (1-1000)
@@ -145,7 +154,7 @@ Options:
   --username           get: print the username instead of the value
   --json               get: print {"name","username","secret"} on one line;
                        list/status: the raw items array
-  --description TEXT   add: what the secret is (required)
+  --description TEXT   add/ask: what the secret is (required)
   --username USER      add: a username stored with the secret
   --file PATH          add: read the value from PATH ("-" = stdin, byte-exact)
   --replace            add: overwrite an existing secret (the user must approve)
@@ -171,6 +180,10 @@ How to use it (agents):
     decision.
   * Secrets that `list` shows as "auto-approved" need no request: get them
     whenever needed. They are never scrubbed.
+  * Need a credential only the user has? Ask for it once, then go on with
+    other work and check `construct secret list` later:
+      construct secret ask jira-token --description "Jira API token for the release notes" --reason "publish v1.4"
+    Never ask the user to paste a secret into the chat.
   * Storing a credential that is not critical (a read-only or test token)?
     Add it with --auto-approve, so later tasks can use it without asking the
     user. Critical credentials (admin logins, full-access deploy keys) never.
@@ -686,7 +699,7 @@ op_items() {
   local -a rows=() names=() access=() descs=()
   local row name has uses expires desc a w_name=4 w_access=6 i
   mapfile -t rows < <(jq -r '(.items // [])[]
-    | [(.name // ""), (if .lease != null then "+" elif .autoApprove == true then "a" else "-" end),
+    | [(.name // ""), (if .requested == true then "r" elif .lease != null then "+" elif .autoApprove == true then "a" else "-" end),
        (.lease.usesLeft // ""), (.lease.expiresAt // ""), (.description // "")]
     | map(tostring | gsub("[[:cntrl:]]"; " ")) | join("\u001f")' "${RESP}" 2>/dev/null || true)
   if (( ${#rows[@]} == 0 )); then printf '%s\n' "${empty_text}"; return 0; fi
@@ -697,6 +710,8 @@ op_items() {
       a="${a:-granted}"
     elif [[ "${has}" == "a" ]]; then
       a="auto-approved"
+    elif [[ "${has}" == "r" ]]; then
+      a="requested"
     else
       a="none"
     fi
@@ -816,6 +831,15 @@ op_auto_approve() {
   else
     printf "%s needs the user's approval again.\n" "${name}"
   fi
+}
+
+# The user enters the value on a device (hosted only: the Companion's spool has no such request).
+op_ask() {
+  local name="${R_NAMES[0]}"
+  [[ -n "${SERVICE_URL}" ]] \
+    || fail "${EXIT_COMPANION}" "ask needs a VM of a host service whose vault the user's devices keep; ask the user to add ${name} to the key vault instead"
+  round_trip ask "${OPT_WAIT:-60}"
+  printf "Asked the user to enter %s. 'construct secret list' shows it as requested until they do; then request it like any secret. The request lapses after a day.\n" "${name}"
 }
 
 # ── _scrub: the host service's scrub jobs (hosted mode, internal) ────────────
@@ -982,7 +1006,7 @@ case "${op}" in
   relinquish) op=release ;;
   rm) op=delete ;;
   auto-approve) op=autoApprove ;;
-  list|status|request|get|release|add|delete) ;;
+  list|status|request|get|release|add|delete|ask) ;;
   _scrub)
     # Internal (started by the activity heartbeat), not in --help.
     [[ $# -eq 0 ]] || die "_scrub takes no arguments"
@@ -1052,6 +1076,7 @@ case "${op}" in
   release) allowed="--wait" ;;
   add) allowed="--description --username --for --file --replace --auto-approve --reason --wait" ;;
   delete|autoApprove) allowed="--reason --wait" ;;
+  ask) allowed="--description --reason --wait" ;;
 esac
 
 for o in ${given[@]+"${given[@]}"}; do
@@ -1088,7 +1113,7 @@ case "${op}" in
     (( count >= 1 )) || die "name the secrets to request (construct secret request <name>...)"
     (( count <= MAX_NAMES )) || die "at most ${MAX_NAMES} secrets per request"
     ;;
-  get|add|delete|autoApprove)
+  get|add|delete|autoApprove|ask)
     (( count == 1 )) || die "'${cmd}' takes exactly one name"
     ;;
   release)
@@ -1105,6 +1130,11 @@ if [[ "${op}" == "request" && -z "${R_USES}" && -z "${R_TTL}" ]]; then R_TTL=360
 R_REASON="$(clean_text "${R_REASON}" "${MAX_TEXT}")"
 R_DESCRIPTION="$(clean_text "${R_DESCRIPTION}" "${MAX_TEXT}")"
 R_USERNAME="$(clean_text "${R_USERNAME}" "${MAX_TEXT}")"
+
+if [[ "${op}" == "ask" ]]; then
+  [[ "${have_description}" == true && -n "${R_DESCRIPTION}" ]] \
+    || die "ask needs --description TEXT (what the secret is, shown to the user)"
+fi
 
 if [[ "${op}" == "add" ]]; then
   [[ "${have_description}" == true && -n "${R_DESCRIPTION}" ]] \
@@ -1140,4 +1170,5 @@ case "${op}" in
   add) op_add ;;
   delete) op_delete ;;
   autoApprove) op_auto_approve ;;
+  ask) op_ask ;;
 esac

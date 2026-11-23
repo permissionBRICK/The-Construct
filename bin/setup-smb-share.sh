@@ -175,8 +175,10 @@ cfg SMB_PASSWORD   "${SMB_PASSWORD}"
 if ! dpkg -s samba >/dev/null 2>&1; then
   step "Installing samba"
   export DEBIAN_FRONTEND=noninteractive
-  apt-get update
-  apt-get install -y samba
+  # apt-get that waits out apt's locks (another apt run, Ubuntu's apt-daily timer).
+  . "$(dirname "${BASH_SOURCE[0]}")/apt-wait.sh"
+  apt_get update
+  apt_get install -y samba
 else
   note "samba already installed"
 fi

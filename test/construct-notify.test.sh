@@ -2,7 +2,7 @@
 # Regression tests for `construct notify` — the VM side of host desktop
 # notifications. Run: bash test/construct-notify.test.sh
 #
-# The wire contract the host depends on (extension/src/notify.js):
+# The wire contract the device depends on (the device agent's watcher, extension/vm/notify-*.sh):
 #   * one entry per file, ONE LINE of JSON — a newline in agent text would
 #     otherwise forge a second notification when the host claims the spool;
 #   * entries appear atomically, so a poll never reads a half-written file;
@@ -106,16 +106,25 @@ ok "the flood guard reports exit 5" test "${rc}" = 5
 ok "the flood guard queues nothing" test "$(entries | wc -l)" = 3
 
 # ── the host side: streaming watcher + exactly-once across VS Code windows ───
-# The host holds ONE long-lived SSH connection running extension/src/notify.js's
-# watch script. These run that real script locally (the SSH transport is the only
-# part not exercised) — the invariants it has to hold are the same either way.
-if command -v node >/dev/null 2>&1; then
+# The device agent holds ONE long-lived SSH connection running the watch script of
+# extension/vm/notify-watch.sh (NotificationProtocol in agent/src/Construct.Companion.Core).
+# These render the templates the same way, in one pass over the {{markers}}, and run them
+# locally (the SSH transport is the only part not exercised).
+if command -v python3 >/dev/null 2>&1; then
   watch="${tmp}/watch.sh"
   claim="${tmp}/claim.sh"
-  node -e 'const n=require(process.argv[1]); process.stdout.write(n.buildWatchScript({dir:process.argv[2],fallbackSeconds:1}))' \
-    "${ROOT}/extension/src/notify.js" "${spool}" >"${watch}"
-  node -e 'const n=require(process.argv[1]); process.stdout.write(n.buildClaimScript(process.argv[2]))' \
-    "${ROOT}/extension/src/notify.js" "${spool}" >"${claim}"
+  render_notify() { # <template> <fallback>
+    python3 - "${ROOT}/extension/vm" "$1" "${spool}" "$2" "${tmp}/watch-sessions" <<'PY'
+import re, sys
+from pathlib import Path
+vm, name, spool, fallback, sessions = Path(sys.argv[1]), sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5]
+values = {'dir': "'" + spool.replace("'", "'\\''") + "'", 'claim': (vm / 'notify-claim-function.sh').read_text(),
+          'heartbeat': '60', 'fallback': fallback, 'watchDir': "'" + sessions.replace("'", "'\\''") + "'"}
+sys.stdout.write(re.sub(r'\{\{([A-Za-z][A-Za-z0-9]*)\}\}', lambda m: values[m.group(1)], (vm / (name + '.sh')).read_text()))
+PY
+  }
+  render_notify notify-watch 1 >"${watch}"
+  render_notify notify-claim 1 >"${claim}"
 
   # Streaming, not polling: a connected watcher emits the entry as it is queued.
   reset_spool
@@ -128,6 +137,19 @@ if command -v node >/dev/null 2>&1; then
   kill "${stream_pid}" 2>/dev/null || true
   wait "${stream_pid}" 2>/dev/null || true
   ok "a connected watcher streams a new entry" grep -q '"body":"streamed"' "${tmp}/stream.out"
+
+  # Over SSH the watch records its connection, so the idle report does not count it, and
+  # removes the record when it ends.
+  reset_spool
+  mkdir -p "${spool}"
+  SSH_CONNECTION="203.0.113.9 51000 203.0.113.5 22" bash "${watch}" >/dev/null 2>&1 &
+  stream_pid=$!
+  sleep 1
+  ok "a watch over SSH records its connection under its pid" \
+    grep -qx '203.0.113.9 51000 203.0.113.5 22' "${tmp}/watch-sessions/notify-${stream_pid}"
+  kill "${stream_pid}" 2>/dev/null || true
+  wait "${stream_pid}" 2>/dev/null || true
+  ok "  and removes the record when it ends" test ! -e "${tmp}/watch-sessions/notify-${stream_pid}"
   # ^-anchored so this check can't match its own command line.
   ok "the watcher leaves no inotifywait behind when it is killed" \
     sh -c "! pgrep -f '^inotifywait .*${spool}' >/dev/null"

@@ -1,6 +1,7 @@
 using Constructd.Core.Abstractions;
 using Constructd.Core.Configuration;
 using Constructd.Core.Logic;
+using Constructd.Core.Services;
 using Constructd.Windows.Internal;
 using Microsoft.Extensions.Logging;
 
@@ -173,7 +174,9 @@ public abstract class IsoBuilderBase : IIsoBuilder, IIsoMediaBuilder, IDisposabl
     {
         var name = vmName;
 
-        var scriptsDir = ArgumentGuard.WindowsPath(_options.ScriptsDir, "Constructd:ScriptsDir").TrimEnd('\\', '/');
+        // Only the defaults below read it: an install that names the builder and the key (every
+        // installer does) needs no scripts directory.
+        var scriptsDir = _options.ScriptsDir.TrimEnd('\\', '/');
         var cacheDir = ArgumentGuard.WindowsPath(_options.Iso.CacheDir, "Constructd:Iso:CacheDir").TrimEnd('\\', '/');
         var user = ArgumentGuard.EnvironmentValue(seedUser, "Constructd:Iso:SeedUser");
         var password = ArgumentGuard.EnvironmentValue(seedPassword, "seed password");
@@ -208,6 +211,7 @@ public abstract class IsoBuilderBase : IIsoBuilder, IIsoMediaBuilder, IDisposabl
             }
 
             safeProgress?.Report(describing);
+            JobProgressTracker.Current?.Begin("iso:build", "Building image");
             var result = await RunToolAsync(sourceIso, outputIso, buildScript, user, password, identity,
                 pubKey, sourceId, safeProgress, cancellationToken).ConfigureAwait(false);
 
@@ -250,14 +254,17 @@ public abstract class IsoBuilderBase : IIsoBuilder, IIsoMediaBuilder, IDisposabl
 
     public string? CurrentBuilderSha256()
     {
-        if (string.IsNullOrWhiteSpace(_options.ScriptsDir)) return null;
-        var path = GetBuilderPath(_options.ScriptsDir.TrimEnd('\\', '/'));
+        string path;
+        // No configured builder and no scripts directory to find it in: nothing to compare.
+        try { path = GetBuilderPath(_options.ScriptsDir.TrimEnd('\\', '/')); }
+        catch (InvalidPlatformArgumentException) { return null; }
         return _files.FileExists(path) ? _files.ComputeSha256(path) : null;
     }
 
     /// <summary>
     /// The Ubuntu ISO to remaster: the admin's own copy, or the configured URL fetched into the cache
-    /// once and reused by every later build.
+    /// once and reused by every later build. With neither configured (an engine installed for one PC), the current
+    /// 24.04 live-server image the release directory names, checked against its SHA256SUMS.
     /// </summary>
     private async Task<string> ResolveSourceIsoAsync(
         string? vmName,
@@ -266,10 +273,12 @@ public abstract class IsoBuilderBase : IIsoBuilder, IIsoMediaBuilder, IDisposabl
         CancellationToken cancellationToken,
         bool redownload)
     {
-        if (redownload && string.IsNullOrWhiteSpace(_options.Iso.SourceUrl))
+        var configuredUrl = !string.IsNullOrWhiteSpace(_options.Iso.SourceUrl);
+        var configuredPath = !string.IsNullOrWhiteSpace(_options.Iso.SourcePath);
+        if (redownload && !configuredUrl && configuredPath)
             throw Fail(vmName, "redownload requires Constructd:Iso:SourceUrl; a local SourcePath cannot be downloaded");
 
-        if (!redownload && !string.IsNullOrWhiteSpace(_options.Iso.SourcePath))
+        if (!redownload && configuredPath)
         {
             var configured = ArgumentGuard.WindowsPath(_options.Iso.SourcePath, "Constructd:Iso:SourcePath");
             if (!_files.FileExists(configured) || _files.FileLength(configured) <= 0)
@@ -278,13 +287,13 @@ public abstract class IsoBuilderBase : IIsoBuilder, IIsoMediaBuilder, IDisposabl
             }
 
             progress?.Report($"using the configured Ubuntu source ISO on the host: {configured}");
-            VerifyChecksum(vmName, configured, progress);
+            VerifyChecksum(vmName, configured, _options.Iso.Sha256, "Constructd:Iso:Sha256", progress);
             return configured;
         }
 
-        if (string.IsNullOrWhiteSpace(_options.Iso.SourceUrl))
+        if (!configuredUrl)
         {
-            throw Fail(vmName, "neither Constructd:Iso:SourcePath nor Constructd:Iso:SourceUrl is configured");
+            return await CurrentReleaseAsync(vmName, cacheDir, progress, cancellationToken, redownload).ConfigureAwait(false);
         }
 
         if (!Uri.TryCreate(_options.Iso.SourceUrl, UriKind.Absolute, out var url) ||
@@ -305,8 +314,72 @@ public abstract class IsoBuilderBase : IIsoBuilder, IIsoMediaBuilder, IDisposabl
             throw Fail(vmName, "Constructd:Iso:SourceUrl does not end in a plain file name");
         }
 
-        var cached = $@"{cacheDir}\{fileName}";
+        return await CachedOrDownloadedAsync(vmName, url, $@"{cacheDir}\{fileName}", _options.Iso.Sha256, "Constructd:Iso:Sha256",
+            progress, cancellationToken, redownload).ConfigureAwait(false);
+    }
 
+    /// <summary>
+    /// No source configured: the current live-server image of the 24.04 line, as its release directory's SHA256SUMS
+    /// names it, downloaded once and checked against that list. Images of earlier point releases in the cache go once
+    /// the new one is in place. When the list cannot be read, the newest image an earlier lookup kept is used.
+    /// </summary>
+    private async Task<string> CurrentReleaseAsync(string? vmName, string cacheDir, IProgress<string>? progress,
+        CancellationToken cancellationToken, bool redownload)
+    {
+        progress?.Report($"no Ubuntu source ISO is configured: looking up the current {UbuntuIsoIndex.Line} live-server image on {UbuntuIsoIndex.Directory.Host}");
+        (string FileName, string Sha256)? current = null;
+        string? lookupFailure = null;
+        try
+        {
+            current = UbuntuIsoIndex.Newest(await _downloader.ReadTextAsync(UbuntuIsoIndex.Sums, cancellationToken).ConfigureAwait(false));
+            lookupFailure = current is null ? "SHA256SUMS names no live-server image" : null;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            lookupFailure = SafeError.Describe(ex);
+        }
+
+        // A Windows path, whatever the platform the code runs on.
+        static string NameOf(string path) => path[(path.LastIndexOfAny(['\\', '/']) + 1)..];
+        var kept = _files.ListFiles(cacheDir, UbuntuIsoIndex.CachePattern)
+            .Where(f => UbuntuIsoIndex.PointRelease(NameOf(f)) >= 0 && _files.FileLength(f) > 0)
+            .OrderBy(f => UbuntuIsoIndex.PointRelease(NameOf(f))).ToList();
+        if (current is not { } image)
+        {
+            // Offline: only an image whose checksum was recorded from SHA256SUMS when it was downloaded, checked again now.
+            var verified = kept.LastOrDefault(f => _files.FileExists(f + VerifiedSuffix));
+            if (verified is not null && !redownload)
+            {
+                progress?.Report($"the Ubuntu release list could not be read ({lookupFailure}); using the image kept on the host: {verified}");
+                VerifyChecksum(vmName, verified, _files.ReadAllText(verified + VerifiedSuffix), "the checksum recorded at its download", progress);
+                return verified;
+            }
+
+            throw Fail(vmName, $"no Ubuntu source ISO is configured and the current {UbuntuIsoIndex.Line} image could not be looked up on " +
+                $"{UbuntuIsoIndex.Directory.Host} ({lookupFailure}); set Constructd:Iso:SourceUrl and Constructd:Iso:Sha256, or Constructd:Iso:SourcePath");
+        }
+
+        progress?.Report($"the current {UbuntuIsoIndex.Line} image is {image.FileName}");
+        var path = await CachedOrDownloadedAsync(vmName, new Uri(UbuntuIsoIndex.Directory, image.FileName), $@"{cacheDir}\{image.FileName}",
+            image.Sha256, "the release's SHA256SUMS", progress, cancellationToken, redownload).ConfigureAwait(false);
+        // Checked against SHA256SUMS just now: the checksum is kept for a later build without the release list.
+        _files.WriteAllText(path + VerifiedSuffix, image.Sha256);
+        foreach (var older in kept.Where(f => !string.Equals(f, path, StringComparison.OrdinalIgnoreCase)))
+        {
+            if (_files.TryDeleteFile(older)) progress?.Report($"removed the image of an earlier point release: {older}");
+            _files.TryDeleteFile(older + VerifiedSuffix);
+        }
+
+        return path;
+    }
+
+    /// <summary>Next to a discovered image: the SHA-256 SHA256SUMS gave it, for a build while the list cannot be read.</summary>
+    private const string VerifiedSuffix = ".sha256";
+
+    /// <summary>The source ISO in the cache, downloaded first when it is not there (or a redownload asks for it), and checked.</summary>
+    private async Task<string> CachedOrDownloadedAsync(string? vmName, Uri url, string cached, string? expectedSha256, string checksumSource,
+        IProgress<string>? progress, CancellationToken cancellationToken, bool redownload)
+    {
         if (redownload || !_files.FileExists(cached) || _files.FileLength(cached) <= 0)
         {
             progress?.Report(redownload
@@ -315,13 +388,14 @@ public abstract class IsoBuilderBase : IIsoBuilder, IIsoMediaBuilder, IDisposabl
             var pending = cached + "." + Guid.NewGuid().ToString("N") + ".download";
             try
             {
+                JobProgressTracker.Current?.Begin("iso:download", "Downloading ISO");
                 await _downloader.DownloadAsync(url, pending, progress, cancellationToken).ConfigureAwait(false);
                 if (!_files.FileExists(pending) || _files.FileLength(pending) <= 0)
                     throw Fail(vmName, "the downloaded source ISO is missing or empty");
-                VerifyChecksum(vmName, pending, progress);
+                VerifyChecksum(vmName, pending, expectedSha256, checksumSource, progress);
                 _files.MoveFile(pending, cached, overwrite: true);
             }
-            catch (Exception ex) when (ex is not OperationCanceledException)
+            catch (Exception ex) when (ex is not OperationCanceledException and not IsoBuildException)
             {
                 throw Fail(vmName, $"downloading the source ISO failed: {SafeError.Describe(ex)}");
             }
@@ -339,7 +413,7 @@ public abstract class IsoBuilderBase : IIsoBuilder, IIsoMediaBuilder, IDisposabl
         else
         {
             progress?.Report($"using the cached Ubuntu source ISO on the host: {cached}");
-            VerifyChecksum(vmName, cached, progress);
+            VerifyChecksum(vmName, cached, expectedSha256, checksumSource, progress);
         }
         return cached;
     }
@@ -348,9 +422,9 @@ public abstract class IsoBuilderBase : IIsoBuilder, IIsoMediaBuilder, IDisposabl
     /// Checked on every use, not only right after the download: a cache entry can be truncated by a
     /// full disk or replaced on a host several people administer.
     /// </summary>
-    private void VerifyChecksum(string? vmName, string isoPath, IProgress<string>? progress)
+    private void VerifyChecksum(string? vmName, string isoPath, string? expectedSha256, string checksumSource, IProgress<string>? progress)
     {
-        var expected = _options.Iso.Sha256?.Trim();
+        var expected = expectedSha256?.Trim();
         if (string.IsNullOrEmpty(expected))
         {
             return;
@@ -360,7 +434,7 @@ public abstract class IsoBuilderBase : IIsoBuilder, IIsoMediaBuilder, IDisposabl
         var actual = _files.ComputeSha256(isoPath);
         if (!string.Equals(actual, expected, StringComparison.OrdinalIgnoreCase))
         {
-            throw Fail(vmName, $"the source ISO does not match Constructd:Iso:Sha256 ({isoPath})");
+            throw Fail(vmName, $"the source ISO does not match {checksumSource} ({isoPath})");
         }
     }
 

@@ -73,6 +73,18 @@ public sealed class PrimaryCpuTests
     }
 
     [Fact]
+    public async Task DefaultsCarryTheDiskSizeACreateWithoutOneGets()
+    {
+        using var app = CreateApp();
+        using var owner = await app.CreateUserClientAsync("alice");
+        var reply = await owner.GetFromJsonAsync<JsonElement>("/api/v1/vm-defaults");
+        Assert.Equal(50, reply.GetProperty("recommendedDiskGb").GetInt32());
+        var response = await owner.PostJsonAsync("/api/v1/vms", new { name = "nodisk", cpu = 2, ramGb = 4 });
+        Assert.Equal(System.Net.HttpStatusCode.Accepted, response.StatusCode);
+        Assert.Equal(50, (await app.Vms.GetAsync("nodisk", default))!.DiskGb);
+    }
+
+    [Fact]
     public async Task DefaultsRespectRemainingAllowanceAndHostPerVmLimit()
     {
         using var app = CreateApp();

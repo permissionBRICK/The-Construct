@@ -231,11 +231,11 @@ A create request (`POST /vms`) runs the same job as on Windows; only the platfor
 | Step | Windows host | Proxmox host |
 |---|---|---|
 | Install media | autoinstall ISO from the catalog (or per VM through WSL) | **one cloud-init snippet per VM**: hostname, seed user `construct` with passwordless sudo and a locked password, the bootstrap public key, `qemu-guest-agent` |
-| Create | `Create-AgentVM.ps1` → Gen-2 VM, fresh VHDX, ISO attached | `qm create` cloning the cached cloud image (`--scsi0 <storage>:0,import-from=<image>`), a cloud-init drive (`--ide2 <storage>:cloudinit`), `--cicustom user=<snippet>`, `--agent enabled=1`, `--onboot 1`, CPU model selected by the nested setting, bridged DHCP; then `qm disk resize` to the requested size and `qm start` |
+| Create | `Create-AgentVM.ps1` → Gen-2 VM, fresh VHDX, ISO attached | `qm create` cloning the cached cloud image (`--scsi0 <storage>:0,import-from=<image>`), a cloud-init drive (`--ide2 <storage>:cloudinit`), `--cicustom user=<snippet>`, `--agent enabled=1`, `--onboot` (1 only for a VM that starts with the host, see below), CPU model selected by the nested setting, bridged DHCP; then `qm disk resize` to the requested size and `qm start` |
 | Wait for SSH | the driver's socket poll on `<name>.mshome.net` | the guest agent reports the DHCP address (`network-get-interfaces`); SSH is probed on it |
 | Detach media | eject the ISO | keep the cloud-init drive attached for later network configuration changes |
 | Endpoint | `PublicHost:<forward>` via `netsh portproxy` | `PublicHost:<forward>` through the relay, or the guest's LAN address on port 22 in direct mode (section 5) |
-| Power | `Start-VM` / `Stop-VM` / `Save-VM` | `qm start` / `qm shutdown --forceStop 1` / `qm suspend --todisk 1`; `onboot` mirrors the intent (set on start, cleared on stop, kept on save) |
+| Power | `Start-VM` / `Stop-VM` / `Save-VM` | `qm start` / `qm shutdown --forceStop 1` / `qm suspend --todisk 1`; for a VM that starts with the host `onboot` mirrors the intent (set on start, cleared on stop, kept on save), for any other it stays cleared |
 | Remove | `Remove-VM` + disk chain | `qm stop` (if running) + `qm destroy --purge 1 --destroy-unreferenced-disks 1` + the seed snippet |
 
 The whole thing takes about two and a half minutes on an old laptop: the image import is most of
@@ -243,10 +243,15 @@ it, first boot plus `apt-get install qemu-guest-agent` the rest. The client then
 guest with `bin/provision.sh` exactly as it would any other Construct VM — the guest payload is
 identical.
 
-**After a node reboot**, Proxmox starts every VM whose `onboot` flag is set. The driver keeps
-that flag in step with the intended power state — Hyper-V's `AutomaticStartAction =
-StartIfRunning` semantics: set at create and on every start, cleared on a stop (even of an
-already-off or saved VM), kept on a save so a parked session resumes. A resume from a saved
+**After a node reboot**, Proxmox starts every VM whose `onboot` flag is set. Only a primary
+whose effective idle policy is off may start with the node; a child never does, and neither does
+a primary that idles out, also not from the saved state its idle action left. For a primary that
+may, the driver keeps the flag in step with the intended power state — Hyper-V's
+`AutomaticStartAction = StartIfRunning` semantics: set at create and on every start, cleared on a
+stop (even of an already-off or saved VM), kept on a save so a parked session resumes. For every
+other VM a create, start or save leaves it cleared. An idle policy change sets or clears it at
+once, and each engine start brings every VM it manages in line (a saved VM's suspend lock is
+skipped for that one write). A resume from a saved
 state also restores the clock the guest was saved with (Hyper-V's time-sync integration service
 has no QEMU counterpart in the guest), so after resuming one the driver sets the guest clock to
 the node's through Proxmox's own agent commands: `qm guest cmd <id> ping` until the resumed

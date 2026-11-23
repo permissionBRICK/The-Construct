@@ -143,7 +143,7 @@ public static class ChildVmEndpoints
                 return CodedProblems.Create(500, "job-start-failed", "Child job could not be started.");
             }
             CodedProblems.Audit(http, "child.create", vm.Owner, vm.Parent, vm.Name, "job=" + job.Id);
-            return Results.Accepted("/api/v1/jobs/" + job.Id, new { jobId = job.Id });
+            return Results.Accepted("/api/v1/jobs/" + job.Id, new JobAcceptedResponse(job.Id));
         }
         finally
         {
@@ -159,7 +159,7 @@ public static class ChildVmEndpoints
         var clock = services.GetRequiredService<IClock>();
         var admission = services.GetRequiredService<IAdmissionStore>();
         if (admission is UnsupportedFeaturePlatform || services.GetRequiredService<IMediaStore>() is UnsupportedFeaturePlatform) return CodedProblems.Create(409, "unsupported-capability", "Child VM admission and media storage are unavailable.");
-        if (await LifecycleEndpoints.LiveAsync(vm, services, ct)) return Results.Ok(new { jobId = vm.CurrentJobId, replayed = true });
+        if (await LifecycleEndpoints.LiveAsync(vm, services, ct)) return Results.Ok(new JobReplayedResponse(vm.CurrentJobId, true));
         var runner = services.GetRequiredService<IPersistedJobRunner>();
         var worker = services.GetRequiredService<ChildDeleteJob>();
         var key = http.Request.Headers["X-Construct-Operation-Key"].FirstOrDefault();
@@ -190,7 +190,7 @@ public static class ChildVmEndpoints
                 return CodedProblems.Create(500, "job-start-failed", "Child deletion could not start.");
             }
             CodedProblems.Audit(http, "child.delete", vm.Owner, vm.Parent, vm.Name, "job=" + job.Id);
-            return Results.Accepted("/api/v1/jobs/" + job.Id, new { jobId = job.Id });
+            return Results.Accepted("/api/v1/jobs/" + job.Id, new JobAcceptedResponse(job.Id));
         }
         finally { handle?.Dispose(); }
     }
@@ -202,7 +202,7 @@ public static class ChildVmEndpoints
 
     internal static long? ParseLifetime(string input, DateTimeOffset now) => LifetimeParser.Parse(input, now);
     private static IResult Replay(OperationKeyRecord existing, string fingerprint, string target) => existing.Fingerprint == fingerprint && Ownership.SameName(existing.Target, target)
-        ? Results.Ok(new { jobId = existing.JobId, replayed = true }) : CodedProblems.Create(409, "operation-key-conflict", "Operation key was already used for another request.");
+        ? Results.Ok(new JobReplayedResponse(existing.JobId, true)) : CodedProblems.Create(409, "operation-key-conflict", "Operation key was already used for another request.");
     private static IResult Problem(ChildValidationException ex) => CodedProblems.Create(ex.Code == "validation" ? 400 : 409, ex.Code, ex.Message, ex.Field);
     private static IResult AdmissionProblem(AdmissionResult result) => result.Capacity is { Allowed: false } decision ? PrimaryVmAdmission.CapacityProblem(decision) : CodedProblems.Create(409, result.Outcome switch
     {

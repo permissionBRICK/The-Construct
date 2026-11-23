@@ -1,3 +1,4 @@
+using Constructd.Api.Contracts;
 using Constructd.Api.Auth;
 using Constructd.Api.Infrastructure;
 using Constructd.Api.Jobs;
@@ -17,14 +18,14 @@ public static class PrimaryCpuEndpoints
             {
                 var cpu = await settings.LimitsAsync(http.User.NameOrEmpty(), null, ct);
                 var ram = await memory.LimitsAsync(http.User.NameOrEmpty(), null, ct);
-                return Results.Ok(new { cpu.HostLogicalCpus, cpu.MaximumCpus, cpu.RecommendedCpus, ram.MaximumRamGb, ram.RecommendedRamGb });
+                return Results.Ok(new VmDefaultsResponse(cpu.HostLogicalCpus, cpu.MaximumCpus, cpu.RecommendedCpus, ram.MaximumRamGb, ram.RecommendedRamGb));
             }
             catch (LifecycleException ex) { return LifecycleEndpoints.Problem(ex.Code); }
-        }).RequireAuthorization(Policies.User);
+        }).RequireAuthorization(Policies.User).Produces<VmDefaultsResponse>().WithName("GetVmDefaults");
         api.MapGet("/vms/{name}/cpu", (string name, HttpContext http, CancellationToken ct) => ReadOrSave(name, null, http, ct))
-            .RequireAuthorization(Policies.User);
+            .RequireAuthorization(Policies.User).Produces<VmCpuResponse>().WithName("GetVmCpu");
         api.MapPut("/vms/{name}/cpu", (string name, Request request, HttpContext http, CancellationToken ct) => ReadOrSave(name, request, http, ct))
-            .RequireAuthorization(Policies.User).Audited("vm.cpu");
+            .RequireAuthorization(Policies.User).Audited("vm.cpu").Produces<VmCpuResponse>().WithName("SetVmCpu");
         return api;
     }
 
@@ -50,9 +51,8 @@ public static class PrimaryCpuEndpoints
                     .LogWarning(ex, "CPU limits unavailable while reading settings for {VmName}", vm.Name);
                 warnings = ["capacity-unavailable"];
             }
-            return Results.Ok(new { currentCpus = vm.Cpu, desiredCpus = desired, pending = desired != vm.Cpu,
-                hostLogicalCpus = limits?.HostLogicalCpus, maximumCpus = limits?.MaximumCpus,
-                recommendedCpus = limits?.RecommendedCpus, warnings, appliesOn = "next-stop-start" });
+            return Results.Ok(new VmCpuResponse(vm.Cpu, desired, desired != vm.Cpu,
+                limits?.HostLogicalCpus, limits?.MaximumCpus, limits?.RecommendedCpus, warnings, "next-stop-start"));
         }
         await using var gate = await PrimaryOperationGate.AcquireAsync(services.GetRequiredService<IVmOperationGate>(), name, http.TraceIdentifier, ct);
         if (gate is null) return LifecycleEndpoints.Busy(vm.CurrentJobId);
@@ -77,8 +77,8 @@ public static class PrimaryCpuEndpoints
                 CodedProblems.Audit(http, "vm.cpu", vm.Owner, target: name, extra: "cpus=" + request.Cpus);
             }
             var desired = (await settings.GetAsync(vm, ct))?.Cpus ?? vm.Cpu;
-            return Results.Ok(new { currentCpus = vm.Cpu, desiredCpus = desired, pending = desired != vm.Cpu,
-                limits.HostLogicalCpus, limits.MaximumCpus, limits.RecommendedCpus, limits.Warnings, appliesOn = "next-stop-start" });
+            return Results.Ok(new VmCpuResponse(vm.Cpu, desired, desired != vm.Cpu,
+                limits.HostLogicalCpus, limits.MaximumCpus, limits.RecommendedCpus, limits.Warnings, "next-stop-start"));
         }
         catch (LifecycleException ex) { return LifecycleEndpoints.Problem(ex.Code); }
     }

@@ -19,7 +19,7 @@ public class HyperVInventoryTests
             clock.UtcNow = Now.AddMinutes(1);
             return new(0, JsonSerializer.Serialize(new { ok = true, value = Inventory() }, new JsonSerializerOptions(JsonSerializerDefaults.Web)), "", false);
         });
-        var inventory = new HyperVInventory(runner, new ConstructdOptions { ScriptsDir = @"C:\Construct" }, clock);
+        var inventory = new HyperVInventory(runner, new ConstructdOptions(), clock);
         var sample = await inventory.ReadAsync(default);
         Assert.True(sample.Complete);
         Assert.Equal(Now, sample.ObservedAt);
@@ -31,14 +31,14 @@ public class HyperVInventoryTests
     {
         var runner = new RecordingProcessRunner(); var json = new JsonSerializerOptions(JsonSerializerDefaults.Web) { Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) } };
         runner.RespondStdout(JsonSerializer.Serialize(new { ok = true, value = Inventory() }, json));
-        var clock = new MutableClock(Now); var inventory = new HyperVInventory(runner, new ConstructdOptions { ScriptsDir = @"C:\Construct" }, clock);
+        var clock = new MutableClock(Now); var inventory = new HyperVInventory(runner, new ConstructdOptions(), clock);
         var snapshot = await inventory.ReadAsync([Row(Constructd.Core.Domain.ReservationResource.Storage, artifact: @"disk:C:\VMs\a.vhdx")], default);
         Assert.True(snapshot.Complete); Assert.Equal(1, snapshot.Epoch);
         var call = Assert.Single(runner.Calls); Assert.Equal("powershell.exe", call.FileName);
         Assert.Equal(new[] { "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-EncodedCommand" }, call.Arguments.Take(5));
         Assert.Equal(6, call.Arguments.Count); Assert.Equal(TimeSpan.FromMinutes(2), call.Timeout);
         var script = Encoding.Unicode.GetString(Convert.FromBase64String(call.Arguments[5]));
-        Assert.Contains(". 'C:\\Construct\\drivers\\hyperv-local\\HyperVLocal.ChildVm.ps1'", script);
+        Assert.Contains(". '" + Path.Combine(AppContext.BaseDirectory, "hyperv", "HyperV.ChildVm.ps1") + "'", script);
         Assert.Contains("Get-ConstructHostInventory -Artifacts @($inputData.artifacts)", script);
         Assert.Contains("[Console]::In.ReadToEnd()", script); Assert.DoesNotContain("a.vhdx", script);
         using var stdin = JsonDocument.Parse(call.StandardInput!);
@@ -53,7 +53,7 @@ public class HyperVInventoryTests
         await media.AddAsync(new("a", "alice", "aux.iso", Constructd.Core.Domain.MediaRole.Auxiliary,
             Constructd.Core.Domain.MediaSource.Upload, null, path, Constructd.Core.Domain.MediaState.Pending,
             10, 10, null, null, null, null, "child", Now, null, null), default);
-        var inventory = new HyperVInventory(runner, new ConstructdOptions { ScriptsDir = @"C:\Construct" }, new MutableClock(), media);
+        var inventory = new HyperVInventory(runner, new ConstructdOptions(), new MutableClock(), media);
         await inventory.ReadAsync([Row(Constructd.Core.Domain.ReservationResource.Storage, artifact: path)], default);
         await media.RemoveAsync("a", default);
         await inventory.ReadAsync([Row(Constructd.Core.Domain.ReservationResource.Storage, artifact: path)], default);
@@ -71,7 +71,7 @@ public class HyperVInventoryTests
     public async Task MalformedAndFailedOutputFailsClosedWithoutLeaking(string output)
     {
         var runner = new RecordingProcessRunner().RespondStdout(output);
-        var inventory = new HyperVInventory(runner, new ConstructdOptions { ScriptsDir = @"C:\Construct" }, new MutableClock());
+        var inventory = new HyperVInventory(runner, new ConstructdOptions(), new MutableClock());
         var snapshot = await inventory.ReadAsync(default); Assert.False(snapshot.Complete);
         Assert.Equal(["inventory-unavailable"], snapshot.Problems);
     }
@@ -79,7 +79,7 @@ public class HyperVInventoryTests
     public async Task RunnerFailureAndTimeoutDoNotLeakDependencyText()
     {
         var runner = new RecordingProcessRunner { Failure = new IOException("sentinel-secret") };
-        var inventory = new HyperVInventory(runner, new ConstructdOptions { ScriptsDir = @"C:\Construct" }, new MutableClock());
+        var inventory = new HyperVInventory(runner, new ConstructdOptions(), new MutableClock());
         Assert.Equal(["inventory-unavailable"], (await inventory.ReadAsync(default)).Problems);
         runner.Failure = null; runner.Default = new(1, "sentinel-secret", "sentinel-secret", true);
         Assert.False((await inventory.ReadAsync(default)).Complete);

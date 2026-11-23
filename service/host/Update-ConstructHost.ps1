@@ -157,7 +157,10 @@ function Test-UpdateManifest([string]$StagedPath, [string]$Commit) {
     if ($m.updaterPath -ne 'updater/Update-ConstructHost.ps1' -or $listed[$m.updaterPath] -ne $m.updaterSha256) { throw 'Updater hash mismatch.' }
     return $m
 }
-function Get-UpdateRollbackMode($Manifest, [int]$PreviousSchema) {
+function Get-UpdateRollbackMode($Manifest, [int]$PreviousSchema, $Handoff = $null) {
+    # The one-action update (POST /host/updates/run) writes restoreDatabase=false: it puts the files back
+    # and keeps the database copy for a manual restore. Handoffs without the key restore as before.
+    if ($Handoff -and $Handoff.PSObject.Properties['restoreDatabase'] -and $Handoff.restoreDatabase -eq $false) { return 'binary' }
     if ($Manifest.database.minReadableBy -gt $PreviousSchema -or @($Manifest.database.breakingMigrations).Count -gt 0) { return 'database' }
     return 'binary'
 }
@@ -379,7 +382,7 @@ function Invoke-ConstructHostUpdate([string]$HandoffPath, [bool]$IsResume, [bool
                 foreach ($file in $newFiles) {
                     if ($file.path -notin $backupFiles.path) { $dest=Get-UpdateTarget $file.path $h $settings; if(Test-Path -LiteralPath $dest) { Remove-Item -LiteralPath $dest -Force } }
                 }
-                $mode=Get-UpdateRollbackMode $manifest $h.previousSchemaVersion
+                $mode=Get-UpdateRollbackMode $manifest $h.previousSchemaVersion $h
                 if ($mode -eq 'database') {
                     if (-not (Test-Path (Join-Path $backup 'constructd.db'))) { throw 'Database backup missing.' }
                     foreach ($suffix in @('', '-wal', '-shm')) {

@@ -26,19 +26,24 @@ public sealed partial class VaultHostService
         try
         {
             var now = clock.UtcNow;
-            foreach (var owner in await store.ListOwnersAsync(ct).ConfigureAwait(false))
+            ExpireEntryRequests(now);
+            var owners = (await store.ListOwnersAsync(ct).ConfigureAwait(false)).Select(o => o.Owner)
+                .Concat(records?.Owners() ?? []).Distinct(StringComparer.Ordinal).ToArray();
+            foreach (var owner in owners)
             {
-                var expired = (await store.ListAsync<VaultLease>(owner.Owner, ct).ConfigureAwait(false)).Where(l => l.ExpiresAt <= now).ToArray();
+                if (records?.Hosts(owner) == true)
+                    await ReconcileLeasesAsync((await OwnerAsync(owner, ct).ConfigureAwait(false))!, await EntriesAsync(owner, ct).ConfigureAwait(false), ct).ConfigureAwait(false);
+                var expired = (await store.ListAsync<VaultLease>(owner, ct).ConfigureAwait(false)).Where(l => l.ExpiresAt <= now).ToArray();
                 if (expired.Length > 0)
                 {
-                    var entries = await store.ListEntriesAsync(owner.Owner, ct).ConfigureAwait(false);
+                    var entries = await EntriesAsync(owner, ct).ConfigureAwait(false);
                     foreach (var lease in expired)
                     {
                         var scrubbed = await EndAsync(lease, now, entries, ct).ConfigureAwait(false);
-                        await RecordAsync(owner.Owner, lease.Vm, $"Access to {lease.Name} expired{(scrubbed ? "; scrubbing the VM" : "")}.", false, ct).ConfigureAwait(false);
+                        await RecordAsync(owner, lease.Vm, $"Access to {lease.Name} expired{(scrubbed ? "; scrubbing the VM" : "")}.", false, ct).ConfigureAwait(false);
                     }
                 }
-                await ScheduleAsync(owner.Owner, now, ct).ConfigureAwait(false);
+                await ScheduleAsync(owner, now, ct).ConfigureAwait(false);
             }
             await store.PruneTombstonesAsync((now - VaultRules.TombstoneAge).ToUnixTimeMilliseconds(), ct).ConfigureAwait(false);
             await PurgeOrphansAsync(ct).ConfigureAwait(false);
@@ -54,6 +59,7 @@ public sealed partial class VaultHostService
     {
         Drop(vmName);
         CancelPending(vmName, "The VM is being deleted.");
+        CancelEntryRequests(vmName);
         await gate.WaitAsync(ct).ConfigureAwait(false);
         try { await PurgeAsync(r => Ownership.SameName(r.Vm, vmName), ct).ConfigureAwait(false); }
         finally { gate.Release(); }
@@ -71,7 +77,11 @@ public sealed partial class VaultHostService
         foreach (var record in (await store.ListAsync<VaultLease>(null, ct).ConfigureAwait(false)).Where(match)) await store.DeleteAsync<VaultLease>(record.Id, ct).ConfigureAwait(false);
         foreach (var record in (await store.ListAsync<VaultCleanup>(null, ct).ConfigureAwait(false)).Where(match)) await store.DeleteAsync<VaultCleanup>(record.Id, ct).ConfigureAwait(false);
         foreach (var record in (await store.ListAsync<VaultScrubJob>(null, ct).ConfigureAwait(false)).Where(match)) await store.DeleteAsync<VaultScrubJob>(record.Id, ct).ConfigureAwait(false);
-        foreach (var record in (await store.ListAsync<VaultFileDecision>(null, ct).ConfigureAwait(false)).Where(match)) await store.DeleteAsync<VaultFileDecision>(record.Id, ct).ConfigureAwait(false);
+        foreach (var record in (await store.ListAsync<VaultFileDecision>(null, ct).ConfigureAwait(false)).Where(match))
+        {
+            await store.DeleteAsync<VaultFileDecision>(record.Id, ct).ConfigureAwait(false);
+            Notify(FileEnded, record.Id, record.Vm, record.Owner);
+        }
     }
 
     // One scan per VM at a time, for every cleanup that is due — unless that VM holds the same value
@@ -81,7 +91,7 @@ public sealed partial class VaultHostService
         var cleanups = await store.ListAsync<VaultCleanup>(owner, ct).ConfigureAwait(false);
         if (!cleanups.Any(c => c.DueAt <= now)) return;
         var leases = await store.ListAsync<VaultLease>(owner, ct).ConfigureAwait(false);
-        var entries = await store.ListEntriesAsync(owner, ct).ConfigureAwait(false);
+        var entries = await EntriesAsync(owner, ct).ConfigureAwait(false);
         var jobs = await store.ListAsync<VaultScrubJob>(owner, ct).ConfigureAwait(false);
         var ready = new List<VaultCleanup>();
         foreach (var cleanup in cleanups.Where(c => c.DueAt <= now))
@@ -112,7 +122,7 @@ public sealed partial class VaultHostService
         await gate.WaitAsync(ct).ConfigureAwait(false);
         try
         {
-            var state = await store.GetOwnerAsync(vm.Owner, ct).ConfigureAwait(false);
+            var state = await OwnerAsync(vm.Owner, ct).ConfigureAwait(false);
             if (state is null) return false;
             var now = clock.UtcNow;
             await ScheduleAsync(vm.Owner, now, ct).ConfigureAwait(false);
@@ -135,7 +145,7 @@ public sealed partial class VaultHostService
         try
         {
             var now = clock.UtcNow;
-            var state = await store.GetOwnerAsync(vm.Owner, ct).ConfigureAwait(false);
+            var state = await OwnerAsync(vm.Owner, ct).ConfigureAwait(false);
             if (state is null) return new JsonObject { ["jobs"] = result };
             await ScheduleAsync(vm.Owner, now, ct).ConfigureAwait(false);
             key = KeyFor(state, vm.Name);
@@ -262,8 +272,12 @@ public sealed partial class VaultHostService
             await store.SaveAsync(new VaultScrubJob(NewId(), vm.Owner, vm.Name, "apply", "agent", job.Items,
                 agent.Select(t => new VaultScrubFile(t.Path, t.PathB64, "redact", t.Indexes.ToArray(), t.Type)).ToArray(), job.Id, now, now, null, []), ct).ConfigureAwait(false);
         foreach (var target in other)
-            await store.SaveAsync(new VaultFileDecision(NewId(), vm.Owner, vm.Name, target.Path, target.PathB64, target.Indexes.ToArray(), target.Type, target.Size,
-                job.Items, job.Id, now), ct).ConfigureAwait(false);
+        {
+            var decision = new VaultFileDecision(NewId(), vm.Owner, vm.Name, target.Path, target.PathB64, target.Indexes.ToArray(), target.Type, target.Size,
+                job.Items, job.Id, now);
+            await store.SaveAsync(decision, ct).ConfigureAwait(false);
+            Notify(FileAdded, decision.Id, decision.Vm, decision.Owner);
+        }
         if (other.Length > 0)
             await RecordAsync(vm.Owner, vm.Name, $"{VaultRules.Files(other.Length)} on the VM still {(other.Length == 1 ? "holds" : "hold")} {names}; choose keep, redact or delete for each.", true, ct).ConfigureAwait(false);
         if (targets.Count == 0 && scannable.Count > 0)
@@ -318,6 +332,7 @@ public sealed partial class VaultHostService
             var decision = (await store.ListAsync<VaultFileDecision>(owner, ct).ConfigureAwait(false)).FirstOrDefault(f => f.Id == id)
                 ?? throw NotFound("No such file.");
             await store.DeleteAsync<VaultFileDecision>(decision.Id, ct).ConfigureAwait(false);
+            Notify(FileEnded, decision.Id, decision.Vm, decision.Owner);
             if (action == "keep")
             {
                 await RecordAsync(owner, decision.Vm, $"Kept {decision.Path}; it still holds {string.Join(", ", decision.Names)}.", true, ct).ConfigureAwait(false);

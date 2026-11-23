@@ -68,6 +68,7 @@ public sealed class LinuxPackageTests : IDisposable
         Assert.NotNull(repo);
         var publish=Path.Combine(root,"publish");Directory.CreateDirectory(publish);
         await File.WriteAllTextAsync(Path.Combine(publish,"Constructd.Api.exe"),"windows");
+        PackageTests.WindowsPublishExtras(publish);
         await File.WriteAllTextAsync(Path.Combine(publish,"Constructd.Api"),"linux");
         var output=Path.Combine(root,"output");
         await PackageTests.Run("pwsh","-NoProfile","-File",Path.Combine(repo.FullName,"service/host/New-ConstructHostPackage.ps1"),"-PublishDir",publish,"-LinuxPublishDir",publish,"-OutputDir",output,"-Commit",new string('a',40));

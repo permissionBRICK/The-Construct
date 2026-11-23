@@ -126,9 +126,10 @@ public sealed class BackupCleanupTests
         Assert.Equal(HttpStatusCode.Accepted, (await h.Alice.PostAsync("/api/v1/vms/dev/backups/request", null)).StatusCode);
         h.App.Clock.Advance(TimeSpan.FromHours(1));
 
-        Assert.Equal(2, (await RunAsync(h))!.Rotated);
-        Assert.Equal(ids[^1], (await h.ListAsync()).Single()!["id"]!.GetValue<string>());
-        Assert.Single(h.Files("*.age"));
+        // keep 1 removes the middle one: the oldest is the protected backup until one is 30 days old.
+        Assert.Equal(1, (await RunAsync(h))!.Rotated);
+        Assert.Equal([ids[^1], ids[0]], (await h.ListAsync()).Select(b => b!["id"]!.GetValue<string>()));
+        Assert.Equal(2, h.Files("*.age").Length);
         Assert.Null((await h.Store.GetVmAsync("alice", "dev", default))!.RequestPendingAt);
     }
 

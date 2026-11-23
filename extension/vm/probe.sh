@@ -24,7 +24,6 @@ if [ -r "$cfg" ]; then
   emit T3CODE_AUTO_APPROVE "$(sed -n 's/^T3CODE_AUTO_APPROVE=//p' "$cfg" | head -1)"
   emit T3CODE_PROXY_URL "$(sed -n 's/^T3CODE_PROXY_URL=//p' "$cfg" | head -1)"
   emit OPENCODE_BACKGROUND_WATCHER "$(sed -n 's/^OPENCODE_BACKGROUND_WATCHER=//p' "$cfg" | head -1)"
-  emit SWAP_SIZE_GB "$(sed -n 's/^SWAP_SIZE_GB=//p' "$cfg" | head -1)"
 fi
 mark=/etc/construct/provisioned.env
 if [ -r "$mark" ]; then

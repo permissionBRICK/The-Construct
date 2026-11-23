@@ -593,11 +593,10 @@ public sealed class HttpsGateway : IHttpsForwardHost, IHostedService, IAsyncDisp
         if (vm is null || vm.Deleting || vm.Kind != VmKind.Primary) return "unavailable";
         if (await LifecycleEndpoints.LiveAsync(vm, _services, ct).ConfigureAwait(false)) return "operation-in-progress";
         if (await _driver.GetStateAsync(vm.Name, ct).ConfigureAwait(false) == VmState.Running) return null;
-        var key = new OperationKeyRecord(vm.Owner, "lifecycle-start", Guid.NewGuid().ToString("n"), "primary-power-start:" + vm.Name,
-            vm.Name, null, OperationKeyState.InFlight, null, vm.PowerGeneration, null, _clock.UtcNow);
+        var starts = _services.GetRequiredService<LifecycleStart>();
         try
         {
-            var reply = await _services.GetRequiredService<LifecycleStart>().RunAsync(vm, null, null, key, ct).ConfigureAwait(false);
+            var reply = await starts.RunAsync(vm, null, null, starts.PrimaryKey(vm), ct).ConfigureAwait(false);
             return reply.Code;
         }
         catch (LifecycleException ex)

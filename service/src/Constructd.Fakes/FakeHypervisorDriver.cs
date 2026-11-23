@@ -9,8 +9,17 @@ namespace Constructd.Fakes;
 /// so the API, the creation job and the idle engine can be tested on Linux. The real driver (B7)
 /// implements the same interface by invoking PowerShell.
 /// </summary>
-public sealed class FakeHypervisorDriver : IHypervisorDriver, IVmCpuDriver, IVmMemoryDriver, IGuestNetworkConfigurator, IVmNestedDriver, IVmMemoryFloorDriver
+public sealed class FakeHypervisorDriver : IHypervisorDriver, IVmCpuDriver, IVmMemoryDriver, IGuestNetworkConfigurator, IVmNestedDriver, IVmMemoryFloorDriver, IVmFactsDriver, IVmHostStartDriver
 {
+    /// <summary>What <see cref="GetFactsAsync"/> reports for a VM the fake did not create (an existing VM to adopt).</summary>
+    public ConcurrentDictionary<string, HypervisorVmFacts> Facts { get; } = new(StringComparer.OrdinalIgnoreCase);
+    public Task<HypervisorVmFacts?> GetFactsAsync(string name, CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+        Calls.Enqueue($"facts:{name}");
+        return Task.FromResult(Facts.TryGetValue(name, out var facts) ? facts with { State = StateOf(name) } : null);
+    }
+
     public Exception? NetworkFailure { get; set; }
     public Task ConfigureNetworkAsync(string name, string? address, string? gateway, IReadOnlyList<string>? dns, CancellationToken ct)
     {
@@ -30,6 +39,18 @@ public sealed class FakeHypervisorDriver : IHypervisorDriver, IVmCpuDriver, IVmM
         if (PowerFailure is not null) throw PowerFailure;
         Calls.Enqueue($"nested:{name}:{enabled}");
         NestedValues[name] = enabled;
+        return Task.CompletedTask;
+    }
+    /// <summary>Whether a host boot brings each VM back: from its creation, then from the last <see cref="SetStartWithHostAsync"/>.</summary>
+    public ConcurrentDictionary<string, bool> StartWithHost { get; } = new(StringComparer.OrdinalIgnoreCase);
+    /// <summary>VMs whose start-with-host setting cannot be written, standing in for a hypervisor that refuses it.</summary>
+    public ConcurrentDictionary<string, Exception> StartWithHostFailures { get; } = new(StringComparer.OrdinalIgnoreCase);
+    public Task SetStartWithHostAsync(string name, bool enabled, CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+        Calls.Enqueue($"start-with-host:{name}:{enabled}");
+        if (StartWithHostFailures.TryGetValue(name, out var failure)) return Task.FromException(failure);
+        StartWithHost[name] = enabled;
         return Task.CompletedTask;
     }
     public ConcurrentDictionary<string, VmDescriptor> Descriptors { get; } = new(StringComparer.OrdinalIgnoreCase);
@@ -122,6 +143,7 @@ public sealed class FakeHypervisorDriver : IHypervisorDriver, IVmCpuDriver, IVmM
         cancellationToken.ThrowIfCancellationRequested();
         Calls.Enqueue($"create:{descriptor.Name}");
         Descriptors[descriptor.Name] = descriptor;
+        StartWithHost[descriptor.Name] = descriptor.StartWithHost;
         NestedValues[descriptor.Name] = descriptor.Nested;
 
         if (HoldCreate)
@@ -150,17 +172,20 @@ public sealed class FakeHypervisorDriver : IHypervisorDriver, IVmCpuDriver, IVmM
         return Task.CompletedTask;
     }
 
-    public Task StartAsync(string name, CancellationToken cancellationToken)
+    /// <summary>Awaited right after a start took effect: a test holds a start there.</summary>
+    public Func<string, Task>? AfterStart { get; set; }
+
+    public async Task StartAsync(string name, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         Calls.Enqueue($"start:{name}");
 
         if (PowerFailure is not null)
         {
-            return Task.FromException(PowerFailure);
+            throw PowerFailure;
         }
         _states[name] = StateAfterStart;
-        return Task.CompletedTask;
+        if (AfterStart is { } hold) await hold(name);
     }
 
     public Task StopAsync(string name, CancellationToken cancellationToken)

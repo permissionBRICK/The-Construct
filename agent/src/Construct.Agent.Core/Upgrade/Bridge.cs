@@ -1,0 +1,100 @@
+using System.Text.Json;
+
+namespace Construct.Agent.Upgrade;
+
+/// <summary>
+/// <c>bridge.json</c> in the agent's directory: where the one-time upgrade stands (11.6, 13.2). <c>stage</c> is
+/// <c>converted</c> only once everything was copied; until then the steps say what is done. <c>done</c> lists
+/// the items the converter already copied, so a second run leaves them alone even if they were changed since.
+/// No secret is ever written here.
+/// </summary>
+public sealed record BridgeState
+{
+    public const string Converted = "converted";
+
+    /// <summary><c>new</c>, <c>converting</c> or <c>converted</c>.</summary>
+    public string Stage { get; init; } = "new";
+
+    /// <summary>The previous install folder the converter read.</summary>
+    public string? From { get; init; }
+
+    /// <summary>The engine step: <c>done</c> (the solo engine or the shared hosts were added) or <c>skipped</c> (nothing local).</summary>
+    public string? Engine { get; init; }
+
+    /// <summary>This PC's own (solo) engine, which adopts the local VMs; null when the PC has none.</summary>
+    public string? LocalEngine { get; init; }
+
+    /// <summary>The engine that holds the account's store (the first-device setup's engine).</summary>
+    public string? StoreEngine { get; init; }
+
+    public IReadOnlyList<string> Done { get; init; } = [];
+
+    /// <summary>The last run's items and their outcome, for the dialog.</summary>
+    public IReadOnlyList<UpgradeItem> Items { get; init; } = [];
+
+    /// <summary>What the last run says the user should know (open vault leases end, ...).</summary>
+    public IReadOnlyList<string> Notes { get; init; } = [];
+
+    /// <summary>The account the last run wrote <see cref="Notes"/> for; they are shown to that account only.</summary>
+    public string? NotesAccount { get; init; }
+
+    /// <summary>The user went on from the notes after the conversion; they are not shown again.</summary>
+    public bool NotesRead { get; init; }
+
+    /// <summary>Shared hosts that still run the old stack (no <c>GET /engine</c>): this device stays signed in the old way there.</summary>
+    public IReadOnlyList<string> OldHosts { get; init; } = [];
+
+    /// <summary>The old entry scripts the last replacement left as they were (R14): they are tried again, and a note names them.</summary>
+    public IReadOnlyList<string> ScriptsLeft { get; init; } = [];
+
+    public DateTimeOffset? ConvertedAt { get; init; }
+
+    /// <summary>
+    /// The notes with <paramref name="text"/> in place of those that start with <paramref name="prefix"/>, for
+    /// <paramref name="account"/>; null text removes them. A note that was not there shows the notes again.
+    /// </summary>
+    public BridgeState Noted(string? account, string prefix, string? text)
+    {
+        var mine = NotesAccount == account;
+        if (text is null && !mine) return this;
+        var notes = (mine ? Notes : []).Where(n => !n.StartsWith(prefix, StringComparison.Ordinal)).ToList();
+        if (text is not null) notes.Add(text);
+        var fresh = text is not null && !(mine && Notes.Contains(text));
+        return this with { Notes = notes, NotesAccount = account, NotesRead = NotesRead && !fresh };
+    }
+}
+
+/// <summary>One item of a conversion run: <c>done</c>, <c>skipped</c> (already there), <c>pending</c> (retried later) or <c>failed</c>.</summary>
+/// <param name="Message">A few words: what happened, or while it runs what it does now.</param>
+/// <param name="Percent">While a long item runs (a VM's reprovision): how far it is.</param>
+public sealed record UpgradeItem(string Id, string Label, string State, string? Message = null, int? Percent = null);
+
+/// <summary>How far a running step is, for its one bar: a percentage and a few words.</summary>
+public sealed record StepProgress(int Percent, string Label);
+
+public sealed class BridgeFile(string path)
+{
+    private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web) { WriteIndented = true };
+    private readonly object _gate = new();
+
+    public string Path => path;
+
+    public BridgeState Read()
+    {
+        lock (_gate)
+        {
+            try { return File.Exists(path) ? JsonSerializer.Deserialize<BridgeState>(File.ReadAllBytes(path), Json) ?? new() : new(); }
+            catch (JsonException) { return new(); }
+        }
+    }
+
+    public BridgeState Update(Func<BridgeState, BridgeState> change)
+    {
+        lock (_gate)
+        {
+            var next = change(Read());
+            PrivateFiles.Write(path, JsonSerializer.SerializeToUtf8Bytes(next, Json));
+            return next;
+        }
+    }
+}

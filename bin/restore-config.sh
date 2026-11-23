@@ -41,12 +41,14 @@ trap report_restore_error ERR
 cleanup_tmp=""
 t3_was_running=""
 codex_was_running=""
+opencode_was_running=""
 cleanup_restore() {
   local rc=$?
   trap - EXIT
   if [[ "${rc}" -ne 0 ]]; then
     [[ -n "${t3_was_running:-}" ]] && systemctl start t3code-serve 2>/dev/null || true
     [[ -n "${codex_was_running:-}" ]] && systemctl start codex-app-server 2>/dev/null || true
+    [[ -n "${opencode_was_running:-}" ]] && systemctl start opencode-serve 2>/dev/null || true
   fi
   [[ -n "${cleanup_tmp}" ]] && rm -rf "${cleanup_tmp}"
   exit "${rc}"
@@ -184,6 +186,32 @@ if [[ -n "${t3_state_restore}" ]]; then
   done
 fi
 
+# ── OpenCode database across the overlay ─────────────────────────────────────
+# Same as T3 Code's store: the freshly provisioned opencode-serve holds its own new
+# opencode.db open, and a restored database must not land under the live server
+# or next to its -wal/-shm. Stop it across the copy and drop the minutes-old files.
+# OpenCode 2 converts a database from an OpenCode 1 backup when it starts.
+opencode_db_restore=""
+if [[ -n "${archive_restore}" ]]; then
+  grep -Eq '^(\./)?home/\.local/share/opencode/opencode\.db$' "${archive_list}" && opencode_db_restore=1 || true
+elif [[ -f "${BACKUP_DIR}/home/.local/share/opencode/opencode.db" ]]; then
+  opencode_db_restore=1
+fi
+if [[ -n "${opencode_db_restore}" ]]; then
+  if command -v systemctl >/dev/null 2>&1; then
+    case "$(systemctl is-active opencode-serve 2>/dev/null || true)" in
+      active|activating|reloading) opencode_was_running=1 ;;
+    esac
+    if [[ -n "${opencode_was_running}" ]]; then
+      log "pausing opencode-serve for the restored OpenCode database"
+      systemctl stop opencode-serve 2>/dev/null || true
+    fi
+  fi
+  rm -f "${EXPORT_HOME}/.local/share/opencode/opencode.db" \
+        "${EXPORT_HOME}/.local/share/opencode/opencode.db-wal" \
+        "${EXPORT_HOME}/.local/share/opencode/opencode.db-shm"
+fi
+
 # Overlay while preserving ownership/perms/timestamps. Tarball restores stream
 # home/ directly; an already-extracted BACKUP_DIR uses trailing /. so dotfiles
 # copy without nesting under a "home" directory.
@@ -209,6 +237,11 @@ if [[ -n "${t3_was_running}" ]]; then
   log "restored T3 Code state; t3code-serve restarted on the restored store"
 fi
 
+if [[ -n "${opencode_was_running}" ]]; then
+  systemctl start opencode-serve 2>/dev/null || true
+  log "restored the OpenCode database; opencode-serve restarted on it"
+fi
+
 if [[ -n "${codex_reindex}" ]]; then
   rm -f "${EXPORT_HOME}/.codex/state_"*.sqlite*
   if [[ -n "${codex_was_running}" ]]; then
@@ -227,6 +260,7 @@ for f in \
   ".codex/.credentials.json" \
   ".local/share/opencode/auth.json" \
   ".local/share/opencode/mcp-auth.json" \
+  ".config/antigravity/plugin-secrets.json" \
   ".config/gh/hosts.yml" \
   ".git-credentials" \
   ".npmrc"; do
@@ -272,7 +306,7 @@ if [[ -d "${EXPORT_HOME}/.ssh" ]]; then
 fi
 
 # Report instruction / memory files that came back, for the provisioning log.
-for f in ".claude/CLAUDE.md" ".codex/AGENTS.md" ".config/opencode/AGENTS.md"; do
+for f in ".claude/CLAUDE.md" ".codex/AGENTS.md" ".config/opencode/AGENTS.md" ".gemini/AGENTS.md"; do
   [[ -e "${EXPORT_HOME}/${f}" ]] && log "restored ${f}"
 done
 
@@ -292,7 +326,7 @@ fi
 
 # Report restored chat history (captured when the export ran with
 # INCLUDE_HISTORY=true), so the provisioning log shows it came back.
-for f in ".claude/history.jsonl" ".codex/sessions" ".local/share/opencode/storage"; do
+for f in ".claude/history.jsonl" ".codex/sessions" ".local/share/opencode/storage" ".gemini/antigravity-cli/conversations"; do
   [[ -e "${EXPORT_HOME}/${f}" ]] && log "restored chat history: ${f}"
 done
 # A freshly provisioned T3 Code server creates its own store; only one taken
@@ -462,6 +496,78 @@ if [[ -n "${t3_state_restore}" ]]; then
       err "could not schedule the resume of the T3 Code threads that were busy before the reinstall"
     fi
   fi
+fi
+
+# ── SSH host keys ────────────────────────────────────────────────────────────
+# The saved /etc/ssh/ssh_host_* make a reinstalled VM the same machine to every
+# client (known_hosts stays valid). They replace this VM's host keys only when
+# they differ; sshd then checks its configuration with them and is restarted, so
+# new connections present them. A check that fails puts the previous keys back
+# and leaves sshd alone, so a broken backup cannot lock anyone out. An older
+# backup has no host keys and changes nothing here. The connection running this
+# restore survives the restart (sshd restarts only its listener).
+SSH_HOST_KEY_DIR="${SSH_HOST_KEY_DIR:-/etc/ssh}"
+ssh_keys_restore=""
+if [[ -n "${archive_restore}" ]]; then
+  grep -Eq '^(\./)?etc/ssh/ssh_host_[^/]+$' "${archive_list}" && ssh_keys_restore=1 || true
+elif compgen -G "${BACKUP_DIR}/etc/ssh/ssh_host_*" >/dev/null 2>&1; then
+  ssh_keys_restore=1
+fi
+if [[ -n "${ssh_keys_restore}" ]]; then
+  _ssh_stage="$(mktemp -d /tmp/construct-restore-ssh.XXXXXX)"
+  _ssh_ok=1
+  if [[ -n "${archive_restore}" ]]; then
+    tar -xf "${BACKUP_TGZ}" -C "${_ssh_stage}" "$(grep -Eom1 '^(\./)?etc/ssh/' "${archive_list}")" 2>/dev/null || _ssh_ok=""
+  else
+    mkdir -p "${_ssh_stage}/etc/ssh" && cp -a "${BACKUP_DIR}"/etc/ssh/ssh_host_* "${_ssh_stage}/etc/ssh/" || _ssh_ok=""
+  fi
+  _ssh_saved="${_ssh_stage}/etc/ssh"
+  _ssh_changed=""
+  if [[ -n "${_ssh_ok}" ]] && compgen -G "${_ssh_saved}/ssh_host_*" >/dev/null 2>&1; then
+    # Changed: another set of key files, or any of them with other content.
+    if [[ "$(cd "${_ssh_saved}" && ls -1 ssh_host_* | sort || true)" != "$(cd "${SSH_HOST_KEY_DIR}" 2>/dev/null && ls -1 ssh_host_* 2>/dev/null | sort || true)" ]]; then
+      _ssh_changed=1
+    else
+      for _hk in "${_ssh_saved}"/ssh_host_*; do
+        cmp -s "${_hk}" "${SSH_HOST_KEY_DIR}/$(basename "${_hk}")" || _ssh_changed=1
+      done
+    fi
+  else
+    _ssh_ok=""
+  fi
+  if [[ -z "${_ssh_ok}" || ! -w "${SSH_HOST_KEY_DIR}" ]]; then
+    err "restoring the SSH host keys failed; this VM keeps its new host keys"
+  elif [[ -z "${_ssh_changed}" ]]; then
+    log "SSH host keys already match the backup"
+  else
+    _ssh_previous="${_ssh_stage}/previous"
+    mkdir -p "${_ssh_previous}"
+    cp -a "${SSH_HOST_KEY_DIR}"/ssh_host_* "${_ssh_previous}/" 2>/dev/null || true
+    rm -f "${SSH_HOST_KEY_DIR}"/ssh_host_*
+    _ssh_installed=1
+    _ssh_owner=()
+    [[ "${EUID}" -eq 0 ]] && _ssh_owner=(-o 0 -g 0)
+    for _hk in "${_ssh_saved}"/ssh_host_*; do
+      case "${_hk}" in
+        *.pub) install -m 644 "${_ssh_owner[@]}" "${_hk}" "${SSH_HOST_KEY_DIR}/" || _ssh_installed="" ;;
+        *)     install -m 600 "${_ssh_owner[@]}" "${_hk}" "${SSH_HOST_KEY_DIR}/" || _ssh_installed="" ;;
+      esac
+    done
+    if [[ -z "${_ssh_installed}" ]] || { command -v sshd >/dev/null 2>&1 && ! sshd -t >/dev/null 2>&1; }; then
+      rm -f "${SSH_HOST_KEY_DIR}"/ssh_host_*
+      cp -a "${_ssh_previous}"/ssh_host_* "${SSH_HOST_KEY_DIR}/" 2>/dev/null || true
+      err "the saved SSH host keys could not be installed or sshd refused them; this VM keeps its new host keys"
+    elif systemctl try-restart ssh.service 2>/dev/null || systemctl try-restart sshd.service 2>/dev/null; then
+      log "restored SSH host keys"
+    else
+      # The running sshd may still present the keys it had: put them back, so what it presents and
+      # what is on disk agree, and the engine keeps trusting the key it saw.
+      rm -f "${SSH_HOST_KEY_DIR}"/ssh_host_*
+      cp -a "${_ssh_previous}"/ssh_host_* "${SSH_HOST_KEY_DIR}/" 2>/dev/null || true
+      err "sshd could not be restarted with the saved SSH host keys; this VM keeps its new host keys"
+    fi
+  fi
+  rm -rf "${_ssh_stage}"
 fi
 
 if [[ -f "${BACKUP_DIR}/backup-info.json" ]]; then

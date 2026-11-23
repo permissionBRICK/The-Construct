@@ -35,7 +35,28 @@ while (( $# )); do
 done
 printf '%s' "${HTTP_CODE:-204}"
 STUB
-chmod +x "${tmp}/bin/ccusage" "${tmp}/bin/curl"
+# The agents answer --version and their sign-in checks (bin/construct-agent-sign-in.py --status):
+# Claude Code is not signed in, Codex is, Antigravity by its token file.
+cat >"${tmp}/bin/claude" <<'STUB'
+#!/usr/bin/env bash
+[[ "$*" != "auth status" ]] || exit 1
+echo "2.1.4 (Claude Code)"
+STUB
+cat >"${tmp}/bin/codex" <<'STUB'
+#!/usr/bin/env bash
+[[ "$*" != "login status" ]] || exit 0
+echo "codex-cli 0.98.0" >&2
+STUB
+cat >"${tmp}/bin/agy" <<'STUB'
+#!/usr/bin/env bash
+echo "1.5.2"
+STUB
+# OpenCode 2 prints its name before the version (OpenCode 1 printed the bare version).
+cat >"${tmp}/bin/opencode" <<'STUB'
+#!/usr/bin/env bash
+echo "opencode v2.3.2"
+STUB
+chmod +x "${tmp}/bin/ccusage" "${tmp}/bin/curl" "${tmp}/bin/claude" "${tmp}/bin/codex" "${tmp}/bin/agy" "${tmp}/bin/opencode"
 export PATH="${tmp}/bin:${PATH}" CONFIG_FILE="${tmp}/config.env"
 export CONSTRUCT_VM_TOKEN_FILE="${tmp}/token" CONSTRUCT_USAGE_STATE_DIR="${tmp}/state"
 printf 'test-usage-secret\n' >"${tmp}/token"
@@ -45,9 +66,24 @@ CONSTRUCT_INSTANCE_NAME='test-vm'
 CONSTRUCT_SERVICE_CA_FILE='${tmp}/ca.pem'
 STATE_DIR='should-not-be-sourced'
 EOF
-run() { bash "${ROOT}/bin/construct-usage-report.sh" >"${tmp}/stdout" 2>"${tmp}/stderr"; }
+mkdir -p "${tmp}/home"
+run() { HOME="${tmp}/home" bash "${ROOT}/bin/construct-usage-report.sh" >"${tmp}/stdout" 2>"${tmp}/stderr"; }
 run
 jq -e '.days | length == 15' "${tmp}/body.json" >/dev/null
+jq -e '.agents | map(select(.tool == "claude" or .tool == "codex")) == [{"tool":"claude","version":"2.1.4","signedIn":false},{"tool":"codex","version":"0.98.0","signedIn":true}]' "${tmp}/body.json" >/dev/null
+# The Antigravity CLI runs as agy and is reported as antigravity; signed in once its token file is there.
+jq -e '.agents | map(select(.tool == "antigravity")) == [{"tool":"antigravity","version":"1.5.2","signedIn":false}]' "${tmp}/body.json" >/dev/null
+mkdir -p "${tmp}/home/.gemini/antigravity-cli" && printf 'token' >"${tmp}/home/.gemini/antigravity-cli/antigravity-oauth-token"
+run
+jq -e '.agents | map(select(.tool == "antigravity")) == [{"tool":"antigravity","version":"1.5.2","signedIn":true}]' "${tmp}/body.json" >/dev/null
+jq -e '.agents | map(select(.tool == "opencode")) | length == 1 and .[0].version == "2.3.2"' "${tmp}/body.json" >/dev/null
+# --agents prints only the agent report, for the engine's finish step: no usage collected or sent, no service needed.
+calls_before="$(wc -l <"${tmp}/curl-argv")" usage_before="$(wc -l <"${tmp}/cc-argv")"
+HOME="${tmp}/home" CONFIG_FILE="${tmp}/missing.env" bash "${ROOT}/bin/construct-usage-report.sh" --agents >"${tmp}/agents.json" 2>"${tmp}/stderr"
+jq -e 'map(select(.tool == "claude" or .tool == "codex" or .tool == "antigravity")) ==
+  [{"tool":"claude","version":"2.1.4","signedIn":false},{"tool":"codex","version":"0.98.0","signedIn":true},{"tool":"antigravity","version":"1.5.2","signedIn":true}]' \
+  "${tmp}/agents.json" >/dev/null
+[[ "$(wc -l <"${tmp}/agents.json")" == 1 && "$(wc -l <"${tmp}/curl-argv")" == "${calls_before}" && "$(wc -l <"${tmp}/cc-argv")" == "${usage_before}" ]]
 jq -e --arg today "$(date +%F)" '.days[] | select(.day == $today and .tool == "claude") | .totalTokens == 37 and .cacheCreateTokens == 3 and .models["model-a"].totalTokens == 37' "${tmp}/body.json" >/dev/null
 jq -e --arg today "$(date +%F)" '.days[] | select(.day == $today and .tool == "codex") | .costUsd == 2.34 and .cacheReadTokens == 4 and .models["model-b"].totalTokens == 30' "${tmp}/body.json" >/dev/null
 [[ -f "${tmp}/state/backfilled" && ! -d "$(cat "${tmp}/work")" ]]
@@ -93,7 +129,7 @@ STUB
 chmod +x "${CONSTRUCT_SYSTEMCTL}"
 REPO_DIR="${ROOT}" CONSTRUCT_USAGE_REPORT_INTERVAL_MIN=5 setup_usage_report_timer
 rg -q '^OnUnitActiveSec=5min$' "${tmp}/units/construct-usage-report.timer"
-[[ -x "${tmp}/installed/construct-usage-report.sh" && -f "${tmp}/installed/lib/usage-collect.sh" ]]
+[[ -x "${tmp}/installed/construct-usage-report.sh" && -f "${tmp}/installed/lib/usage-collect.sh" && -f "${tmp}/installed/lib/construct-agent-sign-in.py" ]]
 [[ ! -f "${tmp}/state/backfilled" ]]
 rg -q 'enable --now construct-usage-report.timer' "${tmp}/systemctl-argv"
-printf 'Guest usage reporting, backfill, failures, isolation, secret hygiene and timer installation passed.\n'
+printf 'Guest usage reporting, the agent report, backfill, failures, isolation, secret hygiene and timer installation passed.\n'

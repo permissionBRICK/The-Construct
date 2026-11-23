@@ -34,5 +34,12 @@ public interface IForwardStore
     Task<bool> SetDestinationAsync(string id, ForwardDestination destination, ForwardAck? ack, CancellationToken ct) =>
         throw new NotSupportedException("Child destination updates are unavailable.");
 
+    /// <summary>
+    /// Records what a forward is for and where its service lives (<see cref="PortForward.Purpose"/>,
+    /// <see cref="PortForward.Source"/>). Returns false when the id is unknown.
+    /// </summary>
+    Task<bool> SetNoteAsync(string id, string? purpose, string? source, CancellationToken ct) =>
+        throw new NotSupportedException("Forward notes are unavailable.");
+
     Task<bool> RemoveAsync(string id, CancellationToken cancellationToken);
 }

@@ -14,16 +14,16 @@ public static class AdminEndpoints
     public static RouteGroupBuilder MapAdminEndpoints(this RouteGroupBuilder api)
     {
         api.MapPost("/users", CreateUserAsync)
-            .RequireAuthorization(Policies.Admin).Audited("user.create").WithName("CreateUser");
+            .RequireAuthorization(Policies.Admin).Audited("user.create").WithName("CreateUser").Produces<UserResponse>(StatusCodes.Status201Created);
 
         api.MapDelete("/users/{name}", DeleteUserAsync)
-            .RequireAuthorization(Policies.Admin).Audited("user.delete").WithName("DeleteUser");
+            .RequireAuthorization(Policies.Admin).Audited("user.delete").WithName("DeleteUser").Produces(StatusCodes.Status204NoContent);
 
         api.MapPost("/users/{name}/tokens", IssueTokenAsync)
-            .RequireAuthorization(Policies.Admin).Audited("token.issue").WithName("IssueUserToken");
+            .RequireAuthorization(Policies.Admin).Audited("token.issue").WithName("IssueUserToken").Produces<TokenIssuedResponse>(StatusCodes.Status201Created);
 
         api.MapGet("/audit", QueryAuditAsync)
-            .RequireAuthorization(Policies.Admin).WithName("QueryAudit");
+            .RequireAuthorization(Policies.Admin).WithName("QueryAudit").Produces<IReadOnlyList<AuditResponse>>();
 
         return api;
     }

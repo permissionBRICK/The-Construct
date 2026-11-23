@@ -48,6 +48,8 @@ public static class HostAdminComposition
         services.AddSingleton<Constructd.Api.Jobs.PrimaryMemorySettings>();
         services.AddSingleton<Constructd.Api.Jobs.PrimaryMemoryFloor>();
         if (options.IsProxmox && !options.Fake) services.AddHostedService<Constructd.Api.Hosting.MemoryFloorStartupService>();
+        services.AddSingleton<Constructd.Api.Jobs.HostStartSettings>();
+        if (!options.Fake) services.AddHostedService<Constructd.Api.Hosting.HostStartStartupService>();
         services.AddSingleton<Constructd.Api.Jobs.VmNetworkSettings>();
         services.AddSingleton<IVmNestedDriver>(sp => (IVmNestedDriver)sp.GetRequiredService<IHypervisorDriver>());
         services.AddSingleton<Constructd.Api.Jobs.PrimaryNestedSettings>();
@@ -61,11 +63,11 @@ public static class HostAdminComposition
         services.AddConsolePlatform(options);
         services.AddUpdatePlatform(options);
         services.AddNetworkPlatform(options);
-        if (options.EffectivePersistence == PersistenceMode.Memory)
-        {
-            services.AddSingleton<IAdmissionStore, InMemoryAdmissionStore>();
-        }
-        else services.AddSingleton<IAdmissionStore, SqliteAdmissionStore>();
+        if (options.EffectivePersistence == PersistenceMode.Memory) services.AddSingleton<InMemoryAdmissionStore>();
+        else services.AddSingleton<SqliteAdmissionStore>();
+        services.AddSingleton<IAdmissionStore>(sp => new ChangeReportingAdmissionStore(options.EffectivePersistence == PersistenceMode.Memory
+            ? sp.GetRequiredService<InMemoryAdmissionStore>() : sp.GetRequiredService<SqliteAdmissionStore>(),
+            sp.GetRequiredService<IVmRepository>(), sp.GetRequiredService<ChangeFeed>()));
         services.AddSingleton<IPersistedJobRunner>(sp => (IPersistedJobRunner)sp.GetRequiredService<IJobEngine>());
         return services;
     }

@@ -1,3 +1,4 @@
+using Constructd.Api.Contracts;
 using Constructd.Api.Auth;
 using Constructd.Api.Infrastructure;
 using Constructd.Api.Jobs;
@@ -12,9 +13,9 @@ public static class PrimaryMemoryEndpoints
     public static RouteGroupBuilder MapPrimaryMemoryEndpoints(this RouteGroupBuilder api)
     {
         api.MapGet("/vms/{name}/memory", (string name, HttpContext http, CancellationToken ct) => ReadOrSave(name, null, http, ct))
-            .RequireAuthorization(Policies.User);
+            .RequireAuthorization(Policies.User).Produces<VmMemoryResponse>().WithName("GetVmMemory");
         api.MapPut("/vms/{name}/memory", (string name, Request request, HttpContext http, CancellationToken ct) => ReadOrSave(name, request, http, ct))
-            .RequireAuthorization(Policies.User).Audited("vm.memory");
+            .RequireAuthorization(Policies.User).Audited("vm.memory").Produces<VmMemoryResponse>().WithName("SetVmMemory");
         return api;
     }
 
@@ -40,9 +41,8 @@ public static class PrimaryMemoryEndpoints
                     .LogWarning(ex, "RAM limits unavailable while reading settings for {VmName}", vm.Name);
                 warnings = ["capacity-unavailable"];
             }
-            return Results.Ok(new { currentRamGb = vm.RamGb, desiredRamGb = desired, pending = desired != vm.RamGb,
-                maximumRamGb = limits?.MaximumRamGb, recommendedRamGb = limits?.RecommendedRamGb,
-                warnings, appliesOn = "next-stop-start" });
+            return Results.Ok(new VmMemoryResponse(vm.RamGb, desired, desired != vm.RamGb,
+                limits?.MaximumRamGb, limits?.RecommendedRamGb, warnings, "next-stop-start"));
         }
         await using var gate = await PrimaryOperationGate.AcquireAsync(services.GetRequiredService<IVmOperationGate>(), name, http.TraceIdentifier, ct);
         if (gate is null) return LifecycleEndpoints.Busy(vm.CurrentJobId);
@@ -67,8 +67,8 @@ public static class PrimaryMemoryEndpoints
                 CodedProblems.Audit(http, "vm.memory", vm.Owner, target: name, extra: "ramGb=" + request.RamGb);
             }
             var desired = (await settings.GetAsync(vm, ct))?.RamGb ?? vm.RamGb;
-            return Results.Ok(new { currentRamGb = vm.RamGb, desiredRamGb = desired, pending = desired != vm.RamGb,
-                limits.MaximumRamGb, limits.RecommendedRamGb, limits.Warnings, appliesOn = "next-stop-start" });
+            return Results.Ok(new VmMemoryResponse(vm.RamGb, desired, desired != vm.RamGb,
+                limits.MaximumRamGb, limits.RecommendedRamGb, limits.Warnings, "next-stop-start"));
         }
         catch (LifecycleException ex) { return LifecycleEndpoints.Problem(ex.Code); }
     }

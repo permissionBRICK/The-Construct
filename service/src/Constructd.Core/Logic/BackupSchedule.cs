@@ -15,8 +15,24 @@ public sealed record BackupDecision(bool Due, string? Trigger)
 /// </summary>
 public static class BackupSchedule
 {
-    /// <summary>A manual request nobody answered with a session expires after this.</summary>
+    /// <summary>A host request nobody answered with a session expires after this.</summary>
     public static TimeSpan RequestLifetime { get; } = TimeSpan.FromHours(1);
+
+    /// <summary>A VM opens at most one slot session per this long.</summary>
+    public static TimeSpan SlotInterval { get; } = TimeSpan.FromMinutes(30);
+
+    /// <summary>An open slot session nothing is uploading into expires after this.</summary>
+    public static TimeSpan SlotSessionIdle { get; } = TimeSpan.FromMinutes(30);
+
+    /// <summary>The per-VM quota of host-requested backups when the host config sets none (<c>maxBytesPerVm</c> null).</summary>
+    public const long DefaultQuotaBytes = 20L << 30;
+
+    /// <summary>The quota of host-requested backups and their staging in effect.</summary>
+    public static long Quota(BackupsConfig host)
+    {
+        ArgumentNullException.ThrowIfNull(host);
+        return host.MaxBytesPerVm ?? DefaultQuotaBytes;
+    }
 
     /// <summary>Retries after an attempt wait <c>min(interval, RetryCap)</c>.</summary>
     public static TimeSpan RetryCap { get; } = TimeSpan.FromHours(6);
@@ -66,12 +82,17 @@ public static class BackupSchedule
         return ScheduledDueAt(host, vm, vmCreated);
     }
 
+    /// <summary>
+    /// Whether the heartbeat asks for a backup, and with which trigger: the open host request's, or
+    /// <c>scheduled</c> when the schedule is due. <paramref name="openSession"/> is an open host-requested
+    /// session; a slot session never holds the schedule back.
+    /// </summary>
     public static BackupDecision Evaluate(BackupsConfig host, BackupVmState? vm, bool openSession, bool busy,
         DateTimeOffset vmCreated, DateTimeOffset now)
     {
         ArgumentNullException.ThrowIfNull(host);
         if (!host.Enabled || openSession) return BackupDecision.NotDue;
-        if (RequestPending(vm, now)) return new(true, BackupTriggers.Manual);
+        if (RequestPending(vm, now)) return new(true, vm!.RequestTrigger ?? BackupTriggers.Manual);
         if (ScheduledDueAt(host, vm, vmCreated) is not { } dueAt || now < dueAt) return BackupDecision.NotDue;
         // A busy VM gets its scheduled backup on its next idle heartbeat, unless it has been due too long.
         if (busy && now - dueAt < BusyGrace) return BackupDecision.NotDue;

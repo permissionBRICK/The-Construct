@@ -15,7 +15,9 @@ public sealed record NetworkConfig(bool HostForwardsEnabled, bool DirectAddressR
 /// <summary>VM hardware defaults. <c>MinimumRamBytes</c> (Proxmox): the RAM auto-ballooning may shrink a running
 /// primary VM to under host memory pressure; null turns ballooning off. Each VM may override it.</summary>
 public sealed record VirtualizationConfig(bool NestedDefault, bool NestedSelectable, long? MinimumRamBytes = 6L << 30);
-public sealed record UpdatesConfig(string Repository, string Channel, int DrainTimeoutMinutes, int HealthTimeoutSeconds);
+/// <summary>Host updates. <c>Channel</c>: <c>stable</c>, <c>nightly</c> or a manifest URL (12A.3). <c>Auto</c>: the host runs
+/// its one update action by itself when its channel offers a newer release (12.1); off by default.</summary>
+public sealed record UpdatesConfig(string Repository, string Channel, int DrainTimeoutMinutes, int HealthTimeoutSeconds, bool Auto = false);
 /// <summary>The key vault's host settings. <c>WebUrl</c>: the address phones use for the approval page (null = the service's own).</summary>
 public sealed record VaultConfig(string? WebUrl = null);
 /// <summary>HTTPS forwards (docs/https-forwards.md). <c>SharedPort</c>: the port (usually 443) on which every VM's

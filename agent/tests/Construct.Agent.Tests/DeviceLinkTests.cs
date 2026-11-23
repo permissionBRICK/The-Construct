@@ -1,0 +1,505 @@
+using System.Text.Json.Nodes;
+using Construct.Agent.Device;
+using Construct.Agent.Tests.Support;
+using Construct.Companion.Core.Abstractions;
+using Construct.Companion.Fakes;
+
+namespace Construct.Agent.Tests;
+
+/// <summary>The device's side of the user's VMs: which VMs get a link, local forwards, notifications, the open actions.</summary>
+public sealed class DeviceLinkTests : IAsyncDisposable
+{
+    private readonly string _directory = Path.Combine(Path.GetTempPath(), "agent-test-device-" + Guid.NewGuid().ToString("n"));
+    private readonly FakeToastRaiser _toasts = new();
+    private readonly FakeDevice _device;
+
+    public DeviceLinkTests()
+    {
+        var engines = new FakeEngines().Add("e1", "https://host.example:7462")
+            .On("e1", "GET whoami", """{"name":"alice","role":"user"}""")
+            .On("e1", "GET vms", """
+                [{"name":"work","owner":"Alice","kind":"primary","state":"running","deleting":false},
+                 {"name":"theirs","owner":"bob","kind":"primary","state":"running","deleting":false},
+                 {"name":"sleepy","owner":"alice","kind":"primary","state":"off","deleting":false},
+                 {"name":"kid","owner":"alice","kind":"child","state":"running","deleting":false}]
+                """)
+            .On("e1", "GET vms/work/endpoint", """{"sshHost":"host.example","sshPort":2201,"publicHost":"host.example"}""")
+            .On("e1", "GET vms/work/forwards", """[{"id":"web","vmPort":3000,"label":"dev server","target":"client"}]""")
+            .On("e1", "GET vms/work/forwards?via=work", "[]")
+            .On("e1", "POST vms/work/forwards/web/ack", _ => new JsonObject())
+            .On("e1", "DELETE vms/work/forwards/web", _ => null);
+        _device = new FakeDevice(_directory, engines, new FakePlatform { Notifications = _toasts });
+    }
+
+    [Fact]
+    public async Task Only_the_users_own_primaries_are_listed_and_only_running_ones_linked_over_the_engines_endpoint()
+    {
+        await _device.Links.RefreshAsync(CancellationToken.None);
+
+        var connections = _device.Links.Connections();
+        Assert.Equal(["sleepy", "work"], connections.Select(c => c.Vm));
+        var work = connections.Single(c => c.Vm == "work");
+        Assert.True(work.Linked);
+        Assert.Equal(new VmAddress("host.example", 2201, "forwarded"), work.Address);
+        Assert.False(connections.Single(c => c.Vm == "sleepy").Linked);
+        // Nothing was asked about another user's VM or the child.
+        Assert.DoesNotContain(_device.Engines.CallsTo("e1"), c => c.Contains("theirs", StringComparison.Ordinal) || c.Contains("kid", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task A_forward_request_opens_a_loopback_tunnel_is_acked_with_its_port_and_closes_when_the_vm_stops()
+    {
+        await _device.Links.RefreshAsync(CancellationToken.None);
+        await FakeDevice.WaitAsync(() => _device.Engines.Calls.Any(c => c.Call == "POST vms/work/forwards/web/ack"), "the ack");
+
+        var ack = _device.Engines.Calls.First(c => c.Call == "POST vms/work/forwards/web/ack").Body!;
+        Assert.Equal("open", ack["status"]!.GetValue<string>());
+        var port = ack["localPort"]!.GetValue<int>();
+        var tunnel = Assert.Single(_device.Transports["e1/work"].Tunnels);
+        Assert.Equal("127.0.0.1", tunnel.Spec.BindHost);
+        Assert.Equal((port, 3000), (tunnel.Spec.LocalPort, tunnel.Spec.VmPort));
+        await FakeDevice.WaitAsync(() => _device.Links.Connections().Single(c => c.Vm == "work").Forwards.Any(f => f.Status == "open"), "the open forward");
+        var forward = _device.Links.Connections().Single(c => c.Vm == "work").Forwards.Single();
+        Assert.Equal(("web", "dev server", $"http://localhost:{port}/"), (forward.Id, forward.Label, forward.Url));
+
+        // The VM stops: its link goes, and with it the tunnel.
+        _device.Engines.On("e1", "GET vms", """[{"name":"work","owner":"alice","kind":"primary","state":"off","deleting":false}]""");
+        await _device.Links.RefreshAsync(CancellationToken.None);
+
+        Assert.False(_device.Links.Connections().Single().Linked);
+        Assert.True(_device.Processes.Sessions.Where(s => s.Child == tunnel.Process).All(s => s.Disposed));
+        Assert.True(tunnel.Process.Stopped);
+    }
+
+    [Fact]
+    public async Task A_vm_being_reinstalled_loses_its_link_and_a_rebuilt_one_gets_a_new_link_after_the_old_tunnels_ended()
+    {
+        // Finding 40: the tunnels to the VM from before its reinstall held their ports and the new ones failed.
+        await _device.Links.RefreshAsync(CancellationToken.None);
+        await FakeDevice.WaitAsync(() => _device.Transports["e1/work"].Tunnels.Count == 1, "the tunnel");
+        var before = _device.Transports["e1/work"];
+        var tunnel = before.Tunnels[0];
+
+        _device.Engines.On("e1", "GET vms", """[{"name":"work","owner":"alice","kind":"primary","state":"running","deleting":false,"created":"2026-11-21T15:00:00Z","currentOperation":{"jobId":"j1","kind":"reinstall"}}]""");
+        await _device.Links.RefreshAsync(CancellationToken.None);
+        Assert.False(_device.Links.Connections().Single().Linked);
+        Assert.True(tunnel.Process.Stopped);
+
+        _device.Engines.On("e1", "GET vms", """[{"name":"work","owner":"alice","kind":"primary","state":"running","deleting":false,"created":"2026-11-21T15:00:00Z"}]""");
+        await _device.Links.RefreshAsync(CancellationToken.None);
+        Assert.True(_device.Links.Connections().Single().Linked);
+        Assert.NotSame(before, _device.Transports["e1/work"]);
+
+        // The same name as another machine (deleted and created again between two reads): the old link goes first.
+        await FakeDevice.WaitAsync(() => _device.Transports["e1/work"].Tunnels.Count == 1, "the second tunnel");
+        var second = _device.Transports["e1/work"];
+        _device.Engines.On("e1", "GET vms", """[{"name":"work","owner":"alice","kind":"primary","state":"running","deleting":false,"created":"2026-11-21T17:30:00Z"}]""");
+        await _device.Links.RefreshAsync(CancellationToken.None);
+        Assert.True(second.Tunnels[0].Process.Stopped);
+        Assert.NotSame(second, _device.Transports["e1/work"]);
+    }
+
+    private const string DeviceKeyBlob = "AAAAC3NzaC1lZDI1NTE5AAAAIDeviceKeyForTheProbeTest0000000000000000";
+
+    [Fact]
+    public async Task An_alias_with_the_old_clients_key_switches_to_the_device_key_once_that_key_logs_in()
+    {
+        // Finding 38: after the move the alias kept the old key, and a rebuilt VM accepts only the device key.
+        var ssh = Path.Combine(_device.Platform.Home, ".ssh");
+        Directory.CreateDirectory(ssh);
+        var old = Path.Combine(ssh, "agent_vm_ed25519");
+        File.WriteAllText(old, "old");
+        File.WriteAllText(Path.Combine(ssh, "construct_ed25519"), "device");
+        File.WriteAllText(Path.Combine(ssh, "construct_ed25519.pub"), $"ssh-ed25519 {DeviceKeyBlob} construct-agent\n");
+        File.WriteAllText(Path.Combine(ssh, "config"), $"Host work\n    HostName host.example\n    User root\n    IdentityFile {old}\n    IdentitiesOnly yes\n    Port 2201\n");
+
+        // Not on the VM yet: the link dials with the old key, and the device key is not tried again at once.
+        await _device.Links.RefreshAsync(CancellationToken.None);
+        Assert.Equal(old, _device.LinkKeys["e1/work"]);
+        await _device.Links.RefreshAsync(CancellationToken.None);
+        Assert.Equal(["work"], _device.KeyProbes);
+        Assert.Contains(old, File.ReadAllText(Path.Combine(ssh, "config")), StringComparison.Ordinal);
+
+        // The VM came back as another machine with the device key only: tried at once, the alias switches, the link follows.
+        _device.DeviceKeyWorks = true;
+        _device.Engines.On("e1", "GET vms", """[{"name":"work","owner":"alice","kind":"primary","state":"running","deleting":false,"created":"2026-11-21T17:30:00Z"}]""");
+        await _device.Links.RefreshAsync(CancellationToken.None);
+
+        var device = Path.Combine(ssh, "construct_ed25519");
+        Assert.Equal(device, _device.LinkKeys["e1/work"]);
+        var config = File.ReadAllText(Path.Combine(ssh, "config"));
+        Assert.Contains("IdentityFile " + device, config, StringComparison.Ordinal);
+        Assert.DoesNotContain(old, config, StringComparison.Ordinal);
+        Assert.Equal(["work", "work"], _device.KeyProbes);
+        // The probe asks whether the VM accepts the device key itself, not just whether some login worked (a shared
+        // connection or another configured key could make that one).
+        Assert.All(_device.ProbeScripts, script => Assert.Contains($"grep -qsF -- '{DeviceKeyBlob}'", script, StringComparison.Ordinal));
+        // From now on nothing is tried: the alias names the device key.
+        await _device.Links.RefreshAsync(CancellationToken.None);
+        Assert.Equal(2, _device.KeyProbes.Count);
+    }
+
+    [Fact]
+    public async Task A_vm_back_from_its_reinstall_is_tried_with_the_device_key_at_once()
+    {
+        var ssh = Path.Combine(_device.Platform.Home, ".ssh");
+        Directory.CreateDirectory(ssh);
+        var old = Path.Combine(ssh, "agent_vm_ed25519");
+        File.WriteAllText(old, "old");
+        File.WriteAllText(Path.Combine(ssh, "construct_ed25519"), "device");
+        File.WriteAllText(Path.Combine(ssh, "construct_ed25519.pub"), $"ssh-ed25519 {DeviceKeyBlob} construct-agent\n");
+        File.WriteAllText(Path.Combine(ssh, "config"), $"Host work\n    HostName host.example\n    User root\n    IdentityFile {old}\n    IdentitiesOnly yes\n    Port 2201\n");
+        await _device.Links.RefreshAsync(CancellationToken.None);
+        Assert.Single(_device.KeyProbes);
+
+        // A reinstall keeps the VM's record (same creation time); the machine it builds has the device key only.
+        _device.Engines.On("e1", "GET vms", """[{"name":"work","owner":"alice","kind":"primary","state":"running","deleting":false,"currentOperation":{"jobId":"j1","kind":"reinstall"}}]""");
+        await _device.Links.RefreshAsync(CancellationToken.None);
+        _device.DeviceKeyWorks = true;
+        _device.Engines.On("e1", "GET vms", """[{"name":"work","owner":"alice","kind":"primary","state":"running","deleting":false}]""");
+        await _device.Links.RefreshAsync(CancellationToken.None);
+
+        Assert.Equal(2, _device.KeyProbes.Count);
+        Assert.Equal(Path.Combine(ssh, "construct_ed25519"), _device.LinkKeys["e1/work"]);
+    }
+
+    [Fact]
+    public async Task Closing_a_forward_deletes_it_at_the_engine()
+    {
+        await _device.Links.RefreshAsync(CancellationToken.None);
+        await FakeDevice.WaitAsync(() => _device.Transports["e1/work"].Tunnels.Count == 1, "the tunnel");
+
+        await _device.Links.CloseForwardAsync("e1", "work", "web", CancellationToken.None);
+
+        Assert.Contains("DELETE vms/work/forwards/web", _device.Engines.CallsTo("e1"));
+        Assert.True(_device.Transports["e1/work"].Tunnels[0].Process.Stopped);
+    }
+
+    [Fact]
+    public async Task An_engine_that_does_not_answer_keeps_its_links()
+    {
+        await _device.Links.RefreshAsync(CancellationToken.None);
+        _device.Engines.On("e1", "GET vms", _ => throw new AgentFailure(502, "engine-unreachable", "down"));
+
+        await _device.Links.RefreshAsync(CancellationToken.None);
+
+        Assert.True(_device.Links.Connections().Single(c => c.Vm == "work").Linked);
+    }
+
+    [Fact]
+    public async Task Construct_notify_lines_from_the_vm_become_desktop_notifications()
+    {
+        await _device.Links.RefreshAsync(CancellationToken.None);
+        var watch = _device.Processes.Sessions.Single(s => _device.Transports["e1/work"].Watches.Any(w => w.Process == s.Child));
+        var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+
+        await watch.EmitAsync($$"""
+            {"ts":{{now}},"level":"warn","title":"Build","body":"Tests <failed> & stopped","source":"ci"}
+            {"ts":1,"level":"info","title":"Old","body":"an hour too late"}
+            not json
+            {"ts":{{now}},"title":"","body":""}
+
+            """);
+
+        var toast = Assert.Single(_toasts.Toasts);
+        Assert.Contains("<text>Build</text><text>Tests &lt;failed&gt; &amp; stopped</text>", toast.Xml, StringComparison.Ordinal);
+        Assert.Contains("duration=\"long\"", toast.Xml, StringComparison.Ordinal);
+        Assert.Contains("launch=\"construct://open?instance=work\"", toast.Xml, StringComparison.Ordinal);
+        Assert.Equal(["-a", "The Construct", "-u", "critical", "--", "Build", "Tests <failed> & stopped (ci)"], LinuxPlatform.NotifySend.Arguments(toast));
+    }
+
+    [Fact]
+    public async Task Open_actions_write_the_alias_and_open_vscode_or_a_terminal()
+    {
+        await _device.Links.RefreshAsync(CancellationToken.None);
+        var actions = new VmActions(_device.Links, _device.Platform);
+
+        await actions.OpenAsync("e1", "work", "vscode", CancellationToken.None);
+        await actions.OpenAsync("e1", "work", "ssh", CancellationToken.None);
+
+        Assert.Equal(["vscode://vscode-remote/ssh-remote+work/root/repos", "terminal:work"], _device.Platform.Opened);
+        var config = File.ReadAllText(Path.Combine(_device.Platform.Home, ".ssh", "config"));
+        Assert.Contains("Host work", config, StringComparison.Ordinal);
+        Assert.Contains("    HostName host.example", config, StringComparison.Ordinal);
+        Assert.Contains("    Port 2201", config, StringComparison.Ordinal);
+        Assert.Contains("    AddressFamily inet", config, StringComparison.Ordinal);
+        await Assert.ThrowsAsync<AgentFailure>(() => actions.OpenAsync("e1", "theirs", "vscode", CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task T3_code_opens_the_first_pairing_link_the_vm_gives_and_says_when_its_forward_is_not_ready()
+    {
+        await _device.Links.RefreshAsync(CancellationToken.None);
+        var ssh = _device.Transports["e1/work"];
+        var actions = new VmActions(_device.Links, _device.Platform);
+        ssh.ScriptHandler = (_, _) => Task.FromResult(new ProcessResult(0,
+            """{"links":[{"kind":"forwarded","pairUrl":"https://host.example:2300/pair#token=x"},{"kind":"direct","pairUrl":"http://work.mshome.net:5177/pair#token=x"}]}"""));
+
+        var opened = await actions.OpenAsync("e1", "work", "t3", CancellationToken.None);
+
+        Assert.Equal("forwarded", opened.Kind);
+        Assert.Equal("https://host.example:2300/pair#token=x", _device.Platform.Opened.Single());
+        ssh.ScriptHandler = (_, _) => Task.FromResult(new ProcessResult(7));
+        var failure = await Assert.ThrowsAsync<AgentFailure>(() => actions.OpenAsync("e1", "work", "t3", CancellationToken.None));
+        Assert.Equal("t3-forward-not-ready", failure.Code);
+    }
+
+    [Fact]
+    public async Task T3_code_opens_the_patched_desktop_app_where_construct_installed_one_and_mints_no_link()
+    {
+        // Finding 28: the button opened the web UI with a fresh pairing link although the desktop app was there.
+        await _device.Links.RefreshAsync(CancellationToken.None);
+        _device.Platform.T3Desktop = true;
+        var actions = new VmActions(_device.Links, _device.Platform);
+
+        var opened = await actions.OpenAsync("e1", "work", "t3", CancellationToken.None);
+
+        Assert.Equal("desktop", opened.Kind);
+        Assert.Equal(["t3-desktop"], _device.Platform.Opened);
+        Assert.Empty(_device.Transports["e1/work"].Scripts);
+    }
+
+    [Fact]
+    public async Task T3_code_opens_the_desktop_app_on_a_repair_thread_by_its_link()
+    {
+        // The failed job's repair runs as a T3 Code thread in the VM; its card opens T3 Desktop on that thread.
+        await _device.Links.RefreshAsync(CancellationToken.None);
+        _device.Platform.T3Desktop = true;
+        var actions = new VmActions(_device.Links, _device.Platform);
+
+        var opened = await actions.OpenAsync("e1", "work", "t3", "6f1c0b9e-2d4a", "thread:9f%2", CancellationToken.None);
+
+        Assert.Equal(("desktop", true), (opened.Kind, opened.ThreadOpened));
+        Assert.Equal(["t3-desktop t3code://threads/6f1c0b9e-2d4a/thread%3A9f%252"], _device.Platform.Opened);
+        Assert.Empty(_device.Transports["e1/work"].Scripts);
+        // Without the environment the desktop app opens as it is: the thread cannot be named in a link.
+        _device.Platform.Opened.Clear();
+        Assert.False((await actions.OpenAsync("e1", "work", "t3", null, "thread-1", CancellationToken.None)).ThreadOpened);
+        Assert.Equal(["t3-desktop"], _device.Platform.Opened);
+    }
+
+    [Fact]
+    public async Task Without_the_desktop_app_a_repair_thread_opens_t3_code_on_the_web_and_says_the_thread_was_not_opened()
+    {
+        await _device.Links.RefreshAsync(CancellationToken.None);
+        var ssh = _device.Transports["e1/work"];
+        var actions = new VmActions(_device.Links, _device.Platform);
+        ssh.ScriptHandler = (_, _) => Task.FromResult(new ProcessResult(0, """{"links":[{"kind":"forwarded","pairUrl":"https://host.example:2300/pair#token=x"}]}"""));
+
+        var opened = await actions.OpenAsync("e1", "work", "t3", "env-1", "thread-1", CancellationToken.None);
+
+        Assert.Equal(("forwarded", false), (opened.Kind, opened.ThreadOpened));
+        Assert.Equal("https://host.example:2300/pair#token=x", _device.Platform.Opened.Single());
+    }
+
+    [Theory]
+    [InlineData("t3", "env-1", "a/../b")]
+    [InlineData("t3", "env 1", "thread-1")]
+    [InlineData("t3", "env-1", "")]
+    [InlineData("vscode", "env-1", "thread-1")]
+    public async Task A_thread_to_open_takes_ids_fit_for_a_link_and_only_in_t3_code(string what, string environment, string thread)
+    {
+        await _device.Links.RefreshAsync(CancellationToken.None);
+        _device.Platform.T3Desktop = true;
+        var actions = new VmActions(_device.Links, _device.Platform);
+        var failure = await Assert.ThrowsAsync<AgentFailure>(() => actions.OpenAsync("e1", "work", what, environment, thread, CancellationToken.None));
+        Assert.Equal((400, "invalid-request"), (failure.Status, failure.Code));
+        Assert.Empty(_device.Platform.Opened);
+    }
+
+    [Fact]
+    public async Task T3_desktop_gets_a_pairing_link_for_its_own_vm_with_the_administrative_scopes_and_nothing_opens()
+    {
+        await _device.Links.RefreshAsync(CancellationToken.None);
+        var ssh = _device.Transports["e1/work"];
+        var actions = new VmActions(_device.Links, _device.Platform);
+        string? script = null;
+        ssh.ScriptHandler = (text, _) =>
+        {
+            script = text;
+            return Task.FromResult(new ProcessResult(0, "CONSTRUCT_PAIRING_SCOPES=administrative\n" +
+                """{"pairUrl":"https://host.example:2300/pair#token=one","links":[{"kind":"proxy","pairUrl":"https://t3.example:8443/pair#token=two"},{"kind":"forwarded","pairUrl":"https://host.example:2300/pair#token=one"}]}"""));
+        };
+
+        var link = await actions.T3PairingAsync("e1", "work", CancellationToken.None);
+
+        Assert.Equal("https://host.example:2300/pair#token=one", link.PairUrl);
+        Assert.Equal("administrative", link.Scopes);
+        Assert.Equal(["proxy", "forwarded"], link.Links.Select(l => l.Kind));
+        Assert.Empty(_device.Platform.Opened);
+        Assert.Contains("--label 'construct-t3-desktop-work' $extra", script, StringComparison.Ordinal);
+        // The script parses as bash.
+        var check = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("bash", "-n") { RedirectStandardInput = true, RedirectStandardError = true })!;
+        await check.StandardInput.WriteAsync(script);
+        check.StandardInput.Close();
+        await check.WaitForExitAsync();
+        Assert.True(check.ExitCode == 0, await check.StandardError.ReadToEndAsync());
+        Assert.Contains("--scopes administrative", script, StringComparison.Ordinal);
+        Assert.Contains("t3pair()", script, StringComparison.Ordinal);
+
+        // A stock T3 without --scopes; then a VM whose T3 is missing; another user's VM is never asked.
+        ssh.ScriptHandler = (_, _) => Task.FromResult(new ProcessResult(0, """{"pairUrl":"http://work.mshome.net:5177/pair#token=x"}"""));
+        Assert.Equal("standard", (await actions.T3PairingAsync("e1", "work", CancellationToken.None)).Scopes);
+        ssh.ScriptHandler = (_, _) => Task.FromResult(new ProcessResult(2));
+        Assert.Equal("t3-not-installed", (await Assert.ThrowsAsync<AgentFailure>(() => actions.T3PairingAsync("e1", "work", CancellationToken.None))).Code);
+        Assert.Equal(404, (await Assert.ThrowsAsync<AgentFailure>(() => actions.T3PairingAsync("e1", "theirs", CancellationToken.None))).Status);
+    }
+
+    [Fact]
+    public async Task On_this_pcs_engine_a_vm_is_dialled_at_the_direct_address_the_engine_names()
+    {
+        var engines = new FakeEngines().Add("local", "https://127.0.0.1:7462").Add("remote", "https://pc.example:7462");
+        foreach (var (engine, vm) in new[] { ("local", "work"), ("remote", "far") })
+            engines.On(engine, "GET whoami", """{"name":"alice"}""")
+                .On(engine, "GET vms", $$"""[{"name":"{{vm}}","owner":"alice","kind":"primary","state":"running"}]""")
+                .On(engine, $"GET vms/{vm}/endpoint", $$$"""{"sshHost":"pc.example","sshPort":2201,"publicHost":"pc.example","forwarded":{"host":"pc.example","port":2201},"direct":{"host":"{{{vm}}}.mshome.net","port":22}}""")
+                .On(engine, $"GET vms/{vm}/forwards", "[]").On(engine, $"GET vms/{vm}/forwards?via={vm}", "[]");
+        await using var device = new FakeDevice(_directory + "-local", engines, new FakePlatform());
+
+        await device.Links.RefreshAsync(CancellationToken.None);
+
+        // On the engine's own machine the direct address; from elsewhere the forward.
+        var connections = device.Links.Connections();
+        Assert.Equal(new VmAddress("work.mshome.net", 22, "direct"), connections.Single(c => c.Engine == "local").Address);
+        Assert.Equal(new VmAddress("pc.example", 2201, "forwarded"), connections.Single(c => c.Engine == "remote").Address);
+    }
+
+    [Fact]
+    public async Task Features_this_platform_lacks_answer_not_available()
+    {
+        await _device.Links.RefreshAsync(CancellationToken.None);
+        var actions = new VmActions(_device.Links, _device.Platform);
+
+        Assert.Equal(501, (await Assert.ThrowsAsync<AgentFailure>(() => _device.Links.SetMicAsync("e1", "work", true, CancellationToken.None))).Status);
+        Assert.Equal(501, (await Assert.ThrowsAsync<AgentFailure>(() => actions.MapShareAsync("e1", "work", CancellationToken.None))).Status);
+    }
+
+    private const string SignInUrl = "https://claude.example/oauth?redirect_uri=http%3A%2F%2Flocalhost%3A45678%2Fcallback&state=s";
+
+    private static string SignIn(string id = "s1", string state = "running", string? browser = $$"""{"url":"{{SignInUrl}}","port":45678}""") =>
+        $$"""{"id":"{{id}}","agent":"claude-code","state":"{{state}}","text":"","revision":1,"browser":{{browser ?? "null"}}}""";
+
+    [Fact]
+    public async Task A_sign_ins_redirect_port_is_forwarded_to_its_vm_and_its_link_opened_until_the_sign_in_ends()
+    {
+        _device.Engines.On("e1", "GET vms/work/agents/claude-code/sign-in", SignIn());
+        await _device.Links.RefreshAsync(CancellationToken.None);
+        var signIns = _device.Services.SignIns;
+        signIns.Poll = TimeSpan.FromMilliseconds(20);
+        var tunnels = _device.Transports["e1/work"].Tunnels;
+        var before = tunnels.Count;
+
+        var view = await signIns.StartAsync("e1", "work", new("claude-code", "s1"), CancellationToken.None);
+
+        Assert.Equal(45678, view.Port);
+        var tunnel = tunnels.Skip(before).Single();
+        Assert.Equal(("127.0.0.1", 45678, 45678, (string?)null), (tunnel.Spec.BindHost, tunnel.Spec.LocalPort, tunnel.Spec.VmPort, tunnel.Spec.ConnectAddress));
+        Assert.Equal([SignInUrl], _device.Platform.Opened);
+        Assert.Equal(45678, signIns.Port("e1", "work"));
+
+        // The sign-in ends on the engine: the forward closes by itself.
+        _device.Engines.On("e1", "GET vms/work/agents/claude-code/sign-in", SignIn(state: "ended", browser: null));
+        await FakeDevice.WaitAsync(() => tunnel.Process.Stopped, "the forward to close");
+        Assert.Null(signIns.Port("e1", "work"));
+    }
+
+    [Fact]
+    public async Task A_sign_in_forward_closes_when_another_sign_in_takes_its_place_on_cancel_and_after_its_limit()
+    {
+        _device.Engines.On("e1", "GET vms/work/agents/claude-code/sign-in", SignIn());
+        await _device.Links.RefreshAsync(CancellationToken.None);
+        var signIns = _device.Services.SignIns;
+        signIns.Poll = TimeSpan.FromMilliseconds(20);
+        var tunnels = _device.Transports["e1/work"].Tunnels;
+
+        await signIns.StartAsync("e1", "work", new("claude-code", "s1"), CancellationToken.None);
+        var first = tunnels.Last();
+        _device.Engines.On("e1", "GET vms/work/agents/claude-code/sign-in", SignIn("s2"));
+        await FakeDevice.WaitAsync(() => first.Process.Stopped, "a replaced sign-in's forward to close");
+
+        await signIns.StartAsync("e1", "work", new("claude-code", "s2"), CancellationToken.None);
+        var second = tunnels.Last();
+        // Only its own sign-in closes a forward: an older panel's cleanup leaves it open.
+        await signIns.StopAsync("e1", "work", "s1", CancellationToken.None);
+        Assert.False(second.Process.Stopped);
+        await signIns.StopAsync("e1", "work", "s2", CancellationToken.None);
+        Assert.True(second.Process.Stopped);
+
+        signIns.Limit = TimeSpan.FromMilliseconds(200);
+        await signIns.StartAsync("e1", "work", new("claude-code", "s2"), CancellationToken.None);
+        var third = tunnels.Last();
+        await FakeDevice.WaitAsync(() => third.Process.Stopped, "the limit to close it");
+    }
+
+    [Fact]
+    public async Task A_start_whose_engine_answer_comes_late_does_not_replace_a_newer_sign_ins_forward()
+    {
+        await _device.Links.RefreshAsync(CancellationToken.None);
+        var signIns = _device.Services.SignIns;
+        signIns.Poll = TimeSpan.FromMinutes(5);
+        const string newer = "https://claude.example/oauth?redirect_uri=http%3A%2F%2Flocalhost%3A45679%2Fcallback&state=t";
+        var late = new TaskCompletionSource<JsonNode?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var asked = 0;
+        // The first question gets its answer late, saying s1 runs; by then s2 has taken its place on the engine.
+        _device.Engines.OnAsync("e1", "GET vms/work/agents/claude-code/sign-in", _ => Interlocked.Increment(ref asked) == 1
+            ? late.Task
+            : Task.FromResult(JsonNode.Parse(SignIn("s2", browser: "{\"url\":\"" + newer + "\",\"port\":45679}"))));
+
+        var first = signIns.StartAsync("e1", "work", new("claude-code", "s1"), CancellationToken.None);
+        await FakeDevice.WaitAsync(() => Volatile.Read(ref asked) == 1, "the first start to ask the engine");
+        var second = signIns.StartAsync("e1", "work", new("claude-code", "s2"), CancellationToken.None);
+        late.SetResult(JsonNode.Parse(SignIn("s1")));
+        await first;
+        await second;
+
+        Assert.Equal(45679, signIns.Port("e1", "work"));
+        Assert.Equal(newer, _device.Platform.Opened.Last());
+    }
+
+    [Fact]
+    public async Task A_sign_in_forward_is_refused_for_a_sign_in_that_does_not_run_returns_elsewhere_or_whose_port_is_taken_here()
+    {
+        await _device.Links.RefreshAsync(CancellationToken.None);
+        var signIns = _device.Services.SignIns;
+        async Task<string> Refused(string vm, string session)
+        {
+            var refused = await Assert.ThrowsAsync<AgentFailure>(() => signIns.StartAsync("e1", vm, new("claude-code", session), CancellationToken.None));
+            return refused.Status + " " + refused.Code;
+        }
+
+        _device.Engines.On("e1", "GET vms/work/agents/claude-code/sign-in", SignIn("s1"));
+        Assert.Equal("409 no-browser-sign-in", await Refused("work", "old"));
+        _device.Engines.On("e1", "GET vms/work/agents/claude-code/sign-in", SignIn(state: "ended"));
+        Assert.Equal("409 no-browser-sign-in", await Refused("work", "s1"));
+        _device.Engines.On("e1", "GET vms/work/agents/claude-code/sign-in", SignIn(browser: """{"url":"https://accounts.example/o?redirect_uri=https%3A%2F%2Fhosted.example%2Fcb"}"""));
+        Assert.Equal("409 no-browser-sign-in", await Refused("work", "s1"));
+        _device.Engines.On("e1", "GET vms/work/agents/claude-code/sign-in", SignIn(browser: """{"url":"http://claude.example/oauth","port":45678}"""));
+        Assert.Equal("409 no-browser-sign-in", await Refused("work", "s1"));
+        _device.Engines.On("e1", "GET vms/work/agents/claude-code/sign-in", SignIn(browser: """{"url":"https://claude.example/oauth","port":80}"""));
+        Assert.Equal("409 no-browser-sign-in", await Refused("work", "s1"));
+
+        _device.Engines.On("e1", "GET vms/work/agents/claude-code/sign-in", SignIn());
+        _device.Transports["e1/work"].BusyPorts.Add((45678, "127.0.0.1"));
+        Assert.Equal("409 port-taken", await Refused("work", "s1"));
+        Assert.Equal("404 no-vm", await Refused("theirs", "s1"));
+        Assert.Empty(_device.Platform.Opened);
+        Assert.DoesNotContain(_device.Engines.CallsTo("e1"), c => c.Contains("theirs", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Config_env_values_are_read_as_config_set_writes_them()
+    {
+        var values = VmActions.ParseConfig("SMB_SHARE=true\nSMB_USER=dev\nSMB_PASSWORD='it'\\''s'\r\nSMB_SHARE_NAME=repo\n");
+        Assert.Equal(("true", "dev", "it's", "repo"), (values["SMB_SHARE"], values["SMB_USER"], values["SMB_PASSWORD"], values["SMB_SHARE_NAME"]));
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        await _device.DisposeAsync();
+        foreach (var directory in new[] { _directory, _directory + "-local" })
+        {
+            try { Directory.Delete(directory, true); }
+            catch (DirectoryNotFoundException) { }
+        }
+    }
+}

@@ -1,3 +1,6 @@
+using System.Text.Json;
+using System.Text.Json.Nodes;
+using Constructd.Api.Jobs;
 using Constructd.Core.Abstractions;
 using Constructd.Core.Domain;
 using Constructd.Core.Logic;
@@ -54,5 +57,60 @@ public static partial class AdminCli
         await AuditAsync(services, "vm.adopt", name!, "existing Hyper-V VM; owner=" + owner, ct);
         return writer.Result(new { name, owner, sshPort = port, vmToken = token, incarnation },
             "VM adopted; use --json to receive its enrollment credential.");
+    }
+
+    // A VM the old client made on this PC, adopted whole by the engine (Jobs/LocalVmAdoption.cs): it reads
+    // CPU, memory and disk from Hyper-V, stores the old client's settings as the VM's desired state and
+    // switches the guest over with bin/adopt-host.py. The guest verifies the running service, so this
+    // runs while the service runs. Progress goes to stderr; the result is the one stdout answer.
+    private static async Task<int> AdoptLocalVmAsync(IReadOnlyList<string> args, IServiceProvider services, AdminOutput writer,
+        TextWriter error, CancellationToken ct)
+    {
+        var name = args.ElementAtOrDefault(2);
+        var opts = new OptionSet(args.Skip(3), valueOptions: ["--owner", "--settings", "--instance-state", "--ssh-key"], flags: []);
+        if (name is null || opts.Unknown is not null || opts.Value("--owner") is not { Length: > 0 } owner ||
+            opts.Value("--settings") is not { Length: > 0 } settingsPath || opts.Value("--ssh-key") is not { Length: > 0 } keyPath)
+            return writer.Usage("adopt-local requires a VM name, --owner, --settings and --ssh-key");
+        JsonObject? settings, state = null;
+        string key;
+        try
+        {
+            settings = ReadObject(settingsPath);
+            if (opts.Value("--instance-state") is { Length: > 0 } statePath) state = ReadObject(statePath);
+            key = await File.ReadAllTextAsync(keyPath, ct);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or InvalidDataException)
+        {
+            return writer.Usage("adopt-local could not read one of its files (" + ex.GetType().Name + ")");
+        }
+        try
+        {
+            var result = await LocalVmAdoption.AdoptAsync(services, new LocalAdoptionRequest(name, owner, settings, state, key),
+                "admin-cli", new Progress(error), ct);
+            return writer.Result(result, $"VM {result.Name} adopted for {result.Owner}; SSH forward {result.SshPort}.");
+        }
+        catch (VmAdoptionException ex)
+        {
+            return writer.Error(ex.Code switch
+            {
+                "invalid" => AdminExitCode.Usage,
+                "not-found" => AdminExitCode.NotFound,
+                "conflict" => AdminExitCode.Conflict,
+                _ => AdminExitCode.Failed,
+            }, ex.Message);
+        }
+    }
+
+    private static JsonObject ReadObject(string path)
+    {
+        // The old client writes these with Windows PowerShell 5.1, which can add a BOM.
+        var text = File.ReadAllText(path).TrimStart('\uFEFF');
+        return JsonNode.Parse(text) as JsonObject ?? throw new InvalidDataException("not a JSON object");
+    }
+
+    /// <summary>Synchronous on purpose: the lines reach stderr in order, as they happen.</summary>
+    private sealed class Progress(TextWriter error) : IProgress<string>
+    {
+        public void Report(string value) => error.WriteLine(value);
     }
 }

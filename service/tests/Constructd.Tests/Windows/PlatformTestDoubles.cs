@@ -122,6 +122,11 @@ public sealed class FakeIsoFileSystem : IIsoFileSystem
             Sizes[destinationPath] = size;
         }
 
+        if (Hashes.Remove(sourcePath, out var hash))
+        {
+            Hashes[destinationPath] = hash;
+        }
+
         Moves.Add((sourcePath, destinationPath));
         Files.Remove(sourcePath);
         Sizes.Remove(sourcePath);
@@ -165,6 +170,12 @@ public sealed class FakeIsoDownloader(FakeIsoFileSystem files) : IIsoDownloader
     public long DownloadedSize { get; set; } = 3_000_000_000;
 
     public string? DownloadedSha256 { get; set; }
+
+    /// <summary>Text documents by address; any other one fails as an unreachable server would.</summary>
+    public Dictionary<Uri, string> Texts { get; } = [];
+
+    public Task<string> ReadTextAsync(Uri source, CancellationToken cancellationToken) =>
+        Texts.TryGetValue(source, out var text) ? Task.FromResult(text) : Task.FromException<string>(new HttpRequestException("unreachable"));
 
     public Task DownloadAsync(
         Uri source,

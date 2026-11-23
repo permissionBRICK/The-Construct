@@ -18,11 +18,14 @@ Assert ((Get-UpdateAuthority $null ([pscustomobject]@{updateId='u';disposition='
 Assert ((Get-UpdateAuthority $null ([pscustomobject]@{updateId='other';disposition='closed'}) 'u') -eq 'apply') 'fence must be scoped'
 Assert ((Get-UpdateRollbackMode ([pscustomobject]@{database=@{minReadableBy=0;breakingMigrations=@()}}) 100) -eq 'binary') 'additive rollback'
 Assert ((Get-UpdateRollbackMode ([pscustomobject]@{database=@{minReadableBy=600;breakingMigrations=@(600)}}) 100) -eq 'database') 'breaking rollback'
+Assert ((Get-UpdateRollbackMode ([pscustomobject]@{database=@{minReadableBy=600;breakingMigrations=@(600)}}) 100 ([pscustomobject]@{restoreDatabase=$false})) -eq 'binary') 'one-action update never restores the database'
+Assert ((Get-UpdateRollbackMode ([pscustomobject]@{database=@{minReadableBy=600;breakingMigrations=@(600)}}) 100 ([pscustomobject]@{updateId='u'})) -eq 'database') 'old handoff keeps database rollback'
 $script:stops=0;$script:starts=0;$script:healthCalls=0;$script:failNew=$false;$script:failAll=$false
 function Stop-UpdateService([string]$Name) {$script:stops++}
 function Start-UpdateService([string]$Name) {$script:starts++}
 function Test-UpdateHealth($H,[string]$Commit,[int]$Schema,[int]$TimeoutSeconds) {
     $script:healthCalls++
+    if ($script:migrate -and $Commit -eq $H.commit) { [IO.File]::WriteAllText((Join-Path $H.dataDir 'constructd.db'),'migrated') }
     return (-not $script:failAll -and (-not $script:failNew -or $Commit -eq $H.previousCommit))
 }
 function schtasks.exe { }
@@ -109,6 +112,27 @@ try {
     Assert ([IO.File]::ReadAllText((Join-Path $f.h.publishDir 'Constructd.Api.exe')) -eq 'old') 'old binary not restored'
     Assert (-not (Test-Path (Join-Path $f.h.publishDir 'new.dll'))) 'added DLL not removed'
     Assert (Test-Path (Join-Path $f.h.publishDir 'removed.dll')) 'old owned DLL missing'
+    # The one-action update (restoreDatabase=false) puts the files back and leaves the migrated database
+    # as it is; the copy taken before the swap stays in the backup for a manual restore.
+    foreach ($restore in @($true,$false)) {
+        $f=New-Fixture ('database-'+$restore);$script:migrate=$true
+        $m=Read-UpdateJson (Join-Path $f.h.stagedPath 'manifest.json');$m.database.minReadableBy=600;$m.database.breakingMigrations=@(600)
+        Write-UpdateJson (Join-Path $f.h.stagedPath 'manifest.json') $m
+        if (-not $restore) { $f.h.restoreDatabase=$false; Write-UpdateJson $f.path $f.h }
+        Assert ((Invoke-ConstructHostUpdate $f.path $false $false) -eq 0) 'database-mode rollback failed'
+        $record=Read-UpdateJson $f.record
+        Assert ([IO.File]::ReadAllText((Join-Path $f.h.publishDir 'Constructd.Api.exe')) -eq 'old') 'old binary not restored'
+        Assert ([IO.File]::ReadAllText((Join-Path $record.backupPath 'constructd.db')) -eq 'preserved-db-tokens-users') 'database copy not kept'
+        if ($restore) {
+            Assert ($record.outcome -eq 'rolledBackWithDatabase') 'old handoff no longer restores the database'
+            Assert ([IO.File]::ReadAllText((Join-Path $f.h.dataDir 'constructd.db')) -eq 'preserved-db-tokens-users') 'database not restored'
+        } else {
+            Assert ($record.outcome -eq 'rolledBack') 'one-action rollback outcome'
+            Assert ([IO.File]::ReadAllText((Join-Path $f.h.dataDir 'constructd.db')) -eq 'migrated') 'one-action rollback restored the database'
+        }
+        $script:migrate=$false
+    }
+    $script:failNew=$true
     # First updates from manual installs/conversion have no owned-file ledger yet.
     foreach ($shape in @('source-only','empty-files')) {
         foreach ($rollback in @($false,$true)) {

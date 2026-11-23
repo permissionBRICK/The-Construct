@@ -139,8 +139,9 @@ d="$(setup_fixture "opencode-watcher" "false" "stable")"
 printf '{"t3code":false,"t3codeChannel":"stable","opencodeBackgroundWatcher":true}\n' \
   > "${d}/backup/backup-info.json"
 cp "${ROOT}/bin/install-ai-tools.sh" "${d}/repo/bin/install-ai-tools.sh"
-# install-ai-tools.sh sources this helper from its own directory.
+# install-ai-tools.sh sources these helpers from its own directory.
 cp "${ROOT}/bin/t3code-patched.sh" "${d}/repo/bin/t3code-patched.sh"
+cp "${ROOT}/bin/apt-wait.sh" "${d}/repo/bin/apt-wait.sh"
 mkdir -p "${d}/repo/extension/vm"
 cp "${ROOT}/extension/vm/opencode-background.js" "${d}/repo/extension/vm/opencode-background.js"
 make_systemctl_stub "${d}"
@@ -241,8 +242,9 @@ ok "Claude skills: restored symlink resolves to saved skill" \
 # Any failure after services are paused must restore their prior state. The old
 # script exited under set -e and stranded both services stopped.
 d="$(setup_fixture "failure-restarts-services" "false" "stable")"
-mkdir -p "${d}/backup/home/.codex/sessions" "${d}/backup/home/.t3/userdata" "${d}/bin"
-touch "${d}/backup/home/.t3/userdata/state.sqlite"
+mkdir -p "${d}/backup/home/.codex/sessions" "${d}/backup/home/.t3/userdata" "${d}/bin" \
+  "${d}/backup/home/.local/share/opencode"
+touch "${d}/backup/home/.t3/userdata/state.sqlite" "${d}/backup/home/.local/share/opencode/opencode.db"
 cat >"${d}/bin/systemctl" <<STUB
 #!/bin/bash
 if [[ "\$1" == "is-active" ]]; then echo active; exit 0; fi
@@ -258,6 +260,7 @@ if run_restore "${d}" >/dev/null 2>&1; then restore_failed=false; else restore_f
 ok "failure cleanup: restore still reports the overlay failure" test "${restore_failed}" = true
 ok "failure cleanup: T3 service is restarted" grep -qx t3code-serve "${d}/service-starts"
 ok "failure cleanup: Codex service is restarted" grep -qx codex-app-server "${d}/service-starts"
+ok "failure cleanup: OpenCode service is restarted" grep -qx opencode-serve "${d}/service-starts"
 
 # A bare command failure under `set -e` must identify the restore-script line;
 # otherwise the Windows wrapper can only report an unhelpful remote exit code.
@@ -307,6 +310,73 @@ ok "proxy address: an invalid value is reported" grep -q 'not a valid address' "
 d="$(proxy_fixture proxy-wrong-type '42')"
 run_restore "${d}" >/dev/null 2>&1
 ok "proxy address: a non-string value is ignored" test -z "$(read_config_key "${d}/config/config.env" T3CODE_PROXY_URL)"
+
+# ── OpenCode database: never restored under the live server or its WAL ───────
+# The freshly provisioned opencode-serve has its own new database (OpenCode 2 here);
+# the backup's (OpenCode 1 here) replaces it while the service is stopped, and none
+# of the fresh -wal/-shm files may stay next to it.
+opencode_db_fixture() {
+  local d
+  d="$(setup_fixture "$1" "false" "stable")"
+  mkdir -p "${d}/backup/home/.local/share/opencode/storage" "${d}/export_home/.local/share/opencode" "${d}/bin"
+  printf 'v1-db\n' >"${d}/backup/home/.local/share/opencode/opencode.db"
+  printf 'v1-session\n' >"${d}/backup/home/.local/share/opencode/storage/s1.json"
+  for f in opencode.db opencode.db-wal opencode.db-shm; do
+    printf 'fresh\n' >"${d}/export_home/.local/share/opencode/${f}"
+  done
+  cat >"${d}/bin/systemctl" <<STUB
+#!/bin/bash
+echo "\$*" >>"${d}/systemctl.log"
+if [[ "\$1" == "is-active" && "\$2" == "opencode-serve" ]]; then echo active; exit 0; fi
+if [[ "\$1" == "is-active" ]]; then echo inactive; exit 3; fi
+if [[ "\$1" == "stop" && "\$2" == "opencode-serve" ]]; then
+  # The restored files must not be there yet when the server stops.
+  cat "${d}/export_home/.local/share/opencode/opencode.db" >"${d}/db-at-stop"
+fi
+exit 0
+STUB
+  chmod +x "${d}/bin/systemctl"
+  printf '%s' "${d}"
+}
+d="$(opencode_db_fixture opencode-db-dir)"
+run_restore "${d}" >"${d}/out" 2>&1
+ok "OpenCode database: the backup's database is restored" grep -qx v1-db "${d}/export_home/.local/share/opencode/opencode.db"
+ok "OpenCode database: the fresh -wal/-shm are gone" sh -c \
+  "test ! -e '${d}/export_home/.local/share/opencode/opencode.db-wal' && test ! -e '${d}/export_home/.local/share/opencode/opencode.db-shm'"
+ok "OpenCode database: opencode-serve stopped before the copy" grep -qx fresh "${d}/db-at-stop"
+ok "OpenCode database: opencode-serve started again after it" sh -c \
+  "test \"\$(grep -n '^stop opencode-serve' '${d}/systemctl.log' | cut -d: -f1)\" -lt \"\$(grep -n '^start opencode-serve' '${d}/systemctl.log' | cut -d: -f1)\""
+ok "OpenCode database: legacy session files come back too" grep -qx v1-session "${d}/export_home/.local/share/opencode/storage/s1.json"
+
+d="$(opencode_db_fixture opencode-db-archive)"
+tar -czf "${d}/backup.tar.gz" -C "${d}/backup" .
+env BACKUP_TGZ="${d}/backup.tar.gz" EXPORT_HOME="${d}/export_home" CONFIG_FILE="${d}/config/config.env" \
+  REPO_DIR="${d}/repo" PATH="${d}/bin:${PATH}" bash "${RESTORE}" >"${d}/out" 2>&1
+ok "OpenCode database (archive): restored without the fresh WAL" sh -c \
+  "grep -qx v1-db '${d}/export_home/.local/share/opencode/opencode.db' && test ! -e '${d}/export_home/.local/share/opencode/opencode.db-wal'"
+ok "OpenCode database (archive): opencode-serve stopped and started" sh -c \
+  "grep -qx 'stop opencode-serve' '${d}/systemctl.log' && grep -qx 'start opencode-serve' '${d}/systemctl.log'"
+
+d="$(opencode_db_fixture opencode-no-db)"
+rm "${d}/backup/home/.local/share/opencode/opencode.db"
+run_restore "${d}" >"${d}/out" 2>&1
+ok "OpenCode database: a backup without one leaves the server and its database alone" sh -c \
+  "! grep -q 'opencode-serve' '${d}/systemctl.log' 2>/dev/null && grep -qx fresh '${d}/export_home/.local/share/opencode/opencode.db-wal'"
+
+# ── SSH host keys from an extracted backup directory ─────────────────────────
+d="$(setup_fixture "ssh-host-keys" "false" "stable")"
+make_systemctl_stub "${d}"
+mkdir -p "${d}/backup/etc/ssh" "${d}/hostkeys"
+printf 'saved\n' >"${d}/backup/etc/ssh/ssh_host_ed25519_key"
+printf 'saved pub\n' >"${d}/backup/etc/ssh/ssh_host_ed25519_key.pub"
+printf 'fresh\n' >"${d}/hostkeys/ssh_host_ed25519_key"
+printf 'fresh pub\n' >"${d}/hostkeys/ssh_host_ed25519_key.pub"
+printf '#!/bin/bash\nexit 0\n' >"${d}/bin/sshd"
+chmod +x "${d}/bin/sshd"
+SSH_HOST_KEY_DIR="${d}/hostkeys" run_restore "${d}" >"${d}/out" 2>&1
+ok "host keys (directory backup): restored" grep -qx 'saved' "${d}/hostkeys/ssh_host_ed25519_key"
+ok "host keys (directory backup): private key 0600" test "$(stat -c '%a' "${d}/hostkeys/ssh_host_ed25519_key")" = 600
+ok "host keys (directory backup): reported" grep -q 'restored SSH host keys' "${d}/out"
 
 printf '\n  restore-config fixture tests — %d/%d passed\n\n' "${pass}" "$((pass + fail))"
 [ "${fail}" -eq 0 ] || exit 1

@@ -46,7 +46,7 @@ public sealed class ProxmoxOperationException(string operation, string vmName, s
 /// looked up in the cluster resource list on every call rather than cached, so a VM recreated behind
 /// the service's back is never driven under a stale id.
 /// </summary>
-public sealed class ProxmoxDriver : IHypervisorDriver, IVmCpuDriver, IVmMemoryDriver, IGuestNetworkConfigurator, IVmNestedDriver, IVmMemoryFloorDriver
+public sealed class ProxmoxDriver : IHypervisorDriver, IVmCpuDriver, IVmMemoryDriver, IGuestNetworkConfigurator, IVmNestedDriver, IVmMemoryFloorDriver, IVmHostStartDriver
 {
     /// <summary>Cloning the image and starting the VM; well short of leaving a hung <c>qm</c> forever.</summary>
     private static readonly TimeSpan CreateTimeout = TimeSpan.FromMinutes(30);
@@ -75,22 +75,26 @@ public sealed class ProxmoxDriver : IHypervisorDriver, IVmCpuDriver, IVmMemoryDr
     private readonly IProcessRunner _processes;
     private readonly ConstructdOptions _options;
     private readonly IProxmoxSeedFiles _seeds;
+    private readonly IVmRepository _vms;
     private readonly ILogger<ProxmoxDriver> _logger;
 
     public ProxmoxDriver(
         IProcessRunner processes,
         ConstructdOptions options,
         IProxmoxSeedFiles seeds,
+        IVmRepository vms,
         ILogger<ProxmoxDriver> logger)
     {
         ArgumentNullException.ThrowIfNull(processes);
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(seeds);
+        ArgumentNullException.ThrowIfNull(vms);
         ArgumentNullException.ThrowIfNull(logger);
 
         _processes = processes;
         _options = options;
         _seeds = seeds;
+        _vms = vms;
         _logger = logger;
     }
 
@@ -172,10 +176,11 @@ public sealed class ProxmoxDriver : IHypervisorDriver, IVmCpuDriver, IVmMemoryDr
             "--ide2", $"{storage}:cloudinit",
             "--net0", $"virtio,bridge={bridge}",
             "--boot", "order=scsi0",
-            // Hyper-V's AutomaticStartAction=StartIfRunning equivalent: `onboot` mirrors whether
-            // the VM is meant to be up, so a node reboot brings back what was running (or saved)
-            // and leaves alone what the user stopped. Set here and on every start, cleared on stop.
-            "--onboot", "1",
+            // Hyper-V's AutomaticStartAction=StartIfRunning equivalent: for a VM that may start with
+            // the host, `onboot` mirrors whether it is meant to be up, so a node reboot brings back what
+            // was running (or saved) and leaves alone what the user stopped. Set here and on every start,
+            // cleared on stop. Any other VM keeps it cleared (HostStartRules).
+            "--onboot", descriptor.StartWithHost ? "1" : "0",
             "--agent", "enabled=1",
             "--serial0", "socket",
             "--ipconfig0", "ip=dhcp",
@@ -238,8 +243,10 @@ public sealed class ProxmoxDriver : IHypervisorDriver, IVmCpuDriver, IVmMemoryDr
         var resuming = await ReadStateAsync(vmName, vmId, cancellationToken).ConfigureAwait(false) == VmState.Saved;
         await RunQmAsync("start-vm", vmName, ["start", id], ShortTimeout, null, cancellationToken)
             .ConfigureAwait(false);
-        // Only after a successful start: `onboot` mirrors the intended power state (see CreateVmAsync).
-        await RunQmAsync("start-vm", vmName, ["set", id, "--onboot", "1"], ShortTimeout, null, cancellationToken)
+        // Only after a successful start: `onboot` mirrors the intended power state (see CreateVmAsync) of
+        // a VM that may start with the host; for any other the start clears it, whatever it was before.
+        var onboot = await StartsWithHostAsync(vmName, cancellationToken).ConfigureAwait(false) ? "1" : "0";
+        await RunQmAsync("start-vm", vmName, ["set", id, "--onboot", onboot], ShortTimeout, null, cancellationToken)
             .ConfigureAwait(false);
         if (resuming)
         {
@@ -255,11 +262,13 @@ public sealed class ProxmoxDriver : IHypervisorDriver, IVmCpuDriver, IVmMemoryDr
     public async Task StopAsync(string name, CancellationToken cancellationToken)
     {
         var (vmName, id, vmId) = await RequireVmWithIdAsync("stop-vm", name, cancellationToken).ConfigureAwait(false);
-        // Even when the VM is already off or parked in a saved state: a stop expresses "stay down",
-        // so a node reboot must not start (or resume) this VM again.
-        await RunQmAsync("stop-vm", vmName, ["set", id, "--onboot", "0"], ShortTimeout, null, cancellationToken)
-            .ConfigureAwait(false);
         var state = await ReadStateAsync(vmName, vmId, cancellationToken).ConfigureAwait(false);
+        // Even when the VM is already off or parked in a saved state: a stop expresses "stay down",
+        // so a node reboot must not start (or resume) this VM again. A saved VM carries Proxmox's
+        // suspend lock, which this one write skips (see SetStartWithHostAsync).
+        string[] skipLock = state == VmState.Saved ? ["--skiplock", "1"] : [];
+        await RunQmAsync("stop-vm", vmName, ["set", id, "--onboot", "0", .. skipLock], ShortTimeout, null, cancellationToken)
+            .ConfigureAwait(false);
         if (state is VmState.Off or VmState.Saved)
         {
             return;
@@ -271,15 +280,47 @@ public sealed class ProxmoxDriver : IHypervisorDriver, IVmCpuDriver, IVmMemoryDr
     }
 
     /// <summary>
-    /// <c>onboot</c> deliberately stays set: a saved VM is a parked running one, so after a node
-    /// reboot it resumes — like Hyper-V's save-on-shutdown plus StartIfRunning.
+    /// For a VM that may start with the host <c>onboot</c> deliberately stays set: a saved VM is a parked
+    /// running one, so after a node reboot it resumes — like Hyper-V's save-on-shutdown plus StartIfRunning.
+    /// Any other VM (a child, a primary that idles out) is cleared first, while it still runs: once saved,
+    /// Proxmox locks its configuration, and the idle action's save is exactly what a node reboot must not undo.
     /// </summary>
     public async Task SaveAsync(string name, CancellationToken cancellationToken)
     {
         var (vmName, id) = await RequireVmAsync("save-vm", name, cancellationToken).ConfigureAwait(false);
+        if (!await StartsWithHostAsync(vmName, cancellationToken).ConfigureAwait(false))
+        {
+            await RunQmAsync("save-vm", vmName, ["set", id, "--onboot", "0"], ShortTimeout, null, cancellationToken)
+                .ConfigureAwait(false);
+        }
+
         await RunQmAsync("save-vm", vmName, ["suspend", id, "--todisk", "1"], ShortTimeout, null, cancellationToken)
             .ConfigureAwait(false);
     }
+
+    /// <summary>
+    /// Enabled: <c>onboot</c> mirrors the power state again, set while the VM runs or is saved, as a start
+    /// sets it; disabled: cleared. Written only when it differs. A saved VM carries Proxmox's suspend lock;
+    /// this write alone skips it, because <c>onboot</c> is read only at node boot and is no part of the
+    /// saved state.
+    /// </summary>
+    public async Task SetStartWithHostAsync(string name, bool enabled, CancellationToken ct)
+    {
+        var (vmName, id, vmId) = await RequireVmWithIdAsync("set-start-with-host", name, ct).ConfigureAwait(false);
+        var state = await ReadStateAsync(vmName, vmId, ct).ConfigureAwait(false);
+        if (enabled && state == VmState.Unknown) throw Fail("set-start-with-host", vmName, "the VM's power state is unknown");
+        var desired = enabled && (state is VmState.Running or VmState.Paused or VmState.Saved);
+        var config = await PveshAsync("set-start-with-host", vmName, ["get", VmPath(vmId) + "/config"], ct).ConfigureAwait(false);
+        var current = config.ValueKind == JsonValueKind.Object && config.TryGetProperty("onboot", out var value) && value.ToString() == "1";
+        if (current == desired) return;
+        string[] skipLock = state == VmState.Saved ? ["--skiplock", "1"] : [];
+        await RunQmAsync("set-start-with-host", vmName, ["set", id, "--onboot", desired ? "1" : "0", .. skipLock],
+            ShortTimeout, null, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>The engine's rule for this VM; a VM it does not know never starts with the host.</summary>
+    private async Task<bool> StartsWithHostAsync(string name, CancellationToken ct) =>
+        await _vms.GetAsync(name, ct).ConfigureAwait(false) is { } vm && HostStartRules.StartsWithHost(vm, _options.Idle);
 
     /// <summary>
     /// <c>absent</c> only when the cluster resource list was read and holds no VM of that name;

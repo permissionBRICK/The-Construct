@@ -42,6 +42,10 @@ public class PublicHostTests
         Assert.Equal("buildbox.test", endpoint.SshHost);
         Assert.Equal("buildbox.test", endpoint.PublicHost);
         Assert.InRange(endpoint.SshPort, 2201, 2299);
+
+        // How a client reaches SSH (design 7.2): the forward, and the VM's own address where the driver knows it.
+        Assert.Equal(new SshAddress("buildbox.test", endpoint.SshPort), endpoint.Forwarded);
+        Assert.Equal(new SshAddress("work-vm.fake.local", 22), endpoint.Direct);
     }
 
     [Fact]

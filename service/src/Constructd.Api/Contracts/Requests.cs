@@ -10,7 +10,18 @@ public sealed record CreateUserRequest(string? Name, string? Role, int? MaxVms, 
 
 public sealed record CreateTokenRequest(string? Label);
 
-public sealed record CreateVmRequest(string? Name, int? Cpu, int? RamGb, int? DiskGb, CreateVmOptions? Opts);
+/// <param name="Desired">
+/// The VM's provision settings. With them the create job also provisions the VM once it is reachable, as a
+/// <c>provision</c> job would, and stores them as the VM's settings; without them the VM is only built.
+/// </param>
+/// <param name="Secrets">
+/// With <paramref name="Desired"/>: the secrets that first provision needs, as on <c>POST /vms/{name}/jobs</c>
+/// (the device agent adds <c>gitCloneCredentialsB64</c>). Kept in the create job's RAM bag only and dropped when it
+/// ends; never stored, logged or part of the operation key's fingerprint. <c>vmTokenB64</c> and <c>backupKey</c>
+/// are not taken: the job issues the VM's token itself.
+/// </param>
+public sealed record CreateVmRequest(string? Name, int? Cpu, int? RamGb, int? DiskGb, CreateVmOptions? Opts,
+    VmDesiredState? Desired = null, ProvisionSecretsRequest? Secrets = null);
 
 /// <param name="Nested">Expose virtualization extensions to the guest.</param>
 /// <param name="AutomaticCheckpoints">Hyper-V automatic checkpoints (capability-gated).</param>
@@ -25,8 +36,11 @@ public sealed record PowerRequest(string? Action);
 /// <param name="Name">With <paramref name="Https"/>: the forward's own name, served as <c>&lt;vm&gt;-&lt;name&gt;</c> on the shared
 /// HTTPS port; omitted = the VM port.</param>
 /// <param name="ReplaceMain">With <paramref name="Main"/>: take the VM's main address over from an open main forward.</param>
+/// <param name="Purpose">What the forward is for, in a few words (at most 200 characters).</param>
+/// <param name="Source">Where the service behind it lives, e.g. its repo path (at most 400 characters).</param>
 public sealed record CreateForwardRequest(int? VmPort, string? Label, string? Target, int? ConnectPort = null, string? Via = null,
-    bool? Https = null, bool? Main = null, bool? UpstreamTls = null, string? Name = null, bool? ReplaceMain = null);
+    bool? Https = null, bool? Main = null, bool? UpstreamTls = null, string? Name = null, bool? ReplaceMain = null,
+    string? Purpose = null, string? Source = null);
 
 /// <param name="Status"><c>open</c> or <c>error</c>.</param>
 /// <param name="LocalPort">The port the extension actually opened. Required for <c>open</c>.</param>
@@ -36,7 +50,8 @@ public sealed record ForwardAckRequest(string? Status, int? LocalPort, string? H
 
 public sealed record IdlePolicyRequest(int? TimeoutMinutes, string? Action);
 
-public sealed record ActivityRequest(bool? Busy, IReadOnlyList<string>? Reasons);
+/// <param name="ProjectsDigest">A digest of the VM's projects folder; when it changes the engine reads the folder (design 9.3).</param>
+public sealed record ActivityRequest(bool? Busy, IReadOnlyList<string>? Reasons, string? ProjectsDigest = null);
 
 /// <summary>Optional confirmation shape reserved for the child-lifecycle implementation.</summary>
 public sealed record DeleteVmRequest(CascadeConfirmation? Cascade = null);

@@ -32,6 +32,35 @@ public sealed class VaultRequestTests
     }
 
     [Fact]
+    public async Task An_approval_grants_the_duration_the_user_chose_and_only_a_valid_one()
+    {
+        using var h = await VaultHarness.CreateAsync();
+        await h.PutEntriesAsync(h.Entry("db", "pw-123456", "admin"));
+        var id = await h.PendingAsync(h.Request("request", ["db"], new { uses = 2, ttl = 7200 }));
+        foreach (var bad in new object[] { new { decision = "approve", ttlSeconds = 30 }, new { decision = "approve", ttlSeconds = 86401 } })
+            Assert.Equal(HttpStatusCode.BadRequest, (await h.Bob.PostAsJsonAsync($"/api/v1/vault/approvals/{id}", bad)).StatusCode);
+
+        // Shorter than the VM asked: the lease ends when the user said.
+        Assert.Equal(HttpStatusCode.NoContent, (await h.Bob.PostAsJsonAsync($"/api/v1/vault/approvals/{id}", new { decision = "approve", ttlSeconds = 600 })).StatusCode);
+        var (status, body) = await h.PollAsync(id);
+        Assert.Equal(HttpStatusCode.OK, status);
+        Assert.Equal(h.Ms(TimeSpan.FromMinutes(10)), body!["lease"]!["expiresAt"]!.GetValue<long>());
+        Assert.Equal(2, body["lease"]!["usesLeft"]!.GetValue<int>());
+        var lease = (await h.Bob.GetFromJsonAsync<JsonObject>("/api/v1/vault/leases"))!["leases"]!.AsArray().Single()!;
+        Assert.Equal(h.Ms(TimeSpan.FromMinutes(10)), lease["expiresAt"]!.GetValue<long>());
+    }
+
+    [Fact]
+    public async Task A_duration_goes_only_with_a_lease_request()
+    {
+        using var h = await VaultHarness.CreateAsync();
+        await h.PutEntriesAsync(h.Entry("db", "pw-123456", "admin"));
+        var get = await h.PendingAsync(h.Request("get", ["db"]));
+        Assert.Equal(HttpStatusCode.BadRequest, (await h.Bob.PostAsJsonAsync($"/api/v1/vault/approvals/{get}", new { decision = "approve", ttlSeconds = 600 })).StatusCode);
+        Assert.Equal(HttpStatusCode.NoContent, await h.DecideAsync(get, "deny"));
+    }
+
+    [Fact]
     public async Task A_request_waits_in_a_long_poll_until_the_user_approves()
     {
         using var h = await VaultHarness.CreateAsync();

@@ -61,7 +61,16 @@ function New-HostPayload([string]$PublishDir, [string]$UpdaterName, [string]$Rid
     $executable = 'Constructd.Api'; if ($Rid -eq 'win-x64') { $executable += '.exe' }
     if (-not (Test-Path (Join-Path $payload ('service/' + $executable)))) { throw "$Rid publish output is required." }
     # Only tracked files from this checkout; never working-tree data, build output or credentials.
-    $tracked = @(& git -C $RepositoryRoot ls-files -- drivers lib bin config docs Create-AgentVM.ps1 Provision-AgentVM.ps1 service/host)
+    # The Windows service carries its Hyper-V driver (hyperv/) and the adoption's guest files (guest/)
+    # in its publish output. scripts/ keeps what the installers and the updaters read (lib, bin, config,
+    # service/host) and the guest payload (bin, config) for both platforms.
+    $scriptPaths = @('lib', 'bin', 'config', 'docs', 'service/host')
+    if ($Rid -eq 'win-x64') {
+        foreach ($required in @('hyperv/HyperV.Driver.ps1', 'hyperv/HyperV.ChildVm.ps1', 'hyperv/HyperV.WindowsLicense.ps1', 'guest/adopt-host.py', 'guest/construct')) {
+            if (-not (Test-Path -LiteralPath (Join-Path $payload ('service/' + $required)))) { throw "The win-x64 publish output lacks $required." }
+        }
+    }
+    $tracked = @(& git -C $RepositoryRoot ls-files -- @scriptPaths)
     if ($LASTEXITCODE -ne 0) { throw 'Cannot enumerate scripts.' }
     foreach ($rel in ($tracked | Sort-Object -Unique)) {
         if ($rel.StartsWith('docs/') -and $rel -notmatch '\.(md|txt|json|yml|yaml)$') { continue }

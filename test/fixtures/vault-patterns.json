@@ -1,5 +1,5 @@
 {
-  "comment": "Shared by the Companion's VaultProtocol (companion/tests/Construct.Companion.Tests/Vault/VaultPatternFixtureTests.cs) and the host service's copy (service/tests/Constructd.Tests/Vault/VaultPatternFixtureTests.cs): Patterns(value, username) in order, IsAgentLog(path) and DatabaseFor(path).",
+  "comment": "The host service's VaultProtocol, recorded from the Companion's before it was removed (service/tests/Constructd.Tests/Vault/VaultPatternFixtureTests.cs): Patterns(value, username) in order, IsAgentLog(path) and DatabaseFor(path).",
   "patterns": [
     {
       "name": "plain token",

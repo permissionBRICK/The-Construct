@@ -20,24 +20,24 @@ public static class ForwardEndpoints
     public static RouteGroupBuilder MapForwardEndpoints(this RouteGroupBuilder api)
     {
         api.MapGet("/vms/{name}/forwards", ListAsync)
-            .RequireAuthorization(Policies.VmScoped).WithName("ListForwards");
+            .RequireAuthorization(Policies.VmScoped).WithName("ListForwards").Produces<IReadOnlyList<ForwardResponse>>();
 
         // Whether this VM may publish HTTPS forwards: `construct expose --help` only offers the option then.
         api.MapGet("/vms/{name}/https", HttpsAsync)
-            .RequireAuthorization(Policies.VmScoped).WithName("VmHttpsAvailability");
+            .RequireAuthorization(Policies.VmScoped).WithName("VmHttpsAvailability").Produces<Constructd.Api.Https.HttpsAvailabilityResult>();
 
         api.MapPost("/vms/{name}/forwards", CreateAsync)
-            .RequireAuthorization(Policies.VmScoped).Audited("forward.add").WithName("CreateForward");
+            .RequireAuthorization(Policies.VmScoped).Audited("forward.add").WithName("CreateForward").Produces<ForwardResponse>(StatusCodes.Status201Created).Produces<ForwardResponse>();
 
         api.MapDelete("/vms/{name}/forwards/{id}", DeleteAsync)
-            .RequireAuthorization(Policies.VmScoped).Audited("forward.remove").WithName("DeleteForward");
+            .RequireAuthorization(Policies.VmScoped).Audited("forward.remove").WithName("DeleteForward").Produces(StatusCodes.Status204NoContent);
 
         // Policies.User, NOT Policies.VmScoped: this is the one forward route the VM's own token
         // may not reach. The guest ASKS for a client forward; whether a port really opened on the
         // user's PC is the extension's answer to give, and a VM that could write it would be able
         // to hand its own agents a link to a port nothing is listening on.
         api.MapPost("/vms/{name}/forwards/{id}/ack", AckAsync)
-            .RequireAuthorization(Policies.User).Audited("forward.ack").WithName("AckForward");
+            .RequireAuthorization(Policies.User).Audited("forward.ack").WithName("AckForward").Produces<ForwardResponse>();
 
         return api;
     }
@@ -127,6 +127,7 @@ public static class ForwardEndpoints
         }
 
         var vm = lookup.Vm!;
+        if (ForwardNote.Parse(request) is { Problem: { } noteProblem }) return noteProblem;
         var https = request?.Https == true;
         if ((request?.Main == true || request?.UpstreamTls is not null || request?.Name is not null || request?.ReplaceMain is not null) && !https)
             return CodedProblems.Validation("https", "'main', 'upstreamTls', 'name' and 'replaceMain' need https=true.");
@@ -192,9 +193,10 @@ public static class ForwardEndpoints
                 var endpoint = await network.EndpointAsync(vm, cancellationToken);
                 if (endpoint is null) return CodedProblems.Create(409, "no-address", "The guest has not reported an address yet.");
                 http.SetAuditDetail($"kind=direct, vmPort={vmPort}");
+                var direct = ForwardNote.Parse(request);
                 return Results.Ok(new ForwardResponse("", vm.Name, vmPort, null, target, label,
                     http.RequestServices.GetRequiredService<IClock>().UtcNow,
-                    $"http://{ForwardHost.ForUrl(endpoint.SshHost)}:{vmPort}/", Kind: "direct"));
+                    $"http://{ForwardHost.ForUrl(endpoint.SshHost)}:{vmPort}/", Kind: "direct", Purpose: direct.Purpose, Source: direct.Source));
             }
             if ((await hostConfig.GetAsync<NetworkConfig>("network", cancellationToken)) is { HostForwardsEnabled: false })
                 return CodedProblems.Create(403, "host-forwards-disabled", "Host-target forwards are disabled on this host.");
@@ -266,8 +268,7 @@ public static class ForwardEndpoints
         if (result.Status == AddForwardStatus.LimitReached)
         {
             http.SetAuditDetail($"limit {options.MaxForwardsPerVm} reached");
-            return Problems.Forbidden(
-                $"VM '{vm.Name}' already has the maximum of {options.MaxForwardsPerVm} forwards.");
+            return ForwardNote.LimitReached(vm.Name, options.MaxForwardsPerVm);
         }
 
         if (result.Status == AddForwardStatus.VmUnavailable)
@@ -276,7 +277,7 @@ public static class ForwardEndpoints
             return Problems.Conflict($"VM '{vm.Name}' is being deleted.");
         }
 
-        var forward = result.Forward!;
+        var forward = await ForwardNote.KeepAsync(http, result.Forward!, ForwardNote.Parse(request), cancellationToken);
         http.SetAuditDetail(
             $"id={forward.Id}, vmPort={vmPort}, target={target}, publicPort={forward.PublicPort?.ToString() ?? "-"}" +
             (forward.Https ? $", https, main={forward.Main}, name={HttpsForwardNames.Effective(forward)}" : ""));

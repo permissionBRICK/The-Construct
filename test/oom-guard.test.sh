@@ -138,10 +138,8 @@ check "no loaded units is a clean no-op" test "$?" -eq 0
 for unit in t3code-serve codex-app-server opencode-serve; do
   check "${unit}: OOMPolicy=continue" grep -qx 'OOMPolicy=continue' "${ROOT}/systemd/${unit}.service"
 done
-check "the extension's embedded T3 unit carries OOMPolicy=continue" \
-  grep -qx 'OOMPolicy=continue' "${ROOT}/extension/src/t3code.js"
 check "the Companion's embedded T3 unit carries OOMPolicy=continue" \
-  grep -qx 'OOMPolicy=continue' "${ROOT}/companion/src/Construct.Companion.Core/State/T3Code.cs"
+  grep -qx 'OOMPolicy=continue' "${ROOT}/agent/src/Construct.Companion.Core/State/T3Code.cs"
 check "the guard unit runs the installed script" \
   grep -qx 'ExecStart=/usr/local/bin/construct-oom-guard.sh' "${ROOT}/systemd/construct-oom-guard.service"
 check "the guard itself is protected" \

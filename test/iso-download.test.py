@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Real HTTP fault injection against the PowerShell/.NET downloader; no internet needed."""
+"""Real HTTP fault injection against the .NET downloader (lib/Construct.Download.cs); no internet needed."""
 import hashlib
 import http.server
 import json
@@ -90,8 +90,11 @@ class DownloadTests(unittest.TestCase):
             dest.write_bytes(b'previous complete ISO')
             script = Path(directory)/'run.ps1'
             quote = lambda s: "'"+str(s).replace("'", "''")+"'"
-            script.write_text("$ErrorActionPreference='Stop'\n. "+quote(ROOT/'lib/Construct.Download.ps1')+"\n"+
-                f"Receive-ConstructIso -Uri 'http://127.0.0.1:{self.server.server_port}/{mode}' -OutFile {quote(dest)} -IdleTimeoutSeconds 1 -Retries {retries} -ExpectedSha256 '{checksum}'\n")
+            # The transfer the service compiles in (service/src/Constructd.Windows), loaded the way its old
+            # PowerShell caller did: eight streams, a one-second idle timeout.
+            script.write_text("$ErrorActionPreference='Stop'\nAdd-Type -AssemblyName System.Net.Http\n$source = " + quote(ROOT/'lib/Construct.Download.cs') + "\nif ($PSVersionTable.PSVersion.Major -le 5) { Add-Type -Path $source -ReferencedAssemblies System.Net.Http } else { Add-Type -Path $source -IgnoreWarnings -WarningAction SilentlyContinue }\n" +
+                f"$t = [Construct.Download.Transfer]::new('http://127.0.0.1:{self.server.server_port}/{mode}', {quote(dest)}, 8, 1, {retries}, '{checksum}')\n" +
+                "try { $null = $t.Completion.GetAwaiter().GetResult() } finally { Write-Host ('{0} streams | {1} retries' -f $t.ActiveStreams, $t.Retries); $t.Dispose() }\n")
             result = subprocess.run([os.environ.get('POWERSHELL_EXE', 'pwsh'),'-NoProfile','-File',str(script)],capture_output=True,text=True,timeout=45)
             self.assertEqual(result.returncode == 0, succeeds, result.stdout+result.stderr)
             self.assertEqual(dest.read_bytes(), DATA if succeeds else b'previous complete ISO')

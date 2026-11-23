@@ -14,9 +14,10 @@ public static class ConsoleComposition
             services.AddSingleton<IConsoleTransport>(sp => sp.GetRequiredService<FakeConsoleTransport>());
         }
         else if (options.IsProxmox) services.AddSingleton<IConsoleTransport, Constructd.Proxmox.ProxmoxConsoleTransport>();
+        else if (options.IsExternal) services.AddSingleton<IConsoleTransport, Constructd.Core.Services.UnsupportedConsoleTransport>();
         else services.AddSingleton<IConsoleTransport, HyperVConsoleTransport>();
         services.AddSingleton<IConsoleSessionStore, InMemoryConsoleSessionStore>();
-        if (options.Fake) services.AddSingleton<IInteractiveConsole, Constructd.Core.Services.UnsupportedInteractiveConsole>();
+        if (options.Fake || options.IsExternal) services.AddSingleton<IInteractiveConsole, Constructd.Core.Services.UnsupportedInteractiveConsole>();
         else if (options.IsProxmox)
         {
             services.AddSingleton<IStreamingProcessRunner, Constructd.Windows.Process.StreamingProcessRunner>();

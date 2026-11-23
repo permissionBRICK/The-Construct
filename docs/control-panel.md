@@ -732,22 +732,6 @@ It defaults to `-VmName Agent-VM -Backend hyperv-local`, takes `-InstanceName` l
 other host scripts, and refuses to run when the backend reports no `Resources`
 capability rather than resizing some *local* VM that happens to share the name.
 
-### Swap file
-
-**Settings → VM resources → Swap file** sets the size of the VM's swap file:
-
-- `auto` (the default): half the RAM, at most 8 GB
-- `0`: no swap file
-- a whole number up to `128`: that many GB
-
-The panel accepts nothing else and keeps an invalid entry from being saved. The size is
-applied by the next reprovision, so saving a changed value shows the same **Reprovision
-now** prompt as the [OpenCode background watcher](#opencode-background-watcher) toggle. A
-reinstall or redownload uses it too. While nothing is saved here, the VM keeps the size it
-already has; the panel shows a size the VM saved itself (for example from a console run)
-once the VM is online. What the guest does with the value is described in
-[Provisioning → Swap file](provisioning.md#swap-file).
-
 ### Chat history kept in backups
 
 **Settings → VM resources → Chat history kept in backups** (days, default 30; `0` keeps
@@ -814,13 +798,15 @@ signals used by Construct's optional T3 monitoring patch. The tool descriptions 
 agent to wait by starting such a task and ending its turn; re-checking a running armed
 task within a minute returns a reminder to do that instead of output.
 
-Stop disarms these wake-ups. An aborted turn (T3's Stop, the TUI, the abort API) and a T3
-Stop of a turn that had already settled both record the stop time in
-`~/.local/state/opencode/background/<session>/stopped`; T3 writes that file itself for a
-settled turn, because OpenCode receives no abort then. A `wait: true` task started before
-that time keeps running but never wakes the session, including tasks of its subagents. A
-wake-up already on its way when the Stop lands is refused before OpenCode stores it, and a
-wake-up turn that had already started is aborted.
+Stop disarms these wake-ups. An interrupted execution (T3's Stop, the TUI, the interrupt
+API) records the stop time in `~/.local/state/opencode/background/<session>/stopped`; T3
+writes that file itself on every Stop, including a Stop of a turn that had already
+settled, because OpenCode sees no interrupt then. A `wait: true` task started before that
+time keeps running but never wakes the session, including tasks of its subagents. A
+wake-up is never queued behind running work: it waits until the turn ends, so stopping
+that turn drops it. A wake-up OpenCode already held when the Stop landed is left out of
+every model request, and its turn is interrupted before the model is asked; a wake-up turn
+that had already started is interrupted, unless the user has sent a new prompt since.
 The next prompt to the session carries a hidden note listing those tasks and their state,
 so a resumed agent knows to read their results or wait for them again.
 

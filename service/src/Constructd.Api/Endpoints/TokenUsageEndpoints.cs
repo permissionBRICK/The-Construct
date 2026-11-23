@@ -2,6 +2,7 @@ using System.Text.Json;
 using Constructd.Api.Auth;
 using Constructd.Api.Contracts;
 using Constructd.Api.Infrastructure;
+using Constructd.Api.Jobs;
 using Constructd.Core.Abstractions;
 using Constructd.Core.Domain;
 using Constructd.Core.Logic;
@@ -15,8 +16,9 @@ public static class TokenUsageEndpoints
         api.MapPost("/vms/{name}/usage", PostAsync)
             .RequireAuthorization(Policies.VmScoped)
             .Audited("vm.usage", auditSuccess: false).WithName("PostTokenUsage");
-        api.MapGet("/host/usage", HostAsync).RequireAuthorization(Policies.User).WithName("GetHostTokenUsage");
-        api.MapGet("/vms/{name}/usage", VmAsync).RequireAuthorization(Policies.User).WithName("GetVmTokenUsage");
+        api.MapGet("/host/usage", HostAsync).RequireAuthorization(Policies.User).WithName("GetHostTokenUsage").Produces<TokenUsageSummary>();
+        api.MapGet("/vms/{name}/usage", VmAsync).RequireAuthorization(Policies.User).WithName("GetVmTokenUsage").Produces<TokenUsageSummary>();
+        api.MapGet("/vms/{name}/agents", AgentsAsync).RequireAuthorization(Policies.User).WithName("GetVmAgents").Produces<VmAgentsResponse>();
         return api;
     }
 
@@ -37,6 +39,23 @@ public static class TokenUsageEndpoints
         window ??= "today";
         if (!TokenUsageMath.ValidWindow(window)) return Problems.BadRequest("window must be today, month or all.");
         return TypedResults.Ok(TokenUsageMath.Aggregate(await store.ListAsync(http.User.IsAdmin() ? null : http.User.NameOrEmpty(), lookup.Vm!.Name, ct), window, clock.UtcNow, [lookup.Vm]));
+    }
+
+    private static async Task<IResult> AgentsAsync(string name, HttpContext http, IVmRepository repository, IAuthorizationService authorization,
+        VmAgents agents, IAgentReleases releases, IVmDesiredStateSource desired, CancellationToken ct)
+    {
+        var lookup = await ApiHelpers.ResolveVmAsync(http, repository, authorization, name, Policies.VmOwnerOrAdmin, ct);
+        if (!lookup.Ok) return lookup.Failure!;
+        var report = await agents.GetAsync(lookup.Vm!, ct);
+        var channel = (await desired.GetDesiredForAsync(lookup.Vm!, ct))?.Desired.Settings.T3CodeChannel;
+        var list = new List<VmAgentResponse>();
+        foreach (var agent in report?.Agents ?? [])
+        {
+            var latest = await releases.LatestAsync(agent.Tool, agent.Tool == "t3" ? channel : null, ct);
+            list.Add(new(agent.Tool, VmAgents.Names[agent.Tool], agent.Version, latest, VmAgents.IsNewer(latest, agent.Version),
+                agent.Tool == "t3" ? null : agent.SignedIn, report!.Lost?.FirstOrDefault(l => l.Tool == agent.Tool)?.At));
+        }
+        return TypedResults.Ok(new VmAgentsResponse(report?.ReportedAt, list));
     }
 
     private static bool ValidCost(decimal? cost) => cost is >= 0 and <= 9223372036854.775807m;
@@ -67,7 +86,22 @@ public static class TokenUsageEndpoints
                 row.CacheReadTokens.Value, row.TotalTokens.Value, checked((long)decimal.Truncate(row.CostUsd!.Value * 1_000_000m)),
                 JsonSerializer.Serialize(row.Models ?? new Dictionary<string, TokenUsageModelRequest?>(), ApiJson.Options)));
         }
+        var agents = new List<VmAgentVersion>();
+        foreach (var agent in request.Agents ?? [])
+        {
+            if (!VmAgents.Accept(agent?.Tool, agent?.Version, agent?.SignedIn, agents))
+                return Problems.BadRequest("Each agent requires a unique known tool (claude, codex, opencode, antigravity, t3) and a version.");
+        }
         if (!await store.UpsertAsync(lookup.Vm!, days, clock.UtcNow, ct)) return LifecycleEndpoints.Problem("power-state-changed");
+        if (request.Agents is not null)
+        {
+            // A lost sign-in is noted only for an agent the VM is meant to have (its desired coding agents).
+            var desired = await http.RequestServices.GetRequiredService<IVmDesiredStateSource>().GetDesiredForAsync(lookup.Vm!, ct);
+            var chosen = VmAgents.Chosen(desired?.Desired);
+            // While a job works on the VM (its gate is held), a signed-out agent is no lost sign-in yet (F35).
+            var busy = http.RequestServices.GetRequiredService<IVmOperationGate>().IsHeld(lookup.Vm!.Name, out _);
+            await http.RequestServices.GetRequiredService<VmAgents>().SaveAsync(lookup.Vm!, agents, clock.UtcNow, ct, chosen, busy);
+        }
         http.SetAuditDetail($"rows={days.Count}");
         return TypedResults.NoContent();
     }

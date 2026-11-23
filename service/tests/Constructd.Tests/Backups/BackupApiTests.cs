@@ -24,7 +24,9 @@ public sealed class BackupApiTests
         Assert.Equal(HttpStatusCode.Created, status);
         var id = opened["id"]!.GetValue<string>();
         Assert.Matches("^[0-9a-f]{32}$", id);
-        Assert.Equal((100L << 30) - (5L << 30), opened["maxBytes"]!.GetValue<long>());
+        // 95 GiB free above the reserve, but the default quota of host-requested backups is 20 GiB.
+        Assert.Equal(20L << 30, opened["maxBytes"]!.GetValue<long>());
+        Assert.Equal("requested", opened["kind"]!.GetValue<string>());
 
         var keys = BackupHarness.Keys(id, recipients: 2);
         Assert.Equal(HttpStatusCode.NoContent, await h.PutKeysAsync(id, keys));
@@ -49,6 +51,10 @@ public sealed class BackupApiTests
         Assert.Equal(sha, listed["sha256"]!.GetValue<string>());
         Assert.Null(listed["pinnedUntil"]);
         Assert.True(listed.AsObject().ContainsKey("pinnedUntil"));
+        Assert.Equal("requested", listed["kind"]!.GetValue<string>());
+        Assert.False(listed["pinned"]!.GetValue<bool>());
+        // The only host-requested backup is the oldest, so the retention rule keeps it.
+        Assert.True(listed["protected"]!.GetValue<bool>());
 
         foreach (var client in new[] { h.Guest, h.Alice, h.Admin })
         {
@@ -135,11 +141,16 @@ public sealed class BackupApiTests
         Assert.Equal(HttpStatusCode.Forbidden, (await h.Bob.PutAsJsonAsync("/api/v1/vms/dev/backups/settings", new { keep = 2 })).StatusCode);
         Assert.Equal(HttpStatusCode.Forbidden, (await h.Bob.DeleteAsync(item)).StatusCode);
 
-        // The owner deletes any backup; the admin too.
-        Assert.Equal(HttpStatusCode.NoContent, (await h.Alice.DeleteAsync(item)).StatusCode);
-        Assert.Equal(HttpStatusCode.NotFound, (await h.Alice.DeleteAsync(item)).StatusCode);
+        // The owner deletes any backup; the admin too. The protected one only with an explicit confirmation.
+        using (var unconfirmed = await h.Alice.DeleteAsync(item))
+        {
+            Assert.Equal(HttpStatusCode.Conflict, unconfirmed.StatusCode);
+            Assert.Equal("backup-protected", Code(await BackupHarness.BodyAsync(unconfirmed)));
+        }
+        Assert.Equal(HttpStatusCode.NoContent, (await h.Alice.DeleteAsync(item + "?confirm=true")).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await h.Alice.DeleteAsync(item + "?confirm=true")).StatusCode);
         var second = await h.BackupAsync();
-        Assert.Equal(HttpStatusCode.NoContent, (await h.Admin.DeleteAsync($"/api/v1/vms/dev/backups/{second}")).StatusCode);
+        Assert.Equal(HttpStatusCode.NoContent, (await h.Admin.DeleteAsync($"/api/v1/vms/dev/backups/{second}?confirm=true")).StatusCode);
         Assert.Empty(await h.ListAsync());
         Assert.Empty(h.Files("*"));
     }
@@ -323,7 +334,7 @@ public sealed class BackupApiTests
         var (quota, quotaProblem) = await h.OpenAsync(estimatedBytes: 1);
         Assert.Equal((HttpStatusCode)507, quota);
         Assert.Equal("backup-quota", Code(quotaProblem));
-        Assert.Equal(HttpStatusCode.NoContent, (await h.Alice.DeleteAsync($"/api/v1/vms/dev/backups/{id}")).StatusCode);
+        Assert.Equal(HttpStatusCode.NoContent, (await h.Alice.DeleteAsync($"/api/v1/vms/dev/backups/{id}?confirm=true")).StatusCode);
         var (ok, opened) = await h.OpenAsync(estimatedBytes: 1);
         Assert.Equal(HttpStatusCode.Created, ok);
         Assert.Equal(64L << 20, opened["maxBytes"]!.GetValue<long>());
@@ -348,7 +359,9 @@ public sealed class BackupApiTests
         Assert.Equal("manual", due["backupTrigger"]!.GetValue<string>());
         Assert.False(due.ContainsKey("vaultScrub"));
 
-        var id = await h.OpenIdAsync("manual");
+        // Whatever the guest sends, its create consumes the request.
+        var id = await h.OpenIdAsync("scheduled", requested: false);
+        Assert.Equal(BackupTriggers.Manual, (await h.Store.GetAsync(id, default))!.Trigger);
         Assert.Empty(await h.HeartbeatAsync());
         Assert.False((await h.GetAsync("/status"))["requestPending"]!.GetValue<bool>());
         Assert.Equal(HttpStatusCode.NoContent, await h.PutKeysAsync(id));
@@ -406,9 +419,11 @@ public sealed class BackupApiTests
     {
         using var h = await BackupHarness.CreateAsync();
         var first = h.App.Clock.UtcNow;
+        await h.RequestAsync("scheduled");
         Assert.Equal(HttpStatusCode.NoContent, (await h.Guest.PostAsJsonAsync("/api/v1/vms/dev/backups/report",
             new { trigger = "scheduled", result = "failed", reason = "no-recipients", detail = (string?)null })).StatusCode);
         h.App.Clock.Advance(TimeSpan.FromHours(7));
+        await h.RequestAsync();
         Assert.Equal(HttpStatusCode.NoContent, (await h.Guest.PostAsJsonAsync("/api/v1/vms/dev/backups/report",
             new { trigger = "manual", result = "failed", reason = "export-failed", detail = "tar exited 2" })).StatusCode);
         var view = await h.GetAsync("/status");
@@ -444,6 +459,7 @@ public sealed class BackupApiTests
     {
         using var h = await BackupHarness.CreateAsync();
         // The first scheduled run found no key: a failure streak, and the next try would wait.
+        Assert.Equal("scheduled", (await h.HeartbeatAsync())["backupTrigger"]!.GetValue<string>());
         Assert.Equal(HttpStatusCode.NoContent, (await h.Guest.PostAsJsonAsync("/api/v1/vms/dev/backups/report",
             new { trigger = "scheduled", result = "skipped", reason = "no-recipients", detail = "" })).StatusCode);
         Assert.NotNull((await h.GetAsync("/status"))["failingSince"]);
@@ -462,6 +478,7 @@ public sealed class BackupApiTests
     public async Task An_enrolment_leaves_other_failures_alone()
     {
         using var h = await BackupHarness.CreateAsync();
+        await h.RequestAsync("scheduled");
         Assert.Equal(HttpStatusCode.NoContent, (await h.Guest.PostAsJsonAsync("/api/v1/vms/dev/backups/report",
             new { trigger = "scheduled", result = "skipped", reason = "vm-disk-space", detail = "" })).StatusCode);
         var before = await h.GetAsync("/status");
@@ -474,31 +491,47 @@ public sealed class BackupApiTests
     }
 
     [Fact]
-    public async Task A_pre_reinstall_backup_is_pinned_until_restored_and_survives_rotation_meanwhile()
+    public async Task A_requested_pre_reinstall_backup_is_pinned_until_the_user_releases_it_and_survives_rotation_meanwhile()
     {
         using var h = await BackupHarness.CreateAsync();
         await h.ConfigAsync(BackupHarness.Config(keep: 1));
-        var pinned = await h.BackupAsync(trigger: "pre-reinstall");
+        // An older backup, so the protected one is not the pre-reinstall backup.
+        var oldest = await h.BackupAsync(trigger: "scheduled");
+        h.App.Clock.Advance(TimeSpan.FromMinutes(5));
+        using (var request = await h.Alice.PostAsJsonAsync("/api/v1/vms/dev/backups/request", new { trigger = "pre-reinstall" }))
+        {
+            Assert.Equal(HttpStatusCode.Accepted, request.StatusCode);
+            Assert.Equal("pre-reinstall", (await BackupHarness.BodyAsync(request))["trigger"]!.GetValue<string>());
+        }
+        Assert.Equal("pre-reinstall", (await h.HeartbeatAsync())["backupTrigger"]!.GetValue<string>());
+        var pinned = await h.BackupAsync(trigger: "manual", requested: false);
         var created = h.App.Clock.UtcNow;
-        Assert.Equal(created.AddDays(14), (await h.ListAsync())[0]!["pinnedUntil"]!.GetValue<DateTimeOffset>());
+        var listed = (await h.ListAsync()).Single(b => b!["id"]!.GetValue<string>() == pinned)!;
+        Assert.Equal(created.AddDays(14), listed["pinnedUntil"]!.GetValue<DateTimeOffset>());
+        Assert.Equal("pre-reinstall", listed["kind"]!.GetValue<string>());
+        Assert.True(listed["pinned"]!.GetValue<bool>());
 
         // The empty VM's first scheduled backups do not rotate it out.
         h.App.Clock.Advance(TimeSpan.FromMinutes(5));
         var first = await h.BackupAsync(trigger: "scheduled");
         h.App.Clock.Advance(TimeSpan.FromMinutes(5));
         var second = await h.BackupAsync(trigger: "scheduled");
-        Assert.Equal([second, pinned], (await h.ListAsync()).Select(b => b!["id"]!.GetValue<string>()));
+        Assert.Equal([second, pinned, oldest], (await h.ListAsync()).Select(b => b!["id"]!.GetValue<string>()));
         Assert.DoesNotContain(first, (await h.ListAsync()).Select(b => b!["id"]!.GetValue<string>()));
 
+        // The guest reporting a restore no longer unpins it: a VM token never does.
         Assert.Equal(HttpStatusCode.NoContent, (await h.Guest.PostAsync($"/api/v1/vms/dev/backups/{pinned}/restored", null)).StatusCode);
-        Assert.Null((await h.ListAsync()).Single(b => b!["id"]!.GetValue<string>() == pinned)!["pinnedUntil"]);
+        Assert.NotNull((await h.ListAsync()).Single(b => b!["id"]!.GetValue<string>() == pinned)!["pinnedUntil"]);
         Assert.Equal(HttpStatusCode.NotFound, (await h.Guest.PostAsync($"/api/v1/vms/dev/backups/{new string('b', 32)}/restored", null)).StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, (await h.Guest.DeleteAsync($"/api/v1/vms/dev/backups/{pinned}/pin")).StatusCode);
 
-        // Unpinned, the next rotation treats it like any other backup.
+        // The user releases it; the next rotation treats it like any other backup.
+        Assert.Equal(HttpStatusCode.NoContent, (await h.Alice.DeleteAsync($"/api/v1/vms/dev/backups/{pinned}/pin")).StatusCode);
+        Assert.Null((await h.ListAsync()).Single(b => b!["id"]!.GetValue<string>() == pinned)!["pinnedUntil"]);
         h.App.Clock.Advance(TimeSpan.FromMinutes(5));
         var third = await h.BackupAsync(trigger: "scheduled");
-        Assert.Equal([third], (await h.ListAsync()).Select(b => b!["id"]!.GetValue<string>()));
-        Assert.Single(h.Files("*.age"));
+        Assert.Equal([third, oldest], (await h.ListAsync()).Select(b => b!["id"]!.GetValue<string>()));
+        Assert.Equal(2, h.Files("*.age").Length);
     }
 
     [Fact]

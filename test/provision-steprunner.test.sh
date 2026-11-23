@@ -95,5 +95,19 @@ ok "clean run prints all-good line" grep -q '^ALL PROVISIONING STEPS COMPLETED C
 # The persistent log file must actually exist and contain the step's output.
 ok "persistent log file exists" test -f "${tmp}/plog-sentinel/step-0-bad-title.log"
 
+# Each step announces itself to the host's progress bar: a countable marker with its short label and title.
+ok "a step prints its progress marker before its header" sh -c "grep -n '' '$tmp/clean.out' | grep -E '^1:::construct-step clean\|clean\$' >/dev/null"
+ok "a marker carries the sanitized title" grep -qx '::construct-step bad title|bad title' "${tmp}/sentinel.out"
+label() { CONSTRUCT_STEP_RUNNER_ONLY=true bash -c 'source "$1"; _step_label "$2"' _ "${PROVISION}" "$1"; }
+ok "a known step has its short label" test "$(label 'Installing T3 Code web GUI')" = 'Installing T3'
+ok "an AI tool step names the tool" test "$(label 'Installing AI tool: codex')" = 'Installing Codex'
+ok "an unknown tool keeps its id" test "$(label 'Installing AI tool: aider')" = 'Installing aider'
+ok "a step without a label shows its first three words" test "$(label 'Doing a brand new thing')" = 'Doing a brand'
+missing=""
+while IFS= read -r title; do
+  [[ "$(label "${title}")" == "${title}" && "$(wc -w <<<"${title}")" -gt 3 ]] && missing+="${title}; "
+done < <(grep -o 'run_step \(optional\|critical\) "[^"$]*"' "${PROVISION}" | sed 's/^run_step [a-z]* "//; s/"$//' | sort -u)
+ok "every step of provision.sh has a short label (${missing:-none missing})" test -z "${missing}"
+
 printf '\n%d passed, %d failed\n' "${pass}" "${fail}"
 [[ "${fail}" -eq 0 ]]

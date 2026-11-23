@@ -19,14 +19,14 @@ bootstrap.sh   text eol=lf
 # The release source archive (git archive) carries only what the client PC and the VM run.
 # Tests, fixtures, the .NET sources (published separately as releases), design notes and
 # CI belong to the repository, not to an install. Keep this list in step with the
-# local-artifact pattern in lib/AgentVm.Common.ps1 (Get-ConstructSourceIdentity).
+# local-artifact pattern in lib/AgentVm.Common.ps1 ($script:ConstructSourceLocalArtifactPattern).
 /test              export-ignore
 /extension/test    export-ignore
 /service/src       export-ignore
 /service/tests     export-ignore
 /service/Constructd.sln export-ignore
 /companion/src/**  export-ignore
-# ...except the key vault's scan and clean-up scripts: on a VM of a host service,
+# ...except the key vault's scan and clean-up scripts, all that is left there: on a VM of a host service,
 # `construct secret _scrub` renders them from the VM's own checkout. Every directory
 # on the way has to stay in, or git archive never descends to them.
 /companion/src/Construct.Companion.Core -export-ignore
@@ -34,8 +34,6 @@ bootstrap.sh   text eol=lf
 /companion/src/Construct.Companion.Core/Vault/GuestScripts -export-ignore
 /companion/src/Construct.Companion.Core/Vault/GuestScripts/vault-scan.sh -export-ignore
 /companion/src/Construct.Companion.Core/Vault/GuestScripts/vault-clean.sh -export-ignore
-/companion/tests   export-ignore
-/companion/Construct.Companion.sln export-ignore
 /docs/plans        export-ignore
 /.github           export-ignore
 /scripts           export-ignore

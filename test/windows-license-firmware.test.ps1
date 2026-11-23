@@ -1,7 +1,7 @@
 #Requires -Version 5.1
 # Firmware baseline safety tests without Hyper-V or an OS boot.
 $ErrorActionPreference='Stop'
-. (Join-Path $PSScriptRoot '../drivers/hyperv-local/HyperVLocal.WindowsLicense.ps1')
+. (Join-Path $PSScriptRoot '../service/src/Constructd.Windows/HyperV/Scripts/HyperV.WindowsLicense.ps1')
 function Check($condition,[string]$message) { if(-not $condition){throw $message} }
 function Reset {
     $script:state='Off';$script:disk=$false;$script:dvd=$false;$script:snapshot=$false

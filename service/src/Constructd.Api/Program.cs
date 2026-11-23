@@ -6,6 +6,14 @@ using Constructd.Api.Hosting;
 using Constructd.Api.Https;
 using Constructd.Api.Infrastructure;
 using Constructd.Core.Configuration;
+using Constructd.Store.Http;
+
+// Every text the engine makes (job progress, errors, logs) reads the same on every host, whatever the PC's language:
+// a German host once printed "2.167 / 3.891 MiB" for two gigabytes.
+System.Globalization.CultureInfo.DefaultThreadCurrentCulture = System.Globalization.CultureInfo.InvariantCulture;
+System.Globalization.CultureInfo.DefaultThreadCurrentUICulture = System.Globalization.CultureInfo.InvariantCulture;
+System.Globalization.CultureInfo.CurrentCulture = System.Globalization.CultureInfo.InvariantCulture;
+System.Globalization.CultureInfo.CurrentUICulture = System.Globalization.CultureInfo.InvariantCulture;
 
 // ---- Admin CLI -----------------------------------------------------------------------------
 // `constructd admin …` is the same executable in command-line mode: it works the stores directly,
@@ -72,9 +80,13 @@ builder.Services.ConfigureHttpJsonOptions(json =>
 });
 
 builder.Services.AddProblemDetails();
+// The API contract document (service/openapi/constructd.v1.json); generated, not served.
+builder.Services.AddConstructdOpenApi();
 builder.Services.AddConstructdServices(options);
 builder.Services.AddConstructdAuthentication(options);
 builder.Services.AddConstructdAuthorization();
+builder.Services.AddConstructdRecordStore(options);
+builder.Services.AddProfileSync();
 
 // One loop, two responsibilities: the idle evaluation (§4.7) and the host power reconcile (§4.13)
 // both ride on the same tick, so either one being wanted is reason enough to run it. Turning idle
@@ -145,6 +157,12 @@ app.MapGroup("/api/v1")
     .MapBackupEndpoints()
     .MapTokenUsageEndpoints()
     .MapJobEndpoints()
+    .MapEventEndpoints()
+    .MapProvisionEndpoints()
+    .MapRepairEndpoints()
+    .MapAgentSignInEndpoints()
+    .MapLocalAdoptionEndpoints()
+    .MapLanAccessEndpoints()
     // Host administration feature routes: one hook per implementation pair.
     .MapHealthEndpoints()
     .MapHostAdminEndpoints()
@@ -158,9 +176,16 @@ app.MapGroup("/api/v1")
     .MapLifecycleEndpoints()
     .MapChildConfigurationEndpoints()
     .MapUpdateEndpoints()
+    .MapVmUpdateEndpoints()
     .MapNetworkEndpoints()
     .MapVaultEndpoints()
-    .MapHttpsEndpoints();
+    .MapHttpsEndpoints()
+    .MapEngineParticipationEndpoints()
+    .MapProfileEndpoints();
+
+// The store authenticates its own callers from the tokens it issued (8.1), not from the sign-in:
+// anonymous for the authorization middleware, refused by the store unless a route says otherwise.
+app.MapGroup("/api/v1/store").AllowAnonymous().MapRecordStore((route, action) => route.Audited(action, "id"));
 
 // The key vault's phone pages: anonymous static files outside /api/v1.
 app.MapVaultWebEndpoints();
@@ -169,7 +194,8 @@ await app.Services.GetRequiredService<UpdateRecoveryService>().ReconcileAsync(Ca
 
 await Bootstrap.RunAsync(app.Services, CancellationToken.None);
 
-await app.RunAsync();
+// As app.RunAsync(), but a stop that runs past the shutdown timeout is logged, not thrown (EngineRun).
+await EngineRun.RunAsync(app, app.Logger);
 
 return 0;
 

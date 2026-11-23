@@ -1,8 +1,8 @@
 {
   "name": "construct-control-panel",
   "displayName": "The Construct",
-  "description": "Operator console for a Construct agent VM — lifecycle, updates, usage, projects, and microphone passthrough, from inside VS Code.",
-  "version": "0.1.0",
+  "description": "The Construct agent's window in VS Code, and opening your Construct VMs over Remote-SSH.",
+  "version": "1.0.0",
   "publisher": "permissionbrick",
   "license": "MIT",
   "engines": {
@@ -32,141 +32,37 @@
       "construct": [
         {
           "id": "construct.panel",
-          "name": "Control Panel",
+          "name": "The Construct",
           "type": "webview"
         }
       ]
     },
     "commands": [
       {
-        "command": "construct.installCompanion",
-        "title": "Construct: Install Construct Companion"
-      },
-      {
-        "command": "construct.openPanelHere",
-        "title": "Open Control Panel Here",
-        "category": "The Construct"
-      },
-      {
         "command": "construct.openPanel",
-        "title": "Open Control Panel",
-        "category": "The Construct"
-      },
-      {
-        "command": "construct.refresh",
-        "title": "Refresh Status",
-        "category": "The Construct"
-      },
-      {
-        "command": "construct.showLogs",
-        "title": "Show Logs (diagnostics)",
-        "category": "The Construct"
-      },
-      {
-        "command": "construct.chooseTheme",
-        "title": "Choose UI Design",
-        "category": "The Construct"
-      },
-      {
-        "command": "construct.switchInstance",
-        "title": "Switch Instance",
-        "category": "The Construct"
-      },
-      {
-        "command": "construct.addRemoteHost",
-        "title": "Add Remote Host",
-        "category": "The Construct"
-      },
-      {
-        "command": "construct.newRemoteVm",
-        "title": "New VM on Remote Host",
-        "category": "The Construct"
-      },
-      {
-        "command": "construct.registerThisVm",
-        "title": "Register This VM as an Instance",
-        "category": "The Construct"
-      },
-      {
-        "command": "construct.removeInstance",
-        "title": "Remove Instance",
-        "category": "The Construct"
-      },
-      {
-        "command": "construct.removeRemoteHost",
-        "title": "Remove Remote Host",
+        "title": "Open the Construct Window",
         "category": "The Construct"
       },
       {
         "command": "construct.openHostAdmin",
         "title": "Host Administration",
         "category": "The Construct"
+      },
+      {
+        "command": "construct.newRemoteVm",
+        "title": "New VM",
+        "category": "The Construct"
+      },
+      {
+        "command": "construct.openVm",
+        "title": "Open a VM in VS Code",
+        "category": "The Construct"
+      },
+      {
+        "command": "construct.registerWorkspace",
+        "title": "Register This Folder as a Project",
+        "category": "The Construct"
       }
-    ],
-    "configuration": {
-      "title": "The Construct",
-      "properties": {
-        "construct.companion": {
-          "type": "string",
-          "enum": ["auto", "off"],
-          "default": "auto",
-          "markdownDescription": "Use a running Construct Companion for host jobs and the control panel. Set to `off` to keep this VS Code window in fallback mode."
-        },
-        "construct.scriptsDir": {
-          "type": "string",
-          "default": "",
-          "markdownDescription": "Folder that holds the Construct PowerShell lifecycle scripts (`Auto-Install.ps1`, `projects/`, `.construct-settings.json`). Leave empty to auto-detect the newest install under `%LOCALAPPDATA%\\The-Construct`."
-        },
-        "construct.instance": {
-          "type": "string",
-          "default": "",
-          "markdownDescription": "Construct **instance** (VM) this VS Code window drives, by name from `%LOCALAPPDATA%\\The-Construct\\instances.json`. Leave empty (the default) to use the registry's default instance and the per-window choice made with **The Construct: Switch Instance** — with no registry file there is exactly one instance, `agent-vm`, and nothing changes. Setting a name here pins EVERY window to it and overrides the per-window choice."
-        },
-        "construct.debug": {
-          "type": "boolean",
-          "default": false,
-          "markdownDescription": "Diagnostics: keep launched host consoles OPEN (`-NoExit`) so errors stay readable instead of flashing closed, and log verbosely. Every launch is also recorded (with the exact command, resolved paths, args, and result) to the **Construct** Output channel — run **The Construct: Show Logs** to view it."
-        },
-        "construct.uiTheme": {
-          "type": "string",
-          "default": "native",
-          "enum": ["", "classic", "terminal", "native"],
-          "enumDescriptions": [
-            "Unset — falls back to the default design (VS Code Native).",
-            "Classic Matrix — the original green operator console.",
-            "Terminal, Refined — the Matrix identity with a disciplined phosphor palette; glow only on live elements.",
-            "VS Code Native — looks like a built-in panel and follows your editor theme (light or dark)."
-          ],
-          "markdownDescription": "Visual design of the Construct panels. Every design has identical functionality — only the styling changes. Pick with preview images via **The Construct: Choose UI Design**."
-        },
-        "construct.micDevice": {
-          "type": "string",
-          "default": "",
-          "markdownDescription": "Windows microphone passthrough: the exact DirectShow capture-device name to record from. Leave empty to auto-detect the first audio device. List devices with `ffmpeg -list_devices true -f dshow -i dummy` and copy a name from the DirectShow audio section (e.g. `Microphone (Realtek(R) Audio)`)."
-        },
-        "construct.notifications": {
-          "type": "boolean",
-          "default": true,
-          "markdownDescription": "Show desktop notifications an agent queues on the VM with `construct notify \"…\"` (e.g. telling you a long job finished). They arrive over one long-lived SSH connection that waits on the VM and reconnects itself, so delivery is immediate and idle costs nothing, and it works even when no Construct panel is open. Notifications appear as **Windows notifications** and stay in the notification centre; if Windows can't show one, it falls back to a VS Code notification. With several VS Code windows open, exactly one shows each notification."
-        },
-        "construct.forwards.enabled": {
-          "type": "boolean",
-          "default": true,
-          "markdownDescription": "Serve the port forwards an agent on the VM asks for with `construct expose <port>`: the extension opens that port on **this PC** and tunnels it over the SSH connection, so the link the agent prints actually works. Nothing is opened until an agent asks — an install where nobody runs `construct expose` behaves exactly as before. Switch this off to refuse the requests instead (they stay queued on the VM). With several VS Code windows open, exactly one serves each VM's forwards."
-        },
-        "construct.forwards.hostLabel": {
-          "type": "string",
-          "default": "",
-          "markdownDescription": "Host name to put in the links `construct expose` prints instead of `localhost` — for example `alice-pc`.\n\n**This also changes what the forwarded port is reachable from.** Left empty (the default) a forward listens on this PC's loopback only (`127.0.0.1`), so nothing else on your network can reach it and the link is `http://localhost:<port>/`. Setting a name opts in to listening on **all interfaces** (`0.0.0.0`), because a link naming this PC that only this PC could open would be a dead link. Set it only if you want those ports reachable from your network under that name, and only if the name resolves to this PC.\n\nFor a port that must be reachable independently of your PC being on, use `construct expose <port> --to host` on the VM instead — the host service publishes that one."
-        },
-        "construct.repatchDelaySeconds": {
-          "type": "number",
-          "default": 20,
-          "minimum": 0,
-          "maximum": 600,
-          "markdownDescription": "Seconds after the extension activates before it re-verifies the Construct patches on the VM's Claude Code extension (partial-message streaming and the chat-mic gate) and re-applies any that a background extension **auto-update reverted**. The delay lets a VS Code-start auto-update land first. Set to `0` to disable this startup check (patches are still applied on provision)."
-        }
-      }
-    }
+    ]
   }
 }

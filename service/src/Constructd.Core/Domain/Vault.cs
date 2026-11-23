@@ -17,9 +17,21 @@ public static class VaultModes
 /// One user's vault on this host: the sync revision and the settings. <see cref="Mode"/> is null until
 /// the Companion has set the vault up (<c>PUT /vault/settings</c>).
 /// </summary>
-public sealed record VaultOwnerState(string Owner, long Revision, string? Mode, string? KeyCheck, string? WrappedKey)
+/// <param name="Records">The vault lives in <c>secret</c> records (an account in the new stack, plan 9.1): the mode
+/// then follows whether a device granted this engine <c>K</c>, and there is no key check or wrapped key.</param>
+public sealed record VaultOwnerState(string Owner, long Revision, string? Mode, string? KeyCheck, string? WrappedKey, bool Records = false)
 {
-    public bool Configured => Mode is not null && KeyCheck is not null;
+    public bool Configured => Records || (Mode is not null && KeyCheck is not null);
+}
+
+/// <summary>
+/// Who caused a write of a record-backed entry (plan 9.1): <see cref="Kind"/> is one of the constants,
+/// <see cref="Device"/> the approving or entering device, <see cref="RequestId"/> the request the write answers.
+/// </summary>
+public sealed record VaultProvenance(string Kind, string? Vm = null, string? Device = null, string? RequestId = null)
+{
+    public const string ByDevice = "device", VmAdded = "vm-added", VmAutoApproveOff = "vm-auto-approve-off",
+        VmApproved = "vm-approved", EnteredOnRequest = "entered-on-request";
 }
 
 /// <summary>
@@ -27,10 +39,12 @@ public sealed record VaultOwnerState(string Owner, long Revision, string? Mode, 
 /// <c>{"username","secret","autoApprove"}</c> under <c>K</c> with the AAD <c>entry:&lt;name&gt;:&lt;updatedAt&gt;</c>;
 /// a tombstone (<see cref="Deleted"/>) has none. <see cref="UpdatedAt"/> is in Unix milliseconds.
 /// <see cref="AutoApprove"/>: VMs read it without the user's approval and are never scrubbed of it. The host
-/// decides by this plain copy (it may lack <c>K</c>); PCs trust only the sealed one.
+/// decides by this plain copy (it may lack <c>K</c>); PCs trust only the sealed one. For a record-backed vault
+/// <see cref="Revision"/> is the record's store revision (the base of the next write) and <see cref="Provenance"/>
+/// who wrote it.
 /// </summary>
 public sealed record VaultEntry(string Name, string Description, bool HasUsername, string? Payload, long UpdatedAt, string UpdatedBy, bool Deleted,
-    bool AutoApprove = false)
+    bool AutoApprove = false, long Revision = 0, VaultProvenance? Provenance = null)
 {
     public override string ToString() => $"VaultEntry {{ Name = {Name}, UpdatedAt = {UpdatedAt} }}";
 }
@@ -46,9 +60,11 @@ public interface IVaultRecord
 /// <summary>
 /// A VM's permission to read one secret. <see cref="UsesLeft"/> null = unlimited until
 /// <see cref="ExpiresAt"/>. Origin: <c>approved</c>, <c>once</c> (a single get) or <c>added</c>.
+/// <see cref="Seen"/> is the value the lease was granted on: when a record-backed entry changes under it (a device
+/// replaced or deleted it), the lease ends and that value is scrubbed.
 /// </summary>
 public sealed record VaultLease(string Id, string Owner, string Vm, string Name, int? UsesLeft, DateTimeOffset ExpiresAt,
-    DateTimeOffset GrantedAt, string Reason, string Origin) : IVaultRecord;
+    DateTimeOffset GrantedAt, string Reason, string Origin, VaultSecretCopy? Seen = null) : IVaultRecord;
 
 /// <summary>
 /// The encrypted value a scrub searches for. A scrub keeps its own copy, so deleting or replacing the

@@ -55,7 +55,7 @@ public sealed class SourceCache(ISourceStore store, ISourceFiles files, IRelease
             // A downloading row only survives here after recovery was skipped or interrupted.
             if (item?.State == SourceState.Downloading) throw new SourceException("source-cleanup-pending");
             progress?.Report("check");
-            var settings = HostUpdateTrust.Apply(await config.GetAsync<UpdatesConfig>("updates", ct) ?? HostAdminDefaults.Updates, options);
+            var settings = HostUpdateTrust.Settings(await config.GetAsync<UpdatesConfig>("updates", ct), options);
             var asset = await releases.GetSourceAssetAsync(settings.Repository, commit, ct);
             if (asset.SizeBytes <= 0 || asset.Commit != commit) throw new SourceException("release-source-invalid-metadata");
             if (asset.SizeBytes > Limits.MaxItemBytes) throw new SourceException("source-too-large");

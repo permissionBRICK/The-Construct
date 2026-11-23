@@ -21,6 +21,8 @@ REPORTER="${ROOT}/bin/construct-idle-report.sh"
 PROVISION="${ROOT}/bin/provision.sh"
 tmp="$(mktemp -d)"
 trap 'rm -rf "${tmp}"' EXIT
+# No projects folder unless a scenario makes one: the report then carries no digest.
+export PROJECTS_STORE="${tmp}/no-projects"
 
 pass=0
 fail=0
@@ -98,7 +100,7 @@ stub_dir="${tmp}/curlstub"
 SS_EXIT=0     # a scenario sets this to make the ss stub fail
 
 reset_scene() {
-  rm -rf "${proc}" "${marker}" "${stub_dir}" "${ss_argv}"
+  rm -rf "${proc}" "${marker}" "${stub_dir}" "${ss_argv}" "${tmp}/watch"
   mkdir -p "${proc}" "${stub_dir}"
   : >"${ss_out}"
   : >"${who_out}"
@@ -113,8 +115,16 @@ report() {
   CONSTRUCT_IDLE_DRY_RUN=true \
   CONSTRUCT_IDLE_PROC_DIR="${proc}" \
   CONSTRUCT_IDLE_AGENT_HOMES="${tmp}/home" \
+  CONSTRUCT_IDLE_WATCH_DIR="${tmp}/watch" \
   CONSTRUCT_PROVISION_MARKER="${marker}" \
     bash "${REPORTER}"
+}
+# A watch (extension/vm/notify-watch.sh) of pid <pid> records its connection; <alive> = yes
+# gives it a /proc entry.
+watch_session() { # <pid> <client-ip> <client-port> <alive>
+  mkdir -p "${tmp}/watch"
+  printf '%s %s 203.0.113.5 22\n' "$2" "$3" >"${tmp}/watch/notify-$1"
+  if [[ "$4" == yes ]]; then mkdir -p "${proc}/$1"; fi
 }
 
 # ── local mode: silent and successful ────────────────────────────────────────
@@ -145,6 +155,33 @@ printf 'Recv-Q Send-Q Local Address:Port Peer Address:Port\n0 0 203.0.113.5:22 2
 ok "an established SSH session is busy" test "$(report)" = '{"busy":true,"reasons":["ssh-session"]}'
 ok "the ss probe asks for established sessions on port 22" \
   grep -q 'state established ( sport = :22 )' "${ss_argv}"
+
+# The device agent's notification watch holds one SSH connection for good; it records that
+# connection, and the report does not take it for somebody using the VM.
+reset_scene
+printf 'Recv-Q Send-Q Local Address:Port Peer Address:Port\n0 0 203.0.113.5:22 203.0.113.9:51000\n' >"${ss_out}"
+watch_session 4242 203.0.113.9 51000 yes
+ok "the notification watch's own connection is not an SSH session" test "$(report)" = '{"busy":false,"reasons":[]}'
+printf '0 0 203.0.113.5:22 203.0.113.9:51001\n' >>"${ss_out}"
+ok "  a second connection next to it still is" test "$(report)" = '{"busy":true,"reasons":["ssh-session"]}'
+
+reset_scene
+printf 'Recv-Q Send-Q Local Address:Port Peer Address:Port\n0 0 [::ffff:203.0.113.5]:22 [::ffff:203.0.113.9]:51000\n' >"${ss_out}"
+watch_session 4242 203.0.113.9 51000 yes
+ok "  an IPv4-mapped peer address matches the recorded one" test "$(report)" = '{"busy":false,"reasons":[]}'
+
+reset_scene
+printf 'Recv-Q Send-Q Local Address:Port Peer Address:Port\n0 0 203.0.113.5:22 203.0.113.9:51000\n' >"${ss_out}"
+watch_session 4242 203.0.113.9 51000 no
+ok "  a record whose watch is gone hides nothing" test "$(report)" = '{"busy":true,"reasons":["ssh-session"]}'
+
+reset_scene
+printf 'Recv-Q Send-Q Local Address:Port Peer Address:Port\n0 0 198.51.100.7:22 203.0.113.9:51000\n' >"${ss_out}"
+watch_session 4242 203.0.113.9 51000 yes
+ok "  the same peer on another of the guest's addresses still counts" test "$(report)" = '{"busy":true,"reasons":["ssh-session"]}'
+
+ok "  the report looks where the device agent's watch records (NotificationProtocol)" \
+  sh -c "grep -q 'CONSTRUCT_IDLE_WATCH_DIR:-/run/construct/watch-sessions}' '${REPORTER}' && grep -q 'WatchSessionsDirectory = \"/run/construct/watch-sessions\"' '${ROOT}/agent/src/Construct.Companion.Core/Notifications/NotificationProtocol.cs'"
 
 # who is the fallback when ss is unavailable.
 reset_scene

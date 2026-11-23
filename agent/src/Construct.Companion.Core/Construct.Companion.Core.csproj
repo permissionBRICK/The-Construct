@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Moved from companion/ with the agent (plan 11.1); the settings companion/Directory.Build.props gave it. -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+  </PropertyGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="../../../extension/vm/*.sh" Link="GuestScripts/%(Filename)%(Extension)" LogicalName="GuestScripts.%(Filename)%(Extension)" />
+  </ItemGroup>
+</Project>

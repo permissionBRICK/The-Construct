@@ -11,7 +11,7 @@ public static class IdentityEndpoints
     {
         api.MapGet("/whoami", WhoAmIAsync)
             .RequireAuthorization(Policies.AnyUserIdentity)
-            .WithName("WhoAmI");
+            .WithName("WhoAmI").Produces<WhoAmIResponse>();
 
         return api;
     }

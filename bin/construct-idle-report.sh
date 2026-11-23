@@ -44,6 +44,10 @@ SYSTEMD_RUN="${CONSTRUCT_IDLE_SYSTEMD_RUN:-systemd-run}"
 # and the systemctl that tells whether the previous backup still runs.
 BACKUP_CMD="${CONSTRUCT_IDLE_BACKUP_CMD:-}"
 SYSTEMCTL="${CONSTRUCT_IDLE_SYSTEMCTL:-systemctl}"
+# The project profiles (docs/config-sync.md, "The new stack"): their digest goes
+# with the report, and open conflicts in the reply start `<cmd> project conflicts --start`.
+PROJECTS_STORE="${PROJECTS_STORE:-/opt/construct/projects}"
+CONFLICTS_CMD="${CONSTRUCT_IDLE_CONFLICTS_CMD:-}"
 
 log() { printf 'construct-idle-report: %s\n' "$*" >&2; }
 
@@ -122,8 +126,43 @@ _ss_session_count() {
   # An ss that exists but fails (unsupported filter syntax, a netlink hiccup,
   # restricted permissions) must not be read as an empty connection table.
   out="$("${SS_CMD}" -tn state established "( sport = :${SSH_PORT} )" 2>/dev/null)" || return 1
-  # Drop ss's header line, count what is left.
-  printf '%s\n' "${out}" | grep -v '^Recv-Q' | grep -c '[^[:space:]]' || true
+  # Count every row but ss's header and the connections of Construct's own watches, matched by
+  # both ends; a row's last two fields are its local and its peer address:port.
+  local watches line peer local_end count=0
+  local -a fields
+  watches="$(_watch_connections)"
+  while IFS= read -r line; do
+    read -r -a fields <<<"${line}"
+    [[ ${#fields[@]} -ge 2 && "${fields[0]}" != Recv-Q ]] || continue
+    peer="${fields[${#fields[@]}-1]}"
+    local_end="${fields[${#fields[@]}-2]}"
+    if [[ -n "${watches}" ]] && grep -qxF -- "$(_address_key "${peer%:*}"):${peer##*:} $(_address_key "${local_end%:*}"):${local_end##*:}" <<<"${watches}"; then
+      continue
+    fi
+    count=$((count + 1))
+  done <<<"${out}"
+  printf '%s\n' "${count}"
+}
+
+# Construct's own long-lived SSH sessions (the device agent's notification watch,
+# extension/vm/notify-watch.sh) record their connection in WATCH_DIR, one file per watch named
+# after its pid, holding its $SSH_CONNECTION. Such a connection is not somebody using the VM. A
+# record whose process is gone is stale and does not hide anything.
+WATCH_DIR="${CONSTRUCT_IDLE_WATCH_DIR:-/run/construct/watch-sessions}"
+# One spelling for an address: no brackets, no IPv4-mapped prefix.
+_address_key() { local a="${1#[}"; a="${a%]}"; printf '%s' "${a#::ffff:}"; }
+# One line per live watch: "<peer address>:<port> <local address>:<port>", both ends of its connection.
+_watch_connections() {
+  local f pid ip port server_ip server_port _rest
+  for f in "${WATCH_DIR}"/*; do
+    [[ -f "${f}" ]] || continue
+    pid="${f##*-}"
+    [[ "${pid}" =~ ^[0-9]+$ && -d "${PROC_DIR}/${pid}" ]] || continue
+    read -r ip port server_ip server_port _rest <"${f}" 2>/dev/null || continue
+    [[ -n "${ip}" && "${port}" =~ ^[0-9]+$ && -n "${server_ip}" && "${server_port}" =~ ^[0-9]+$ ]] || continue
+    printf '%s:%s %s:%s\n' "$(_address_key "${ip}")" "${port}" "$(_address_key "${server_ip}")" "${server_port}"
+  done
+  return 0
 }
 
 _who_session_count() {
@@ -297,6 +336,9 @@ post_activity() {
     if trigger="$(backup_due "${work}/body")"; then
       start_backup "${trigger}"
     fi
+    if conflicts_new "${work}/body"; then
+      start_conflicts
+    fi
   fi
   rm -rf "${work}"
 }
@@ -402,6 +444,55 @@ start_backup() {
   return 0
 }
 
+# ── project profiles ─────────────────────────────────────────────────────────
+# The digest covers the profile files, the revisions this VM last saw and the
+# deletion markers; when it changes, the host reads the folder over SSH and
+# takes direct edits from it (design 9.3).
+
+projects_digest() {
+  (
+    cd "${PROJECTS_STORE}" || exit 0
+    { find . -maxdepth 1 -type f -name '*.json' ! -name '.*'
+      find ./.state -maxdepth 1 -type f -name '*.rev' 2>/dev/null
+      find ./.deleted -maxdepth 1 -type f 2>/dev/null
+    } | LC_ALL=C sort | while IFS= read -r f; do
+      printf '%s %s\n' "${f}" "$(sha256sum <"${f}" | cut -d ' ' -f 1)"
+    done
+  ) | sha256sum | cut -d ' ' -f 1
+}
+
+# The reply lists open conflicts this VM's edits are part of; an agent is started
+# once per conflict (`construct project conflicts --start` keeps a marker each).
+conflicts_new() {
+  local file="$1" id
+  [[ -s "${file}" ]] && command -v jq >/dev/null 2>&1 || return 1
+  while IFS= read -r id; do
+    [[ "${id}" =~ ^conflict:[0-9a-f]+$ ]] || continue
+    [[ -e "${PROJECTS_STORE}/.state/conflicts/${id#conflict:}.started" ]] || return 0
+  done < <(jq -r 'if type == "object" and (.conflicts | type) == "array" then .conflicts[].id // empty else empty end' "${file}" 2>/dev/null)
+  return 1
+}
+
+start_conflicts() {
+  local cmd="${CONFLICTS_CMD}"
+  if [[ -z "${cmd}" ]]; then
+    cmd="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)/construct"
+    [[ -x "${cmd}" ]] || cmd="construct"
+  fi
+  if [[ -n "${INVOCATION_ID:-}" ]] && command -v "${SYSTEMD_RUN}" >/dev/null 2>&1; then
+    "${SYSTEMD_RUN}" --quiet --no-block --collect --property=SyslogIdentifier=construct-profile-conflict \
+      -- "${cmd}" project conflicts --start </dev/null >/dev/null 2>&1 \
+      || log "could not start the profile conflict agent (systemd-run failed)"
+    return 0
+  fi
+  if command -v setsid >/dev/null 2>&1; then
+    setsid -f "${cmd}" project conflicts --start </dev/null >/dev/null 2>&1 || log "could not start the profile conflict agent"
+  else
+    nohup "${cmd}" project conflicts --start </dev/null >/dev/null 2>&1 &
+  fi
+  return 0
+}
+
 main() {
   probe_ssh_sessions
   probe_agent_transcripts
@@ -411,7 +502,9 @@ main() {
   local busy="false"
   (( ${#REASONS[@]} > 0 )) && busy="true"
   local body
-  body="{\"busy\":${busy},\"reasons\":$(reasons_json)}"
+  local digest=""
+  [[ -d "${PROJECTS_STORE}" ]] && digest=",\"projectsDigest\":\"$(projects_digest)\""
+  body="{\"busy\":${busy},\"reasons\":$(reasons_json)${digest}}"
 
   if [[ "${DRY_RUN}" == "true" ]]; then
     printf '%s\n' "${body}"

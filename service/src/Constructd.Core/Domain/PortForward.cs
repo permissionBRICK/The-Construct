@@ -33,6 +33,11 @@ namespace Constructd.Core.Domain;
 /// The HTTPS forward's own name: the shared HTTPS port serves it as <c>&lt;vm&gt;-&lt;name&gt;</c> under the host's
 /// per-VM name pattern (<c>Constructd.Core.Logic.HttpsForwardNames</c>). Null means the default, the VM port.
 /// </param>
+/// <param name="Purpose">
+/// What the forward is for, in a few words (<c>construct expose --purpose</c>). With <see cref="Source"/> it lets an
+/// agent that hits the per-VM cap tell which forwards are obsolete. Null on forwards made without one.
+/// </param>
+/// <param name="Source">Where the service behind the forward lives, e.g. its repo path (<c>--source</c>). Null when unknown.</param>
 public sealed record PortForward(
     string Id,
     string VmName,
@@ -46,7 +51,9 @@ public sealed record PortForward(
     bool Https = false,
     bool Main = false,
     bool? UpstreamTls = null,
-    string? HttpsName = null);
+    string? HttpsName = null,
+    string? Purpose = null,
+    string? Source = null);
 
 /// <summary>What makes a host forward an HTTPS forward (docs/https-forwards.md).</summary>
 public sealed record HttpsForwardOptions(bool Main, bool UpstreamTls, string? Name = null);

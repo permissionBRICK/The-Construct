@@ -1,208 +1,52 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-    Mint a one-time T3 Code pairing link for one Construct VM and print it as JSON.
+    T3 Code pairing for one Construct VM, through the Construct device agent.
 
 .DESCRIPTION
-    Non-interactive by design: it never prompts, never pauses and opens no window of
-    its own. The Construct-built T3 Code Desktop app runs it hidden to link a VM's T3
-    server as a remote environment on its own (auto-link, plan section 4.12 "T3
-    Desktop topology"); it can equally be run from a console.
+    A shim kept for T3 Code Desktop and scripts that start it: the device agent owns the
+    VMs now. Until the one-time upgrade is converted it answers "finish the upgrade in
+    the Construct window". After that it asks the agent for the VM's pairing link
+    (POST /api/connections/{engine}/{vm}/t3-pairing, with the agent's token), which mints
+    it on the VM as this script did: ten minutes, the administrative scopes where the
+    VM's T3 offers them. -Ttl and -Scopes are accepted and ignored (their defaults are
+    what the agent uses); the SSH parameters are ignored, the agent knows the VM.
 
-    It connects to the VM over SSH as root -- with the key provisioning wrote to
-    ~\.ssh\<LocalKeyName>, falling back to the ~\.ssh\config Host alias -- and asks the
-    VM's own t3 CLI for a pairing link bound to the reachable forwarded endpoint.
-    Managed VMs use a host forward when allowed, otherwise a client forward; the
-    effective TLS state selects HTTPS or HTTP. The link carries the ADMINISTRATIVE scope set when the
-    VM's T3 build understands `--scopes` (Construct's patched build); a stock T3 issues
-    its standard client scopes.
-
-    Output is ONE JSON line on stdout:
-        {"ok":true,"instance":"<name>","pairUrl":"https://...","scopes":"administrative"|"standard"}
+    Output is ONE JSON line on stdout, as before:
+        {"ok":true,"instance":"<name>","pairUrl":"https://...","links":[...],"scopes":"administrative"|"standard"}
         {"ok":false,"instance":"<name>","error":"<why>"}
-    Exit code 0 when a link was minted, 1 otherwise. Nothing else goes to stdout.
-
-.PARAMETER InstanceName
-    Name-only targeting (plan section 4.12): the Construct instance to link, resolved
-    through the client-side registry. Empty (and the default instance) = the default
-    VM's literals.
-
-.PARAMETER VmHost / HostAlias / SshPort / LocalKeyName
-    Explicit identity overrides; they win over the registry entry and must agree with it.
-
-.PARAMETER Ttl
-    How long the one-time link stays valid (t3's duration syntax). Default 10m.
-
-.PARAMETER Scopes
-    "administrative" (default; falls back to standard on a T3 without the flag) or
-    "standard".
+    Exit code 0 when a link was minted, 1 otherwise. The link carries a one-time token;
+    it goes to stdout only.
 #>
 [CmdletBinding()]
 param(
     [string]$InstanceName = "",
-    [string]$VmHost      = "agent-vm.mshome.net",
-    [string]$HostAlias   = "agent-vm",
-    [string]$RemoteUser  = "root",
-    [string]$LocalKeyName = "agent_vm_ed25519",
-    [ValidateRange(1, 65535)]
-    [int]$SshPort        = 22,
-    [string]$Ttl         = "10m",
-    [ValidateSet("administrative", "standard")]
-    [string]$Scopes      = "administrative"
+    [string]$VmHost = "",
+    [string]$HostAlias = "",
+    [string]$RemoteUser = "root",
+    [string]$LocalKeyName = "",
+    [int]$SshPort = 22,
+    [string]$Ttl = "10m",
+    [string]$Scopes = "administrative"
 )
-
 $ErrorActionPreference = "Stop"
-
-# Everything this script says goes to stdout as ONE JSON line; a caller that spawned it
-# hidden reads exactly that. Diagnostics go to stderr.
-function Write-Result([hashtable]$obj) {
-    $ordered = [ordered]@{}
-    foreach ($k in @('ok', 'instance', 'pairUrl', 'links', 'scopes', 'error')) {
-        if ($obj.ContainsKey($k)) { $ordered[$k] = $obj[$k] }
-    }
-    [Console]::Out.WriteLine(([pscustomobject]$ordered | ConvertTo-Json -Compress -Depth 3))
-}
-function Fail([string]$why) {
-    Write-Result @{ ok = $false; instance = $script:ResolvedName; error = $why }
+. (Join-Path $PSScriptRoot 'lib\Construct.AgentShim.ps1')
+$name = 'agent-vm'
+if ($InstanceName) { $name = "$InstanceName".Trim().ToLowerInvariant() }
+function Write-Result([string]$Why) {
+    [Console]::Out.WriteLine(([pscustomobject][ordered]@{ ok = $false; instance = $name; error = $Why } | ConvertTo-Json -Compress))
     exit 1
 }
-
-$script:ResolvedName = if ($InstanceName) { "$InstanceName".Trim().ToLowerInvariant() } else { 'agent-vm' }
-
-# Resolve -InstanceName before anything reads the identity below (the same block
-# Get-AgentUsage.ps1 / Update-T3Code.ps1 use): explicit values still win and must agree
-# with the entry; an unknown name is an error, never a fallback to the default VM.
-$script:IsDefault = $true
-if ($InstanceName) {
-    $instanceTargetLib = Join-Path $PSScriptRoot "lib\AgentVm.InstanceTarget.ps1"
-    if (-not (Test-Path -LiteralPath $instanceTargetLib)) {
-        Fail "-InstanceName needs lib/AgentVm.InstanceTarget.ps1, which is missing from this install. Update The Construct."
-    }
-    . $instanceTargetLib
-    $explicitTarget = @{}
-    foreach ($tp in @('VmHost', 'HostAlias', 'SshPort', 'LocalKeyName')) {
-        if ($PSBoundParameters.ContainsKey($tp)) { $explicitTarget[$tp] = $PSBoundParameters[$tp] }
-    }
-    try {
-        $instanceTarget = Resolve-ConstructVmTarget -Name $InstanceName -Explicit $explicitTarget
-    } catch {
-        Fail ("$($_.Exception.Message)".Trim())
-    }
-    if (-not $PSBoundParameters.ContainsKey('VmHost'))       { $VmHost       = [string]$instanceTarget.VmHost }
-    if (-not $PSBoundParameters.ContainsKey('HostAlias'))    { $HostAlias    = [string]$instanceTarget.HostAlias }
-    if (-not $PSBoundParameters.ContainsKey('SshPort'))      { $SshPort      = [int]$instanceTarget.SshPort }
-    if (-not $PSBoundParameters.ContainsKey('LocalKeyName')) { $LocalKeyName = [string]$instanceTarget.KeyName }
-    $script:SshFamilyOpts = @(Get-ConstructSshFamilyOptions -Ipv4 ([string]$instanceTarget.Backend -eq 'hyperv-remote') -VmHost $VmHost)
-    $script:IsDefault = [bool]$instanceTarget.IsDefault
-}
-
+$target = Resolve-ConstructAgentVm -Name $name
+if ($target.Error) { Write-Result $target.Error }
 try {
-    if (-not (Get-Command ssh.exe -ErrorAction SilentlyContinue)) {
-        Fail "ssh.exe not found. It ships with Windows 10/11 (OpenSSH Client)."
-    }
-
-    # Decode ssh's stdout as UTF-8 (the VM prints JSON).
-    try {
-        $utf8NoBom = New-Object System.Text.UTF8Encoding $false
-        [Console]::OutputEncoding = $utf8NoBom
-        $OutputEncoding = $utf8NoBom
-    } catch { }
-
-    if (-not (Test-Path variable:script:SshFamilyOpts)) { $script:SshFamilyOpts = @() }
-    $keyPath = Join-Path $HOME ".ssh\$LocalKeyName"
-    $sshPortArgs = if ($SshPort -ne 22) { @("-p", "$SshPort") } else { @() }
-    if (Test-Path -LiteralPath $keyPath) {
-        $sshTarget = "$RemoteUser@$VmHost"
-        $sshOpts = @(
-            "-i", $keyPath,
-            "-o", "IdentitiesOnly=yes",
-            "-o", "StrictHostKeyChecking=accept-new",
-            "-o", "UserKnownHostsFile=$HOME\.ssh\known_hosts",
-            "-o", "BatchMode=yes",
-            "-o", "ConnectTimeout=15"
-        ) + $script:SshFamilyOpts
-    } else {
-        $sshTarget = $HostAlias
-        $sshOpts = @(
-            "-o", "StrictHostKeyChecking=accept-new",
-            "-o", "BatchMode=yes",
-            "-o", "ConnectTimeout=15"
-        ) + $script:SshFamilyOpts
-    }
-
-    # The VM-side script: the control panel's pairing script (extension/src/t3code.js
-    # buildPairingScript), with the scope flag on top. The origin is decided ON THE VM
-    # from what it advertises; the label names the instance so the server's connection
-    # list says which machine a session belongs to.
-    $label = if ($script:IsDefault) { "construct-t3-desktop" } else { "construct-t3-desktop-$($script:ResolvedName)" }
-    # config.env already controls SSH and other client routes; pairing uses it too.
-    $hostExpr = '${ext:-$(hostname).mshome.net}'
-    $wantScopes = $Scopes
-    # Send the installed client helper over SSH as well, so this works before a
-    # guest reprovision and stays identical to VS Code's forwarding fallback.
-    $pairingBaseScript = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'extension\vm\construct-t3-pairing-base.sh') -Raw
-    # Both land inside single quotes on the VM's command line.
-    if ($Ttl -notmatch '^[0-9A-Za-z ]{1,32}$') { Fail "-Ttl must be a t3 duration such as 10m or 1h" }
-    $bash = @"
-set -uo pipefail
-CONFIG_FILE=/etc/construct/config.env
-cfgget() {
-  _v="`$(sed -n "s/^`$1=//p" "`$CONFIG_FILE" 2>/dev/null | head -1)"
-  case "`$_v" in
-    "'"*"'") _v="`${_v#\'}"; _v="`${_v%\'}"; _v="`${_v//\'\\\'\'/\'}" ;;
-  esac
-  printf '%s' "`$_v"
-}
-command -v t3 >/dev/null 2>&1 || { echo "t3 is not installed on the VM" >&2; exit 2; }
-T3CODE_PORT="`$(cfgget T3CODE_PORT)"; T3CODE_PORT="`${T3CODE_PORT:-5177}"
-T3CODE_PUBLIC_BASE_URL="`$(cfgget T3CODE_PUBLIC_BASE_URL)"
-ext="`$(cfgget CONSTRUCT_EXTERNAL_HOST)"
-$pairingBaseScript
-base="`$(t3base "${hostExpr}")" || exit 3
-scopes=standard
-extra=""
-if [ "$wantScopes" = "administrative" ] && t3 auth pairing create --help 2>&1 | grep -q -- '--scopes'; then
-  scopes=administrative; extra="--scopes administrative"
-fi
-out="`$(t3pair "`$base" --json --ttl '$Ttl' --label '$label' `$extra --log-level none)" || exit 3
-printf 'CONSTRUCT_PAIRING_SCOPES=%s\n' "`$scopes"
-printf '%s\n' "`$out"
-"@
-    # Base64 over the wire: PowerShell would otherwise pipe the script with CRLF line
-    # endings and OEM encoding, and a remote command line must not carry quotes.
-    $b64 = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($bash))
-    $remoteCmd = "printf %s '$b64' | base64 -d | bash"
-
-    $prevEAP = $ErrorActionPreference; $ErrorActionPreference = "Continue"
-    $stderrFile = [System.IO.Path]::GetTempFileName()
-    try {
-        $raw = & ssh.exe @sshPortArgs @sshOpts $sshTarget $remoteCmd 2>$stderrFile | Out-String
-        $rc = $LASTEXITCODE
-        $err = ""
-        try { $err = (Get-Content -LiteralPath $stderrFile -Raw -ErrorAction SilentlyContinue) } catch { }
-    } finally {
-        $ErrorActionPreference = $prevEAP
-        Remove-Item -LiteralPath $stderrFile -Force -ErrorAction SilentlyContinue
-    }
-    if ($rc -ne 0) {
-        $why = switch ($rc) {
-            2 { "t3 is not installed on the VM" }
-            3 { "the VM's t3 could not mint a pairing link" }
-            255 { "could not reach $sshTarget over SSH (is the VM running and provisioned?)" }
-            default { "pairing link script exited $rc" }
-        }
-        $detail = "$err".Trim()
-        if ($detail) { $why = "$why -- $($detail -split "`n" | Select-Object -Last 1)" }
-        Fail $why
-    }
-
-    $scopesUsed = "standard"
-    if ("$raw" -match '(?m)^CONSTRUCT_PAIRING_SCOPES=(\w+)\s*$') { $scopesUsed = $matches[1] }
-    $pairing = (("$raw" -replace '(?m)^CONSTRUCT_PAIRING_SCOPES=\w+\s*$', '').Trim() | ConvertFrom-Json)
-    $pairUrl = [string]$pairing.pairUrl
-    if (-not $pairUrl) { Fail "the VM's t3 printed no pairing link" }
-    Write-Result @{ ok = $true; instance = $script:ResolvedName; pairUrl = $pairUrl; links = @($pairing.links); scopes = $scopesUsed }
-    exit 0
+    $pairing = Invoke-ConstructAgentApi -Endpoint $target.Endpoint -Method Post -Path ("/api/connections/{0}/{1}/t3-pairing" -f $target.Engine, $target.Vm)
 } catch {
-    Fail ("$($_.Exception.Message)".Trim())
+    Write-Result 'The Construct agent could not get a T3 Code pairing link for this VM (is it running, with T3 Code?).'
 }
+if (-not $pairing -or -not [string]$pairing.pairUrl) { Write-Result 'The Construct agent returned no pairing link.' }
+$links = @($pairing.links | ForEach-Object { [pscustomobject][ordered]@{ kind = [string]$_.kind; pairUrl = [string]$_.pairUrl } })
+[Console]::Out.WriteLine(([pscustomobject][ordered]@{
+    ok = $true; instance = $name; pairUrl = [string]$pairing.pairUrl; links = $links; scopes = [string]$pairing.scopes
+} | ConvertTo-Json -Compress -Depth 3))
+exit 0

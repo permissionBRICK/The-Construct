@@ -1,3 +1,4 @@
+using Constructd.Api.Contracts;
 using Constructd.Api.Auth;
 using Constructd.Api.Https;
 using Constructd.Api.Infrastructure;
@@ -16,13 +17,14 @@ namespace Constructd.Api.Endpoints;
 public static class HttpsEndpoints
 {
     /// <summary>A PEM chain with its key, or a PFX (base64) with an optional password.</summary>
-    public sealed record CertificateRequest(string? CertificatePem, string? PrivateKeyPem, string? Pfx, string? Password);
+    public sealed record CertificateRequest(string? CertificatePem, [property: ConstructSecret] string? PrivateKeyPem, [property: ConstructSecret] string? Pfx,
+        [property: ConstructSecret] string? Password);
 
     public static RouteGroupBuilder MapHttpsEndpoints(this RouteGroupBuilder api)
     {
-        api.MapGet("/host/https", StatusAsync).RequireAuthorization(Policies.Admin).WithName("HttpsStatus");
-        api.MapPut("/host/https/certificate", ImportAsync).RequireAuthorization(Policies.Admin).Audited("host.https.certificate").WithName("SetHttpsCertificate");
-        api.MapDelete("/host/https/certificate", RemoveAsync).RequireAuthorization(Policies.Admin).Audited("host.https.certificate.remove").WithName("RemoveHttpsCertificate");
+        api.MapGet("/host/https", StatusAsync).RequireAuthorization(Policies.Admin).WithName("HttpsStatus").Produces<HttpsStatusResponse>();
+        api.MapPut("/host/https/certificate", ImportAsync).RequireAuthorization(Policies.Admin).Audited("host.https.certificate").WithName("SetHttpsCertificate").Produces<HttpsStatusResponse>();
+        api.MapDelete("/host/https/certificate", RemoveAsync).RequireAuthorization(Policies.Admin).Audited("host.https.certificate.remove").WithName("RemoveHttpsCertificate").Produces<HttpsStatusResponse>();
         return api;
     }
 
@@ -76,7 +78,7 @@ public static class HttpsEndpoints
     }
 
     /// <summary>The state an admin needs: the certificate, which advertised names it covers, the listeners and what to fix.</summary>
-    internal static async Task<object> DescribeAsync(HttpsCertificateStore certificates, IHostConfigStore config, ConstructdOptions options,
+    internal static async Task<HttpsStatusResponse> DescribeAsync(HttpsCertificateStore certificates, IHostConfigStore config, ConstructdOptions options,
         IClock clock, HttpsGateway? gateway, CancellationToken ct)
     {
         var current = certificates.Current;
@@ -103,23 +105,19 @@ public static class HttpsEndpoints
         if (https.SharedPort is not null && pattern is null)
             warnings.Add("Main forwards are only served on the shared port when Constructd:PublicHostPattern gives every VM its own name.");
 
-        return new
-        {
-            certificate = current?.Info,
-            directory = certificates.Directory,
-            config = https,
-            names = new
-            {
-                publicHost = options.PublicHost,
-                publicHostCovered = current?.Covers(options.PublicHost),
-                publicHostPattern = pattern,
+        return new HttpsStatusResponse(
+            current?.Info,
+            certificates.Directory,
+            https,
+            new HttpsNamesResponse(
+                options.PublicHost,
+                current?.Covers(options.PublicHost),
+                pattern,
                 example,
-                exampleCovered = current?.Covers(example),
+                current?.Covers(example),
                 vaultHost,
-                vaultHostCovered = vaultHost is null ? null : current?.Covers(vaultHost),
-            },
-            listeners = gateway?.Listeners() ?? [],
-            warnings,
-        };
+                vaultHost is null ? null : current?.Covers(vaultHost)),
+            gateway?.Listeners() ?? [],
+            warnings);
     }
 }

@@ -1,0 +1,632 @@
+/* The contract between the screens and whatever serves them. The screens read one immutable `State`
+   snapshot, re-render when `subscribe` reports a change, and call the actions. Nothing here knows about
+   transport: `FakeBackend` serves invented data, `ApiBackend` the device agent and the engines behind it. */
+
+export type Power = 'on' | 'off' | 'starting' | 'stopping';
+export type Open = 't3' | 'vscode' | 'ssh';
+export type ThemeMode = 'auto' | 'light' | 'dark';
+export type Scheme = 'green' | 'blue' | 'copper' | 'mono';
+export type Channel = 'stable' | 'nightly';
+
+/** null: the engine did not report it. */
+export interface Usage {
+  cpuPct: number | null;
+  memUsedGb: number | null;
+  diskUsedGb: number | null;
+}
+
+/** A coding agent a VM can have; the engine's `codingAgents` ids. */
+export type AgentId = 'claude-code' | 'codex' | 'opencode' | 'antigravity';
+
+/** Settings of one VM. `hw` applies on restart, `disk` on reinstall, `services`, `identity`, `agents` and `swap` on reprovision. */
+export interface VmSettings {
+  hw: { memGb: number; cpus: number; checkpoints: boolean; startWithHost: boolean };
+  disk: { diskGb: number; ubuntu: string };
+  idle: { afterMin: number; then: 'save' | 'shutdown' | 'never' };
+  services: { t3Web: boolean; vscodeWeb: boolean; vscodeTunnel: boolean; smb: boolean; mic: boolean; claudeLive: boolean; opencodeWatcher: boolean; t3ProxyUrl: string };
+  identity: { gitName: string; gitEmail: string; keepCredentials: boolean; historyDays: '30' | '90' | 'all' };
+  /** The coding agents chosen for the VM. One turned off stays installed but is no longer updated or configured. */
+  agents: Record<AgentId, boolean>;
+  /** The guest's swap file: `auto` or whole GB 0-128 (`swapSize`). */
+  swap: { sizeGb: string };
+}
+
+/** `id`: the engine's tool id (claude, codex, opencode, antigravity, t3). `newer`: the engine says a newer version is
+    out; without it the versions are compared. `signedIn`: as the VM reported it; undefined or null: not known.
+    `lostAt`: a lost sign-in (S36): the VM reported it signed out after it was signed in; its card waits until the
+    agent is signed in again or the card is put away. */
+export interface Agent { id: string; name: string; version: string; latest: string; installed: boolean; newer?: boolean; signedIn?: boolean | null; lostAt?: string | null }
+
+/** A coding agent's own sign-in on a VM, one at a time: what its terminal shows, as its CLI wrote it (S34).
+    key: OpenCode asks for an OpenRouter API key first, nothing runs yet; starting: asked for; running: the CLI shows
+    or waits; failed: it ended without signing in (its text says why); stopped: it took too long or was ended. One
+    that signed in is gone, and the agent shows as signed in. */
+export interface SignIn {
+  vmId: string;
+  agent: AgentId;
+  state: 'key' | 'starting' | 'running' | 'failed' | 'stopped';
+  text: string;
+  /** The sign-in continues in the browser: this device forwards its redirect to the VM (11.8, "No pasted code"). The
+      CLI's text and the reply field stay reachable for the fallback. */
+  browser?: boolean;
+}
+
+/** Input to a sign-in's terminal: text followed by Enter (empty: Enter alone), or an arrow key for a list. */
+export type SignInInput = { text: string } | { key: 'up' | 'down' };
+export interface ChildVm { name: string; os: string; left: string; power: Power }
+/** A forward of this device to a VM; `closable`: this device opened it and can close it. */
+export interface Forward { id: string; port: number; label: string; to: 'This device' | 'LAN'; url: string; closable?: boolean; status?: string }
+/** `protected`: kept by the retention rule whatever `keep` says (the newest host-requested backup past the horizon). */
+export interface Backup { id: string; at: string; kind: 'Scheduled' | 'Requested' | 'Before reinstall' | 'Slot'; size: string; files: number | null; pinned: boolean; protected: boolean }
+
+export interface Vm {
+  id: string;
+  name: string;
+  hostId: string;
+  power: Power;
+  /** False when the engine cannot tell whether the VM runs (an external machine it cannot reach, a state it could not
+      read): it shows as off, but what needs it running is not held back and Start is not offered as the way on. */
+  powerKnown?: boolean;
+  address: string;
+  /** The SSH port on `address`, when it is not 22. */
+  sshPort?: number | null;
+  os: string;
+  installed: string;
+  reprovisioned: string;
+  /** Construct version of the VM's guest payload. */
+  version: string;
+  /** What changed since the last reprovision (a project or a settings group); null when nothing waits. */
+  changeWaits: string | null;
+  settings: VmSettings;
+  /** Hardware the VM runs with now; differs from `settings.hw` while a restart is pending. */
+  appliedHw: { memGb: number; cpus: number };
+  usage: Usage;
+  memTotalGb: number;
+  diskTotalGb: number;
+  agents: Agent[];
+  children: ChildVm[];
+  projectsOn: string[];
+  forwards: Forward[];
+  sharing: { vscodeWeb: boolean; smb: boolean; mic: boolean };
+  /** This device's link to the VM: its SSH alias and whether the alias is in the SSH config; null when the device has none. */
+  link?: { alias: string; sshConfig: string | null; share: string | null } | null;
+  backups: Backup[];
+  backupSchedule: { everyH: number; keep: number };
+  /** The version Update moves this VM to, as its engine reports it. Undefined: derived from the host and the release. */
+  updateTo?: string | null;
+  /** Parts of this VM's pages whose route failed, with the error; the rest of the page shows what it has. */
+  problems?: Partial<Record<'backups' | 'status' | 'settings' | 'agents' | 'connection', string>>;
+}
+
+export interface Profile {
+  name: string;
+  /** The store's revision this was read at; a save names it so a newer revision is merged, not overwritten. */
+  revision?: number;
+  /** An open conflict names this profile: an agent in a VM resolves it (S7). */
+  conflict?: boolean;
+  /** The profile document as the store holds it, with fields this view does not know. */
+  doc?: Record<string, unknown>;
+  repos: { url: string; directory: string }[];
+  sdks: Record<string, string>;
+  mcp: { name: string; type: string; command: string; args: string[] }[];
+  hostPackages: string[];
+  provisionCommands: string[];
+  forwards: { port: number; label: string }[];
+}
+
+export type JobKind = 'reprovision' | 'reinstall' | 'update' | 'restore' | 'create';
+export type JobState = 'running' | 'failed' | 'done' | 'stopped';
+
+/** A thread of a VM's T3 Code, as the engine names a repair's: T3 Desktop opens it by these ids, the web UI by its title. */
+export interface T3Thread { environmentId: string | null; threadId: string; title: string | null }
+
+/** One line of the repair agent's output: what it says, what the user sent, a note of the guest script, one action of the agent. */
+export interface RepairMessage { from: 'agent' | 'user' | 'note' | 'tool'; text: string }
+export interface Repair {
+  agent: string;
+  /** working: it acts on its own; asking: it waits for a reply; done: the engine reports it fixed the cause;
+      gave-up: it ended without a fix; stopped: the user or another job on the VM ended it. */
+  state: 'working' | 'asking' | 'done' | 'gave-up' | 'stopped';
+  messages: RepairMessage[];
+  /** The T3 Code thread in the VM the repair runs in (the default): the user follows and answers it in T3 Code.
+      Null when the agent runs directly and is answered here. */
+  t3Thread: T3Thread | null;
+  /** After the end: how it ended and what the engine did with the job. */
+  outcome?: string | null;
+  /** When this run started (local time, HH:MM), and whether the host started it by itself when the job failed. */
+  at: string;
+  auto: boolean;
+}
+
+export interface Job {
+  id: string;
+  vmId: string;
+  kind: JobKind;
+  state: JobState;
+  /** What runs now in a few words ("Installing T3"); the bar's label. */
+  step: string;
+  stepIndex: number;
+  stepCount: number;
+  /** The whole job, 0 to 100; it never goes back while the job runs. */
+  pct: number;
+  log: string[];
+  error: string | null;
+  /** For an update: from and to version. */
+  from?: string;
+  to?: string;
+  /** For an update: 'all' was started by Update everything, 'vm' by "only this VM" (this device stays). */
+  scope?: 'all' | 'vm';
+  /** The repair agent, started when the job failed. Null when the VM cannot run an agent. */
+  repair: Repair | null;
+  /** A failed job without a running repair: "Let an agent fix it" starts one. */
+  canRepair?: boolean;
+  /** A job that succeeded although optional steps failed: their titles. */
+  warnings?: string[];
+  /** Asked for here and not yet answered by the engine: shown as working at once, nothing to stop yet. */
+  pending?: boolean;
+}
+
+/** An agent on a VM asks for something only the user can give: a lease of a secret, or a new secret's value. */
+export interface VaultRequest {
+  id: string;
+  kind: 'lease' | 'enter';
+  secret: string;
+  vmId: string;
+  /** The VM and the host as the engine that filed the request names them. */
+  vmName: string;
+  hostName: string;
+  /** The agent's own words: for a lease why it needs it, for enter its description and reason. Shown marked as the agent's. */
+  reason: string;
+  /** The span the approval covers, when the backend knows it. */
+  span: string;
+  /** The word on the allow button, from the engine (Approve, Allow once, Delete, ...); empty: Allow. */
+  action?: string;
+  /** The span the VM asked for, in seconds; the default of the approval's span. Null: the request names none. */
+  ttlSeconds?: number | null;
+}
+
+/** A file on a VM that still holds secrets after their lease ended, as a scrub found it (agent logs are redacted
+    without asking and never listed). It waits for keep, redact or delete and never expires. */
+export interface VaultFile {
+  /** `engine/id`, as a request's. */
+  id: string;
+  hostId: string;
+  vmId: string;
+  /** The VM and the host as the engine that found the file names them. */
+  vmName: string;
+  hostName: string;
+  path: string;
+  /** The secrets found in it. */
+  secrets: string[];
+  type: 'text' | 'sqlite' | 'binary';
+  /** Bytes, as the scan found it; 0 when unknown. */
+  size: number;
+}
+export type FileAction = 'keep' | 'redact' | 'delete';
+
+export interface Secret { name: string; note: string; usedBy: string[]; last: string; auto: boolean }
+/** A host's vault mode: `available` holds the vault key and serves approved requests; `locked` waits for a device. */
+export interface VaultMode { hostId: string; hostName: string; mode: 'available' | 'locked' | null; problem?: string | null }
+export interface Lease { id: string; secret: string; vmName: string; reason: string; left: string }
+export interface Device { id: string; name: string; kind: string; added: string; seen: string; me: boolean; revoked: boolean }
+export interface VaultEvent { at: string; vmName: string; secret: string; event: string }
+
+export type Pairing =
+  /** This device approves: the user enters the code the new device shows. */
+  | { state: 'code'; problem?: string }
+  | { state: 'showing'; words: string[]; expiresInS: number }
+  | { state: 'confirm'; words: string[]; deviceName: string }
+  | { state: 'done'; deviceName: string };
+
+/** `hosts`: every engine that served the device; one not yet confirmed keeps serving it until it syncs. */
+export interface Revocation { deviceId: string; deviceName: string; hosts: { name: string; confirmed: boolean }[]; rotate: { secret: string; last: string; done: boolean }[] }
+
+/* Host administration */
+export interface HostUser {
+  name: string;
+  role: 'admin' | 'user';
+  enabled: boolean;
+  maxVms: number;
+  hostForwards: 'default' | 'allowed' | 'refused';
+  httpsForwards: boolean;
+  nested: 'inherit' | 'on' | 'off';
+  allowance: { childVms: boolean; maxChildren: number; cpu: number | null; ramGb: number | null; diskGb: number | null; maxLifetime: string; neverLifetime: boolean; sharing: boolean };
+  primaries: number;
+  children: number;
+  tokensMonth: string;
+  tokens: { id: string; label: string; created: string; lastUsed: string }[];
+}
+export interface HostVm {
+  name: string;
+  owner: string;
+  role: 'primary' | 'child';
+  parent?: string;
+  power: Power;
+  cpuPct: number;
+  memGb: number;
+  memMaxGb: number;
+  diskGb: number;
+  cpus: number;
+  network: 'default' | 'relayed' | 'direct';
+  address: string;
+  lease: string;
+  shared: boolean;
+  tokensToday: string;
+}
+export interface HostMedia { name: string; owner: string; role: string; state: string; size: string; refs: number; created: string }
+/** `retry`: the engine retries this failed job (a provision or reinstall). */
+export interface HostJob { id: string; kind: string; vm: string; owner: string; state: 'running' | 'failed' | 'done'; phase: string; created: string; retry?: boolean }
+export interface AuditEntry { at: string; actor: string; action: string; target: string }
+export interface ConfigSection { name: string; json: string; updated: string }
+export interface Certificate { subject: string; validUntil: string; daysLeft: number; sha256: string; issuer: string }
+export interface WinKey { id: string; product: string; edition: string; kind: 'Retail' | 'MAK' | 'KMS'; partial: string; used: string; held: boolean }
+export interface WinGuest { name: string; stage: string; activation: 'activated' | 'grace' | 'not activated'; keyId: string | null }
+export interface HostUpdate { at: string; from: string; to: string; state: 'done' | 'rolled back' | 'running' | 'failed'; by: string }
+
+export interface Host {
+  id: string;
+  name: string;
+  kind: string;
+  version: string;
+  /** The host's own update channel, as it names it. */
+  channel: string;
+  /** The current user administers this host. Only then are the fields below filled. */
+  admin: boolean;
+  address: string;
+  /** Sign-in a new user's client uses here. */
+  signIn: 'windows' | 'token';
+  vmCount: number;
+  health: { hypervisor: string; database: string; media: string; inventory: string };
+  capacity: { mode: 'observe' | 'enforce'; ram: [number, number]; cpu: [number, number]; disk: [number, number] };
+  users: HostUser[];
+  vms: HostVm[];
+  media: HostMedia[];
+  isos: { name: string; current: boolean; size: string }[];
+  winKeys: WinKey[];
+  winGuests: WinGuest[];
+  jobs: HostJob[];
+  audit: AuditEntry[];
+  usage: { window: 'today' | 'month' | 'all'; byUser: { user: string; vms: number; tokens: string; cost: string }[]; byVm: { vm: string; owner: string; tokens: string; cost: string }[] };
+  config: ConfigSection[];
+  cert: Certificate | null;
+  updates: HostUpdate[];
+  /** Set while the host's own update runs. */
+  updating: boolean;
+  /** The release this host's own updater offers. Undefined: derived from this device's release. */
+  updateTo?: string | null;
+  /** Set when the engine could not be read; the host's pages show what they have and this. */
+  problem?: string | null;
+  /** A solo host (the engine on the user's own PC): whether other devices on the LAN reach it. Undefined elsewhere. */
+  lan?: boolean;
+  /** Admin only: the repair agent starts by itself when a job fails (`repair.auto`). Undefined: not read. */
+  repairAuto?: boolean;
+  /** Admin only: the repair runs in Construct's chat instead of a T3 Code thread in the VM (`repair.chat`). Undefined: not read. */
+  repairChat?: boolean;
+}
+
+/** Shown once after adding a user: what that user's client needs. */
+export interface NewUserHandout { hostId: string; user: string; address: string; token: string | null }
+
+export interface Part { name: string; version: string; to: string | null; note: 'admin' | 'channel' | null }
+
+/** A run of "update everything" as the agent reports it: each part (this device, a host, the user's VMs on a host) and its state. */
+export interface Everything {
+  running: boolean;
+  parts: { part: 'device' | 'engine' | 'vms'; name: string; state: 'pending' | 'running' | 'done' | 'skipped' | 'failed'; detail: string | null }[];
+}
+
+export interface Prefs {
+  channel: Channel;
+  theme: ThemeMode;
+  scheme: Scheme;
+  autoUpdate: boolean;
+  startWithOs: boolean;
+  notifications: boolean;
+}
+
+/** The one-time upgrade's steps in their order: the engine on this PC, the recovery code, the old programs
+    closed, the conversion. Once it is converted the normal screens show at once (R9). */
+export type UpgradeStep = 'engine' | 'recovery' | 'close' | 'convert';
+export interface Upgrade {
+  /** The step the dialog is at, as the agent reports it: the first one not done. */
+  step: UpgradeStep;
+  /** The step runs now. */
+  running: boolean;
+  /** The current step failed with this; it shows in place with Retry. */
+  error: string | null;
+  /** Step `recovery`: the code, shown once until the user confirmed it was kept; it is kept nowhere else. */
+  code: string[] | null;
+  /** Step `close`: the programs that still have the old files open. */
+  writers: string[];
+  /** Step `convert`: each item the converter copies; `count` is its few words, `pct` how far a long one is (a VM's reprovision). */
+  items: { id: string; name: string; state: 'done' | 'running' | 'waiting' | 'skipped' | 'failed'; count: string; pct: number }[];
+  /** What the old install holds; `stayOld` are the VMs whose host runs the old Construct and does not move along (R1). */
+  found: { vms: string[]; stayOld: string[]; profiles: number; vault: boolean } | null;
+  /** Step `convert`: shared hosts that still run the old Construct; their admin updates them from the host page. */
+  oldHosts: string[];
+  /** Step `engine`: Windows must restart to turn on Hyper-V (the line to show), until the user chose later. */
+  restart: string | null;
+  /** While the engine or the conversion step runs: its one bar, a percentage and a few words (R2, R7). */
+  progress: { pct: number; label: string } | null;
+}
+
+/** Parts of the product the backend cannot serve yet. The screens show such a part as not available. */
+export type Feature =
+  | 'vault' | 'repair-chat' | 'forwards' | 'sharing' | 'projects' | 'agents' | 'open' | 'console'
+  | 'vm-password' | 'vm-services' | 'vm-disk' | 'vm-boot' | 'reinstall' | 'restore' | 'device-update'
+  | 'channel' | 'os-prefs' | 'windows-sign-in' | 'export-code' | 'code-reveal' | 'vm-token' | 'host-retry'
+  | 'take-back' | 'project-on' | 'approval-span' | 'agent-update' | 'notifications' | 'log' | 'vm-history' | 't3-proxy';
+
+/** First run of a device with no identity yet (11.6): set up the account, pair, or recover; then create a VM. */
+export interface FirstRun {
+  step: 'start' | 'code' | 'pairing';
+  /** The engine the agent found on this machine, offered as the address. */
+  localAddress: string | null;
+  /** Where the account can start on this PC: `setup` installs the engine here (one admin prompt), `known` uses the
+      engine this PC's agent already set up; null where the device cannot host one or another engine runs here. */
+  thisPc: 'setup' | 'known' | null;
+  /** Setting up this PC's engine needs Windows to restart first (the line to show), until the user chose later. */
+  restart: string | null;
+  /** While a call runs. */
+  busy: boolean;
+  problem: string | null;
+  /** Step `code`: the recovery code, shown once; gone after Continue. */
+  code: string[] | null;
+  /** Step `code`: the account the code recovers. */
+  account?: string | null;
+  /** Step `pairing`: the code the approving device enters, and the words both show. */
+  pairing: { code: string; words: string[]; expiresAt: string } | null;
+  /** While this PC's engine is set up: its one bar (R2). */
+  progress?: { pct: number; label: string } | null;
+}
+
+export interface FirstRunRequest {
+  how: 'setup' | 'pair' | 'recover';
+  /** `this-pc`: a new account on the engine of this PC (set up first where needed); the address and sign-in are not used. */
+  where?: 'this-pc' | 'remote';
+  address: string;
+  deviceName: string;
+  /** setup: the user's sign-in at the engine: a token, or Windows sign-in where this device offers it. */
+  token?: string;
+  signIn?: 'windows' | 'token';
+  /** recover: the account and the recovery code. */
+  account?: string;
+  code?: string;
+  /** The fingerprint the user confirmed for `address`; not needed for this machine's own engine. */
+  pin?: string;
+}
+
+export interface State {
+  /** `sshKey`: this device's SSH public key; `can`: what this device's platform offers (undefined: all). */
+  device: { name: string; sshKey?: string | null; can?: { mic: boolean; share: boolean; startWithOs: boolean } };
+  version: string;
+  /** A newer release on this device's channel, or null. */
+  release: string | null;
+  vms: Vm[];
+  hosts: Host[];
+  projects: Profile[];
+  sync: { when: string; remote: string; rev: string };
+  jobs: Job[];
+  vaultRequests: VaultRequest[];
+  /** Files on the user's VMs that still hold a secret, oldest first: they ask like a vault request, one card per VM. */
+  vaultFiles: VaultFile[];
+  secrets: Secret[];
+  leases: Lease[];
+  devices: Device[];
+  history: VaultEvent[];
+  /** The vault mode of each host; empty where the backend has none. */
+  vaultModes: VaultMode[];
+  /** Parts of the vault and projects whose route failed, with the error; each shows on its own page. */
+  problems: Partial<Record<'secrets' | 'requests' | 'history' | 'projects', string>>;
+  pairing: Pairing | null;
+  revocation: Revocation | null;
+  handout: NewUserHandout | null;
+  prefs: Prefs;
+  upgrade: Upgrade | null;
+  /** After the move: what it says the user should know, a card until put away (R9); never a gate. */
+  movedNotes?: string[];
+  /** A short message from the last action, shown as a toast. Each new one has a new id. */
+  notice: { id: number; text: string } | null;
+  /** Why the last create did not start, shown on the create page where it was asked; null once another starts. */
+  createError?: string | null;
+  /** Parts not available from this backend. */
+  na: Feature[];
+  /** Set while this device has no identity: the first-run screen stands in for everything else. */
+  firstRun: FirstRun | null;
+  /** The last "update everything" run since this device started; null before one. */
+  everything?: Everything | null;
+  /** The coding agent sign-in this device started, while it runs or after it failed; null otherwise. */
+  signIn?: SignIn | null;
+  /** Upstream config repos shared profiles come from (design 9.7); null when none is linked. */
+  upstream?: Upstream | null;
+}
+
+/** The linked upstream config repos as the last refresh found them. */
+export interface Upstream {
+  repos: UpstreamRepo[];
+  /** When the last refresh ended (HH:MM, this device's time); null before one. */
+  when: string | null;
+  running: boolean;
+  /** The first thing that needs a look (a repo that was not read, a file in conflict or refused), or null. */
+  problem: string | null;
+}
+
+export interface UpstreamRepo {
+  /** Shown without user info. */
+  url: string;
+  /** Tracked profiles and how each stands: up-to-date, merged, conflict, waiting, removed-upstream, invalid, refused, dropped, failed. */
+  files: { profile: string; state: string }[];
+}
+
+export type SettingsPatch = { [K in keyof VmSettings]?: Partial<VmSettings[K]> };
+
+export interface CreateVmRequest {
+  where: 'local' | 'remote';
+  name: string;
+  hostAddress?: string;
+  signIn?: 'windows' | 'token';
+  token?: string;
+  /** remote: the certificate fingerprint the user confirmed for `hostAddress` (from `probeHost`). */
+  pin?: string;
+  /** The coding agents to install; undefined: the default ones. */
+  agents?: AgentId[];
+}
+
+/** What a host presents before it is added: its address as the agent reads it and its certificate's fingerprint. */
+export interface HostProbe {
+  url: string;
+  pin: string;
+  /** Already added; nothing to confirm. */
+  known: boolean;
+}
+
+/** How a profile save ended. */
+export type ProfileSave = { ok: true; text: string } | { ok: false; changed: boolean; text: string };
+
+export interface Backend {
+  snapshot(): State;
+  /** Calls `fn` after every change; returns the unsubscribe function. */
+  subscribe(fn: () => void): () => void;
+
+  /* VM */
+  /** T3 Code opens the patched desktop app where Construct installed one, else the web UI. With `thread` (a repair's)
+      the desktop app opens on that thread; the web UI opens as it is and the notice names the thread. */
+  open(vmId: string, what: Open, thread?: T3Thread): void;
+  /** A one-time pairing link for T3 Code on another machine (ten minutes); it is copied, never opened. */
+  t3Link(vmId: string): Promise<string>;
+  /** Open a forwarded port in the browser. */
+  openForward(vmId: string, port: number): void;
+  openChildConsole(vmId: string, child: string): void;
+  setVmPassword(vmId: string, password: string): void;
+  power(vmId: string, on: boolean): void;
+  restart(vmId: string): void;
+  reprovision(vmId: string): void;
+  reinstall(vmId: string, freshImage: boolean): void;
+  /** Updates everything the user owns: this device, hosts they administer, their own VMs. */
+  updateEverything(): void;
+  /** The secondary choice: update only this VM's payload and reprovision it. */
+  updateVm(vmId: string): void;
+  stopJob(jobId: string): void;
+  retryJob(jobId: string): void;
+  /** Starts the repair agent on a failed job ("Let an agent fix it"). */
+  startRepair(jobId: string): void;
+  /** Sends one reply while the repair agent waits for one. */
+  replyRepair(jobId: string, text: string): void;
+  stopRepair(jobId: string): void;
+  dismissJob(jobId: string): void;
+  /** Hardware changes ask restart now or later; `when` says which. Other groups save at once. */
+  saveSettings(vmId: string, patch: SettingsPatch, when?: 'now' | 'later'): void;
+  updateAgents(vmId: string): void;
+  /** Starts a coding agent's own sign-in on the VM; one that runs ends. Where this device can, the sign-in returns
+      from the browser without a pasted code. OpenCode first asks for an OpenRouter API key (`signInWithKey`);
+      `list` starts OpenCode's own list of providers instead. */
+  signIn(vmId: string, agent: AgentId, how?: 'list'): void;
+  /** OpenCode's sign-in with an OpenRouter API key: the key goes to OpenCode's prompt as a secret and is kept nowhere. */
+  signInWithKey(vmId: string, key: string): void;
+  /** Puts a lost sign-in's card away; it comes back only when the agent was signed in and lost again. */
+  dismissSignInNotice(vmId: string, agent: AgentId): void;
+  /** Types into the running sign-in's terminal. */
+  signInInput(input: SignInInput): void;
+  /** Ends the running sign-in, or puts away one that failed. */
+  closeSignIn(): void;
+  setProjectOn(vmId: string, project: string, on: boolean): void;
+  /** Saves a profile document; `revision` is the one the editor read. Changed: the profile was reloaded. */
+  saveProfile(name: string, doc: Record<string, unknown>, revision: number | undefined): Promise<ProfileSave>;
+  addProject(name: string): void;
+  syncProjects(): void;
+  /** Fetches the upstream config repos now; their changes are merged into the shared profiles. */
+  refreshUpstream(): void;
+  closeForward(vmId: string, forwardId: string): void;
+  /** This device's SSH config: write the VM's `Host` alias again, or remove it. */
+  setSshAlias(vmId: string, on: boolean): void;
+  setSharing(vmId: string, key: keyof Vm['sharing'], on: boolean): void;
+  backupNow(vmId: string): void;
+  restoreBackup(vmId: string, backupId: string): void;
+  deleteBackup(vmId: string, backupId: string): void;
+  pinBackup(vmId: string, backupId: string, pinned: boolean): void;
+  setBackupSchedule(vmId: string, schedule: Partial<Vm['backupSchedule']>): void;
+  /** Returns the new VM's id, or null when nothing was started. */
+  createVm(req: CreateVmRequest): string | null;
+  /** Reads the certificate a host presents, for the user to confirm before it is added. */
+  probeHost(address: string): Promise<HostProbe>;
+
+  /* Key vault */
+  /** `ttlSeconds`: the span the user chose; undefined keeps the span the VM asked for. */
+  answerLease(requestId: string, allow: boolean, ttlSeconds?: number): void;
+  /** `value` null declines the request. */
+  enterSecret(requestId: string, value: string | null): void;
+  /** Keep leaves the file as it is; redact replaces the secrets in it, delete removes it, on the VM's next scrub.
+      Resolves true once the engine has the answer (or had one already), false when it failed and the file is back. */
+  answerFile(fileId: string, action: FileAction): Promise<boolean>;
+  addSecret(name: string, note: string, value: string): void;
+  /** A new value for an existing secret. */
+  replaceSecret(name: string, value: string): void;
+  /** The value, for the page to show for a moment; the backend keeps no copy. */
+  revealSecret(name: string): Promise<string>;
+  deleteSecret(name: string): void;
+  setVaultMode(hostId: string, mode: 'available' | 'locked'): void;
+  setAutoApprove(name: string, on: boolean): void;
+  takeBack(leaseId: string): void;
+  startPairing(): void;
+  /** On the approving device: the code the new device shows. */
+  enterPairingCode(code: string): void;
+  confirmPairing(accept: boolean): void;
+  cancelPairing(): void;
+  revokeDevice(deviceId: string): void;
+  /** The page of a revoked device: the secrets it could read, to rotate. */
+  openRevocation(deviceId: string): void;
+  markRotated(secret: string): void;
+  closeRevocation(): void;
+
+  /* Hosts */
+  updateHost(hostId: string): void;
+  updateHostVms(hostId: string): void;
+  /** A solo host: let devices on the LAN reach it (before a second device pairs). */
+  setLanAccess(hostId: string, on: boolean): void;
+  /** The host setting `repair.auto`: the repair agent starts by itself when a job fails. */
+  setRepairAuto(hostId: string, on: boolean): void;
+  /** The host setting `repair.chat`: the repair runs in Construct's chat instead of a T3 Code thread in the VM. */
+  setRepairChat(hostId: string, on: boolean): void;
+  addUser(hostId: string, user: { name: string; role: 'admin' | 'user'; maxVms: number; hostForwards: HostUser['hostForwards'] }): void;
+  saveUser(hostId: string, user: HostUser): void;
+  removeUser(hostId: string, name: string): void;
+  issueToken(hostId: string, user: string, label: string): void;
+  revokeToken(hostId: string, user: string, tokenId: string): void;
+  closeHandout(): void;
+  hostVmAction(hostId: string, vm: string, action: 'start' | 'restart' | 'shutdown' | 'delete' | 'console' | 'rotate-token' | 'toggle-shared' | 'renew-lease'): void;
+  saveHostVm(hostId: string, vm: string, patch: Partial<Pick<HostVm, 'cpus' | 'memMaxGb' | 'network'>>): void;
+  deleteMedia(hostId: string, name: string): void;
+  cleanupMedia(hostId: string): void;
+  acquireWindows(hostId: string, product: string, edition: string, language: string): void;
+  addWinKey(hostId: string, key: Omit<WinKey, 'id' | 'partial' | 'used' | 'held'> & { key: string }): void;
+  removeWinKey(hostId: string, id: string): void;
+  assignWinKey(hostId: string, guest: string, keyId: string): void;
+  activateWindows(hostId: string, guest: string): void;
+  cancelHostJob(hostId: string, jobId: string): void;
+  retryHostJob(hostId: string, jobId: string): void;
+  setUsageWindow(hostId: string, window: Host['usage']['window']): void;
+  /** Returns an error message for invalid JSON, else null. */
+  saveConfig(hostId: string, section: string, json: string): string | null;
+  installCertificate(hostId: string, pem: string): void;
+  removeCertificate(hostId: string): void;
+
+  /* This device and Construct */
+  setPrefs(patch: Partial<Prefs>): void;
+  /** The recovery code to show in place. A backend with `code-reveal` in `na` issues a new one instead. */
+  showRecoveryCode(): string[] | Promise<string[]>;
+  /** Hand the recovery code to the shell: a file picker for saving, or the print dialog. */
+  exportRecoveryCode(how: 'file' | 'print'): void;
+  openLog(): void;
+  /** The one-time upgrade: runs the current step again or goes on from it; the backend decides which step that is.
+      `deviceName` names this device at the recovery step. */
+  upgradeNext(input?: { deviceName?: string }): void;
+  /** Puts the move's notes away; they are not shown again. */
+  readMovedNotes(): void;
+  /** First run: set up, pair or recover. */
+  firstRunStart(req: FirstRunRequest): void;
+  /** First run: the recovery code is stored, or the pairing is cancelled; go on. */
+  firstRunNext(): void;
+  /** Windows must restart to turn on Hyper-V: restart it now (the agent does), or later (the line goes away; the step is
+      there again to continue). */
+  restartForEngine(now: boolean): void;
+}

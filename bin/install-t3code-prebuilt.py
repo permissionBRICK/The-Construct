@@ -9,6 +9,7 @@ import platform
 import re
 import shutil
 import subprocess
+import sys
 import tarfile
 import tempfile
 import urllib.request
@@ -42,10 +43,26 @@ def read_manifest(manifest, channel="stable"):
     return manifest
 
 
-def download(url, path):
+def download(url, path, out=sys.stdout):
+    """Fetches url into path. A large download reports how far it got as '::construct-progress PERCENT' lines, which
+    the host's provisioning turns into its progress bar (bin/provision.sh's step markers)."""
     request = urllib.request.Request(url, headers={'User-Agent': 'The-Construct'})
     with urllib.request.urlopen(request, timeout=120) as response, open(path, 'wb') as output:
-        shutil.copyfileobj(response, output)
+        copy_with_progress(response, output, int(response.headers.get('Content-Length') or 0), out)
+
+
+def copy_with_progress(source, target, total, out):
+    done, shown = 0, -1
+    while True:
+        chunk = source.read(1 << 20)
+        if not chunk:
+            break
+        target.write(chunk)
+        done += len(chunk)
+        percent = done * 100 // total if total >= 8 << 20 else -1
+        if percent >= 0 and percent // 5 != shown // 5:
+            shown = percent
+            print(f'::construct-progress {min(percent, 100)}', file=out, flush=True)
 
 
 def atomic_json(path, value):

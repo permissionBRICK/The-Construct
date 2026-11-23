@@ -509,6 +509,9 @@ sqlite_sources() {
   if [[ -f "${EXPORT_HOME}/.local/share/opencode/opencode.db" ]]; then
     printf '%s\n' "${EXPORT_HOME}/.local/share/opencode/opencode.db"
   fi
+  if [[ -f "${EXPORT_HOME}/.gemini/antigravity-cli/conversation_summaries.db" ]]; then
+    printf '%s\n' "${EXPORT_HOME}/.gemini/antigravity-cli/conversation_summaries.db"
+  fi
   shopt -s nullglob
   for f in "${EXPORT_HOME}"/.codex/memories_*.sqlite; do printf '%s\n' "${f}"; done
   shopt -u nullglob
@@ -525,6 +528,9 @@ STAGED_HOME_PATHS=(
   .codex/skills .codex/sessions .codex/archived_sessions .codex/session_index.jsonl .codex/history.jsonl
   .config/opencode/opencode.json .local/share/opencode/auth.json .local/share/opencode/mcp-auth.json
   .local/share/opencode/storage .local/share/opencode/project
+  .gemini/AGENTS.md .gemini/config .gemini/antigravity-cli/settings.json .gemini/antigravity-cli/keybindings.json
+  .config/antigravity .gemini/antigravity-cli/conversations .gemini/antigravity-cli/brain .gemini/antigravity-cli/implicit
+  .t3/userdata/providers/antigravity
   .t3/userdata/keybindings.json .t3/userdata/settings.json .t3/userdata/secrets
   .t3/userdata/environment-id .t3/userdata/attachments
 )

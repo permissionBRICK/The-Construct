@@ -16,6 +16,7 @@ public static class HostAdminDefaults
     public static VaultConfig Vault { get; } = new();
     public static HttpsConfig Https { get; } = new();
     public static BackupsConfig Backups { get; } = new();
+    public static RepairConfig Repair { get; } = new();
 }
 
 public sealed class HostAdminOptions
@@ -26,7 +27,16 @@ public sealed class HostAdminOptions
     public HostAdminSourceOptions Source { get; set; } = new();
 }
 public sealed class HostAdminCapacityOptions { public CapacityMode Mode { get; set; } = CapacityMode.Observe; }
-public sealed class HostAdminUpdatesOptions { public string? Repository { get; set; } }
+public sealed class HostAdminUpdatesOptions
+{
+    public string? Repository { get; set; }
+
+    /// <summary>
+    /// The update channel the installer set (the channel of the device that installed the engine for itself): the
+    /// default until the host stores an <c>updates</c> section. Ignored when it names no channel.
+    /// </summary>
+    public string? Channel { get; set; }
+}
 public sealed class HostAdminMediaOptions { public string? RootDir { get; set; } }
 
 public sealed class HostAdminSourceOptions

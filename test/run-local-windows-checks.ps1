@@ -3,30 +3,16 @@
 $ErrorActionPreference = 'Stop'
 Push-Location (Split-Path $PSScriptRoot -Parent)
 try {
-    node test/t3-reprovision-host.test.mjs
-    if ($LASTEXITCODE) { throw 'T3 reprovision host tests failed' }
     # Separate processes preserve each test script's exit-code contract.
     foreach ($test in @(
-        'test/t3-desktop-handoff.test.ps1',
-        'test/t3-update-mode.test.ps1',
         'test/native-iso-host.test.ps1',
-        'test/iso-download-compile.test.ps1',
         'test/hyperv-prereqs.test.ps1',
-        # Under real Windows PowerShell 5.1 this exercises the native-stderr capture
-        # semantics (EAP vs 2>&1) that pwsh cannot reproduce.
-        'test/provision-ssh-diagnostics.test.ps1',
+        'test/windows-license-firmware.test.ps1',
         'service/tests/host-installer.test.ps1',
+        'service/tests/hyperv-scripts.test.ps1',
         'service/tests/Constructd.Tests/Network/network-script.test.ps1',
-        'service/tests/Constructd.Tests/Windows/windows-guest-report.test.ps1',
-        'test/remote-driver.test.ps1',
-        'test/remote-install.test.ps1',
-        # Under Windows PowerShell 5.1 the DPAPI token-store tests run for real, including
-        # the fresh-process read-back (System.Security is not preloaded there).
-        'test/remote-client.test.ps1',
-        # The backup key under .NET Framework: RSACng with OAEP-SHA256, the hand-built
-        # SubjectPublicKeyInfo, real DPAPI, PBKDF2; and ssh.exe's command-line quoting.
-        'test/backup-keys.test.ps1',
-        'test/backup-actions.test.ps1'
+        'service/tests/Constructd.Tests/Console/console-script.test.ps1',
+        'service/tests/Constructd.Tests/Windows/windows-guest-report.test.ps1'
     )) {
         powershell.exe -NoProfile -ExecutionPolicy Bypass -File $test
         if ($LASTEXITCODE) { throw "$test failed" }

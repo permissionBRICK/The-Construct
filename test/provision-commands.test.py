@@ -53,7 +53,7 @@ record('end')
     def command(self, label, duration=.15):
         return shlex.join(['python3', str(self.helper), label, str(duration)])
 
-    def plan(self, profiles):
+    def plan(self, profiles, python=None):
         commands = []
         for name, directory, items in profiles:
             if directory and directory != 'missing':
@@ -62,6 +62,8 @@ record('end')
                 entry = dict(dir=directory, command=cmd)
                 if name is not None:
                     entry['profile'] = name
+                if (python or {}).get(name):
+                    entry['python'] = python[name]
                 commands.append(entry)
         self.generated.write_text(json.dumps(dict(projects=['one', 'two'], repos=[], sdks={},
                                                    provisionCommands=commands)))
@@ -176,6 +178,62 @@ record('end')
         commands = json.loads(self.generated.read_text())['provisionCommands']
         self.assertEqual([(c['profile'], c['dir'], c['command']) for c in commands],
                          [(p, p, c) for p in ['z', 'a'] for c in ['echo first', 'echo second']])
+
+    def test_generator_carries_each_profiles_own_python_request(self):
+        store = self.agent / 'projects'
+        store.mkdir()
+        profiles = dict(new=dict(sdks=dict(python='3.14')), both=dict(sdks=dict(python=['3.11', '3.13'])),
+                        plain=dict(sdks=dict(node='26')))
+        for name, extra in profiles.items():
+            (store / (name+'.json')).write_text(json.dumps(dict(name=name, provisionCommands=['echo '+name], **extra)))
+        subprocess.run(['bash', str(ROOT / 'bin/generate-runtime-config.sh')],
+                       env=dict(self.env, PROJECTS='new,both,plain'), check=True, capture_output=True)
+        generated = json.loads(self.generated.read_text())
+        self.assertEqual({c['profile']: c.get('python') for c in generated['provisionCommands']},
+                         dict(new=['3.14'], both=['3.11', '3.13'], plain=None))
+        self.assertEqual(generated['sdks']['python'], ['3.14', '3.13', '3.11'])
+
+    def fake_pythons(self, *minors):
+        # The distro's python3 says 3.12; each python3.X prints its own path and arguments.
+        bin_dir = self.root / 'pybin'
+        bin_dir.mkdir()
+        for minor in minors:
+            interpreter = bin_dir / ('python' + minor)
+            interpreter.write_text('#!/bin/sh\necho "$0 $*"\n')
+            interpreter.chmod(0o755)
+        system = self.root / 'system-python'
+        system.write_text('#!/bin/sh\necho 3.12\n')
+        system.chmod(0o755)
+        self.env.update(PYTHON_BIN_DIR=str(bin_dir), SYSTEM_PYTHON=str(system))
+        return bin_dir
+
+    def test_a_profiles_python_request_is_python3_in_its_own_commands_only(self):
+        bin_dir = self.fake_pythons('3.14', '3.11')
+        show = 'echo "{0}: $(command -v python3) | $(python3 -V) | $(python -c pass)"'
+        self.plan([(name, name, [show.format(name)]) for name in ['new', 'older', 'plain', 'distro', 'bare']],
+                  python=dict(new=['3.11', '3.14.2'], older=['3.11'], distro=['3.12'], bare=['3']))
+        output = self.run_commands()
+        lines = {line.split(':')[0]: line for line in output.splitlines()
+                 if line.split(':')[0] in ('new', 'older', 'plain', 'distro', 'bare')}
+        # The wrapper execs the packaged interpreter by its path, so sys.executable (and any
+        # venv made from it) is /usr/bin/python3.X, never the temporary wrapper directory.
+        self.assertIn(f'| {bin_dir}/python3.14 -V | {bin_dir}/python3.14 -c pass', lines['new'])
+        self.assertIn(f'| {bin_dir}/python3.11 -V | {bin_dir}/python3.11 -c pass', lines['older'])
+        self.assertIn('python3 is Python 3.14 in the commands of new', output)
+        system_python3 = subprocess.run(['bash', '-c', 'command -v python3'], env=self.env,
+                                        capture_output=True, text=True).stdout.strip()
+        for name in ['plain', 'distro', 'bare']:
+            self.assertTrue(lines[name].startswith(f'{name}: {system_python3} |'), lines[name])
+        self.assertNotIn('is missing', output)
+
+    def test_a_missing_interpreter_warns_once_and_runs_with_the_distro_python(self):
+        self.fake_pythons('3.14')
+        self.plan([('old', 'old', ['echo "old: $(command -v python3)"', 'echo "again: $(command -v python3)"'])],
+                  python=dict(old=['3.13']))
+        output = self.run_commands()
+        self.assertEqual(output.count('Profile old requests Python 3.13, but '), 1, output)
+        self.assertIn("is missing; its commands run with the distro's python3", output)
+        self.assertNotIn('pybin', ''.join(line for line in output.splitlines() if line.startswith(('old:', 'again:'))))
 
     def generate(self, sdks_by_profile):
         store = self.agent / 'projects'

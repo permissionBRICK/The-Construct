@@ -24,6 +24,7 @@ Select the tools to install for this VM. Enter numbers separated by commas.
 2. claude code Install CLI and print SSH connection info
 3. codex       Install CLI and start experimental app-server on localhost
 4. pi          Placeholder: record selection only; installer not implemented yet
+5. antigravity Install Google's Antigravity CLI (agy)
 
 Examples: 1,2 or all or none
 EOF
@@ -50,7 +51,7 @@ selection="${selection:-1,2,3}"
 tools=()
 case "${selection}" in
   all|ALL|All)
-    tools=(opencode claude-code codex pi)
+    tools=(opencode claude-code codex pi antigravity)
     ;;
   none|NONE|None)
     tools=()
@@ -64,6 +65,7 @@ case "${selection}" in
         2|claude|claude-code|"claude code") tools+=(claude-code) ;;
         3|codex) tools+=(codex) ;;
         4|pi) tools+=(pi) ;;
+        5|antigravity|agy) tools+=(antigravity) ;;
         "") ;;
         *) echo "Ignoring unknown selection: ${choice}" >&2 ;;
       esac

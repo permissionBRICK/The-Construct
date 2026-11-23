@@ -81,7 +81,10 @@ provisioning command, log and `config.env` are unchanged by their existence:
 
 | Param | Reaches the guest as | Meaning |
 |---|---|---|
-| `-ServiceUrl` | `CONSTRUCT_SERVICE_URL` | The `constructd` base URL. Non-empty is what switches the guest into remote mode (service-backed `construct expose`, idle heartbeat timer). |
+| `-ServiceUrl` | `CONSTRUCT_PAYLOAD_HASH` | *(empty)* | Set by the host engine: the sha256 of the source archive it provisioned with. Recorded in `/etc/construct/provisioned.env` when given |
+| `CONSTRUCT_DESIRED_HASH` | *(empty)* | Set by the host engine: the hash of the settings and profile selection it applied. Recorded in `provisioned.env` when given |
+| `CONSTRUCT_CHANNEL` | *(empty)* | Set by the host engine: its release channel. Recorded in `provisioned.env` when given |
+| `CONSTRUCT_SERVICE_URL` | The `constructd` base URL. Non-empty is what switches the guest into remote mode (service-backed `construct expose`, idle heartbeat timer). |
 | `-InstanceName` | `CONSTRUCT_INSTANCE_NAME` | This VM's name on that service — the `{name}` in `/api/v1/vms/{name}/…`. |
 | `-VmTokenB64` | `CONSTRUCT_VM_TOKEN_B64` | The VM-scoped token (base64), written by `provision.sh` to `/etc/construct/vm-token` (mode `0600`). |
 | `-SourceMode` | client only (default `auto`) | `auto` fetches the released commit and uploads local changes as an overlay, up to 5,000 files / 64 MiB uncompressed, falling back to the full tar if unavailable or refused; `cache` sends the commit without local changes and fails on cache errors; `upload` uses the original tar. Ignored for local transport; `-IncludeGit` selects upload. |
@@ -142,6 +145,38 @@ The menu needs a console someone can answer. With redirected input it is skipped
 run ends exactly as before. A run that failed before any VM step reported (a host-side
 error) shows no prompt and no menu.
 
+On a host that provisions VMs itself (the engine), no one has to be at a console: the engine starts
+the same kind of agent on the VM by itself with `bin/construct-repair-agent.sh`, the headless
+counterpart of `construct-agent-fix.sh`. It reads the prompt in `config/repair-prompt.md` plus what
+failed and starts it as a T3 Code thread in the VM (project "Construct repair"), which T3 Desktop opens by
+itself on the PC that started the job, and the client's failed job opens in T3 Code anywhere; the user follows
+and answers it there. With the host setting
+`repair.chat`, or without a running T3 Code on the VM, it runs Claude Code (or Codex, or OpenCode, in
+the order `AI_TOOLS` names them) directly without question, plan or permission prompts, and the user
+answers in the client under the failed job. Either way the script reports what the agent says as
+JSON lines. The agent fixes what it can and asks in plain text only for a real choice, a trade-off or
+a suspected Construct bug. When it says the cause is fixed, the engine runs the job again once. See
+`service/README.md`, *The repair agent*.
+
+A VM that is off is no failure on the engine. A reprovision or update the user asks for (the client's Update or
+Reprovision, a Retry) starts it first, in the job's first step *Starting the VM*, with the same rules as the Start button,
+waits up to five minutes for it to answer over SSH, provisions it and leaves it running. A start the host refuses (too
+little free memory, say) fails the job with that reason, and a VM that does not answer in time fails it with "The VM
+started but did not answer over SSH within 5 minutes"; no repair agent starts for either. The engine's own reprovisions,
+after an update the host ran by itself and an admin's reprovision of every VM on a host, never start a VM: one that is off
+is skipped and its update stays due. See `service/README.md`, *Provisioning from the engine*.
+
+Signing in to the coding agents works the same way, without a console: the client's Sign in has the engine run
+`bin/construct-agent-sign-in.py <agent>` on the VM, which starts the agent's own sign-in under a pseudo-terminal
+(`claude auth login`, `codex login --device-auth`, `opencode auth login`, `agy acp --login`) and reports the
+terminal's text; what the user types goes to it. Each runs with `BROWSER` set to `bin/construct-sign-in-browser.sh`,
+which hands the link the CLI would open to the script; where that link returns to a loopback port on the VM, a
+device agent forwards the port from the PC and opens the link, and the sign-in ends without a pasted code (Codex
+then runs `codex login`). The Antigravity sign-in lands in
+`~/.gemini/antigravity-cli/antigravity-oauth-token` and is copied into T3 Code's private Antigravity home, so the
+terminal and T3 Code share one sign-in. `--status` prints whether each installed agent is signed in; the usage
+report sends it with the versions. See `service/README.md`, *Signing in to the coding agents*.
+
 ## Non-interactive provisioner (`bin/provision.sh`)
 
 `bin/provision.sh` is the VM-side, no-prompt counterpart to `ui-setup.sh`. It's what the
@@ -169,7 +204,7 @@ Recognized variables:
 | `AGENT_NAME` | — | Name of this agent VM |
 | `PROJECTS` | — | Comma-separated project profiles to activate |
 | `SSH_USER` | — | Seed SSH user |
-| `AI_TOOLS` | `opencode,claude-code,codex` | Agent CLIs to install |
+| `AI_TOOLS` | `opencode,claude-code,codex` | Agent CLIs to install and configure: `claude-code`, `codex`, `opencode`, `antigravity`; `none` for none. One left out is not uninstalled, only no longer updated or configured, and T3 Code's provider for it is turned off. The engine sets it from the VM's coding agents. |
 | `ALLOW_HOST_PACKAGES` | `true` | Install the `hostPackages` project profiles declare. `false` only warns; it is not a sandbox, since `provisionCommands` run as root anyway. |
 | `WORKSPACE_ROOT` | `/root/repos` | Where project repos are cloned |
 | `CLAUDE_USER` | `root` | User Claude Code's CLI and VS Code extension settings are written for |
@@ -268,10 +303,7 @@ on ext4 it does nothing. See [worktrees.md](worktrees.md).
 ### Swap file
 
 Every (re)provision runs `bin/setup-swap.sh` with `SWAP_SIZE_GB`, right after it writes
-`config.env` so the installs that follow already have swap. On Windows the size is set in the
-control panel (**Settings → VM resources → Swap file**, see
-[Control panel](control-panel.md#swap-file)) or with `-SwapSizeGB` on `Auto-Install.ps1`,
-`Create-AgentVM.ps1` and `Provision-AgentVM.ps1`, which pass it on as `SWAP_SIZE_GB`. Without swap, a guest that runs
+`config.env` so the installs that follow already have swap. Without swap, a guest that runs
 out of RAM for a moment (four builds at once, or a hypervisor that is slow to give memory
 back) can only kill processes; with swap it gets slow for a while instead, and memory that
 nothing touches (idle agent sessions, finished threads, language servers) can move out of
@@ -291,6 +323,10 @@ RAM.
   again. A file is only created or grown while the disk keeps at least 2 GiB and 10 % of its
   size free; otherwise the step warns and leaves the swap file as it is.
 - The OOM guard below still decides who goes first if RAM and swap both run out.
+- In the Construct app it is **Swap file** on the VM's Settings, Resources tab: `auto` or a whole
+  number 0–128, stored in the VM's desired state on its engine (`swapSizeGb`) and applied at the
+  next reprovision. The engine refuses any other value. An install moved over from the old client
+  keeps its `swapSizeGb`.
 
 ### Out-of-memory ranking
 
@@ -412,7 +448,15 @@ sudo env ALLOW_LOW_DISK=true bash /opt/construct/repo/bin/provision.sh
 
 Selecting a profile pulls in its declared repos and `sdks`. When `INSTALL_SDKS=true`,
 `bin/install-sdks.sh` installs the merged runtimes on the VM host: `node` (via NodeSource),
-`python` (apt python3 toolchain), and `dotnet` (via Microsoft's `dotnet-install.sh`).
+`python`, and `dotnet` (via Microsoft's `dotnet-install.sh`). Every requested Python minor
+version is installed side by side: the distro's own `python3` (with venv and pip) from Ubuntu,
+any other version (`python3.X` with `python3.X-venv`) from the deadsnakes PPA. `python3` stays
+the distro's `/usr/bin/python3` for every shell; a requested version is `python3.X` there. Only
+the requesting profile's `provisionCommands` get the newest version that profile requested as
+`python3` and `python`. A request names a minor version (`"3.14"`, `"3"` is the distro's); patch
+versions are not pinned. The `/usr/local/bin/python3` link earlier versions made is removed on
+the next provision; a venv made through it (`home = /usr/local/bin` in its `pyvenv.cfg`) no
+longer starts and has to be made again.
 
 ## AI tool setup (`bin/ui-setup.sh`)
 
@@ -433,9 +477,12 @@ sudo /opt/construct/repo/bin/setup-root-ssh-key.sh
 The workflow lets you pick tools, records `AI_TOOLS=`, and runs `bin/install-ai-tools.sh`.
 Currently supported selections:
 
-- `opencode`: installs the CLI and autostarts `opencode serve --hostname 0.0.0.0 --port 4096`
-  as root via `opencode-serve.service`. See [opencode installs behind a company
-  network](#opencode-installs-behind-a-company-network) if this step fails.
+- `opencode`: installs OpenCode 2 (`@opencode/cli`) and autostarts `opencode serve --hostname
+  0.0.0.0 --port 4096` as root via `opencode-serve.service`. OpenCode 2 protects the server with a
+  password it makes at each start and writes to the journal
+  (`journalctl -u opencode-serve | grep 'server password'`). See [opencode installs behind a
+  company network](#opencode-installs-behind-a-company-network) if this step fails, and
+  [Moving from OpenCode 1](#moving-from-opencode-1) for VMs that ran OpenCode 1.
 - `claude-code`: installs the Claude Code CLI and prints the SSH connection target.
 - `codex`: installs the Codex CLI, supports Codex App SSH remote connections, and can start the
   experimental Codex app-server on `0.0.0.0:4500` via `codex-app-server.service`. The official
@@ -486,29 +533,33 @@ documents each one inline, and [`construct expose`](expose.md#configuration) cov
 
 ### opencode installs behind a company network
 
-opencode is the one tool that isn't installed from a package registry, and its official
-installer has two habits that break on corporate networks:
+OpenCode 2's official installer (`opencode.ai/v2/install`) downloads the `@opencode/cli`
+build for the platform from the npm registry. Construct reads the latest version from the
+registry first and pins it through the installer's `VERSION` environment variable, and a
+reprovision runs the installer only when a newer release is out. A failed attempt is retried
+three times with backoff.
 
-- **It resolves its version through `api.github.com`,** which allows 60 unauthenticated
-  requests per hour **per source IP**. Behind a company NAT that budget is shared by every
-  machine on the network and is routinely spent, so the installer exits with
-  `Failed to fetch version information` — on every attempt, since retrying hits the same wall
-  until the hourly reset. Construct now resolves the latest tag from the plain
-  `github.com/.../releases/latest` redirect (no API, no quota) and pins it through the
-  installer's `VERSION` environment variable, so that call never happens.
-- **It downloads its release archive without `curl --fail`,** so a proxy error page gets piped
-  into `tar` and the install dies with `gzip: stdin: not in gzip format`. Each attempt is
-  retried three times with backoff.
-
-If the official installer still fails, provisioning falls back to the **`opencode-ai` npm
-package** — the same release, fetched from the npm registry, which is usually reachable (or
-mirrored) where raw GitHub downloads are blocked. Only if that fails too does the step fail,
-and it then prints the HTTP status of `github.com`, `api.github.com` and `registry.npmjs.org`
-so you can tell "offline" from "proxy block" from "rate limit" at a glance.
+If the official installer still fails, provisioning falls back to the **`@opencode/cli` npm
+package** — the same release, which is usually reachable (or mirrored) where other downloads
+are blocked. Only if that fails too does the step fail, and it then prints the HTTP status of
+`opencode.ai` and `registry.npmjs.org` so you can tell "offline" from "proxy block" at a
+glance. When an update fails, the installed version is kept.
 
 Either layout is fine afterwards: `/usr/local/bin/opencode` is pointed at whichever binary was
 installed (`~/.opencode/bin/opencode` or the npm package's), which is what `opencode-serve.service`
 executes.
+
+### Moving from OpenCode 1
+
+A VM that ran OpenCode 1 moves to OpenCode 2 at its next update or reprovision. OpenCode 2
+converts OpenCode 1's database in place, one way, when it first starts. Before the first
+OpenCode 2 install, provisioning stops `opencode-serve` and copies each data folder once to
+`~/.local/share/opencode-v1-copy`; that copy is the only way back. To go back, stop
+`opencode-serve`, put the copy back as `~/.local/share/opencode` and install OpenCode 1
+(`curl -fsSL https://opencode.ai/install | bash`). When the copy cannot be made (a full disk),
+the VM stays on OpenCode 1 and the step fails. An OpenCode 1 session that T3 Code runs during
+the copy can still write to the database. The copy is not removed by Construct; delete it once
+you no longer need the way back.
 
 ### Bypass-mode defaults
 

@@ -1194,5 +1194,49 @@ wait "${cli}"; rc=$?
 ok "hosted: a denied request exits 7 and its note is gone" test "${rc}:$(notes)" = "7:0"
 ok "no note ever carried a secret value or token" sh -c "! grep -rqs -e '${vm_token}' '${pending}'"
 
+# ── ask: the user enters a secret on a device (plan 10.3) ───────────────────
+
+hs_reset
+rm -rf "${spool}" "${pending}"
+hs_answer 1 200 '{"v":1,"status":"ok","message":"Requested.","names":["jira-token"],"requestId":"e-1","expiresAt":1}'
+hosted ask jira-token --description "Jira API token" --reason "release notes"
+ok "ask: exits 0 on the host's answer" test "${rc}" = 0
+ok "ask: ONE call, a POST of the request document" test "$(calls):$(call 1)" = "1:POST ${base_url}/requests"
+ok "ask: op ask, the name, the description and the reason" \
+  test "$(hreq 1 -c '[.op, .names, .description, .reason, .v]')" = '["ask",["jira-token"],"Jira API token","release notes",1]'
+ok "ask: no secret and no replace/auto-approve in the request" test "$(hreq 1 -c '[.secret, .autoApprove, .replace]')" = '[null,null,false]'
+ok "ask: says the user enters it and where it shows" grep -q "Asked the user to enter jira-token. 'construct secret list' shows it as requested" "${out}"
+ok "ask: no pending note (nothing waits for an approval)" test "$(notes)" = 0
+ok "ask: no work directory left" test "$(work_dirs)" = 0
+
+hs_reset
+hs_answer 1 200 '{"v":1,"status":"exists","message":"A secret named jira-token already exists: request it (construct secret request jira-token)."}'
+hosted ask jira-token --description "Jira API token"
+ok "ask: a name that exists exits 10 with the host's message" \
+  test "${rc}:$(cat "${err}")" = "10:construct secret: A secret named jira-token already exists: request it (construct secret request jira-token)."
+
+hs_reset
+hosted ask jira-token
+ok "ask: --description is required" test "${rc}:$(calls)" = "1:0"
+ok "ask: ... and says so" grep -q 'ask needs --description' "${err}"
+hosted ask a b --description x
+ok "ask: exactly one name" test "${rc}:$(calls)" = "1:0"
+hosted ask jira-token --description x --uses 2
+ok "ask: --uses does not apply" test "${rc}:$(calls)" = "1:0"
+hosted ask jira-token --description x --file /etc/hostname
+ok "ask: --file does not apply (the agent never holds the value)" test "${rc}:$(calls)" = "1:0"
+
+run ask jira-token --description "Jira API token"
+ok "ask without a host service: exit 8, nothing published to the spool" test "${rc}" = 8
+ok "ask without a host service: says what to do instead" grep -q 'ask needs a VM of a host service' "${err}"
+not_published_any() { test "$(leftovers)" = 0; }
+ok "ask without a host service: no request file left" not_published_any
+
+hs_reset
+hs_answer 1 200 '{"v":1,"status":"ok","items":[{"name":"db","description":"Database","hasUsername":true,"autoApprove":false,"lease":null},{"name":"jira-token","description":"Jira API token","hasUsername":false,"autoApprove":false,"lease":null,"requested":true}]}'
+hosted list
+ok "list: a name asked for shows as requested" grep -Eqx 'jira-token +requested +Jira API token' "${out}"
+ok "list: other names keep their access" grep -Eqx 'db +none +Database' "${out}"
+
 printf '\n%s passed, %s failed\n' "${pass}" "${fail}"
 [[ "${fail}" -eq 0 ]]

@@ -9,8 +9,8 @@ public sealed record BackupCleanupResult(int Rotated, int StaleSessions, int Orp
 
 /// <summary>
 /// Hourly housekeeping of config backups (docs/plans/host-config-backups.md §3.6): rotation for every
-/// <em>(owner, VM)</em>, abandoned upload sessions (older than two hours, nothing writing) and orphaned
-/// partial files, and the bookkeeping of pairs whose VM is gone: <c>vm_missing_since</c> is set while
+/// <em>(owner, VM)</em>, abandoned upload sessions (older than two hours, a slot session 30 minutes, nothing
+/// writing) and orphaned partial files, and the bookkeeping of pairs whose VM is gone: <c>vm_missing_since</c> is set while
 /// no VM of that owner and name exists and cleared when one does again; after
 /// <c>RetainDeletedDays</c> the pair's backups are deleted. A pass is skipped during maintenance.
 /// </summary>
@@ -60,7 +60,7 @@ public sealed class BackupCleanupService(BackupCoordinator backups, IVmRepositor
 
             if (state?.RequestPendingAt is { } requested && now - requested >= BackupSchedule.RequestLifetime)
             {
-                state = state with { RequestPendingAt = null };
+                state = state with { RequestPendingAt = null, RequestTrigger = null };
                 await store.SaveVmAsync(state, ct);
             }
 

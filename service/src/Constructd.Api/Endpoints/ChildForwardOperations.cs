@@ -41,14 +41,15 @@ internal static class ChildForwardOperations
         var result = await sp.GetRequiredService<IAccessExposure>().TryExposeAsync(new(actor, relationship.Value, vm.Name, via,
             target, port, request.ConnectPort ?? port, request.Label?.Trim() ?? "", options.MaxForwardsPerVm), ct);
         CodedProblems.Audit(http, "forward.add", vm.Owner, vm.Parent, vm.Name, "requester=" + actor + ";relationship=" + relationship + ";target=" + target + ";result=" + result.Status);
+        var added = result.Status == ExposeStatus.Added ? await ForwardNote.KeepAsync(http, result.Forward!, ForwardNote.Parse(request), ct) : null;
         return result.Status switch
         {
-            ExposeStatus.Added => Results.Created($"/api/v1/vms/{vm.Name}/forwards/{result.Forward!.Id}", ForwardResponse.From(result.Forward, options.PublicHostFor(vm.Name))),
+            ExposeStatus.Added => Results.Created($"/api/v1/vms/{vm.Name}/forwards/{added!.Id}", ForwardResponse.From(added, options.PublicHostFor(vm.Name))),
             ExposeStatus.PolicyDenied => CodedProblems.Create(403, "host-forwards-disabled", "Host forwarding is disabled by host or owner policy."),
             ExposeStatus.AddressUnverifiable => Results.Problem(statusCode: 409, title: "Child destination unavailable",
                 type: "urn:construct:problem:" + (result.Detail == "address-conflict" ? "address-conflict" : "address-unverifiable"),
                 extensions: new Dictionary<string, object?> { ["code"] = result.Detail == "address-conflict" ? "address-conflict" : "address-unverifiable", ["reason"] = result.Detail, ["address"] = null }),
-            ExposeStatus.LimitReached => Problems.Forbidden("The target has reached its forward limit."),
+            ExposeStatus.LimitReached => ForwardNote.LimitReached(vm.Name, options.MaxForwardsPerVm),
             _ => CodedProblems.Create(409, "vm-deleting", "Target is unavailable.")
         };
     }

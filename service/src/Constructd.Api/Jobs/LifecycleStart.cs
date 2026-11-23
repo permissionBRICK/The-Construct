@@ -12,6 +12,13 @@ public sealed class LifecycleStart(IVmRepository vms, IHypervisorDriver driver, 
     public sealed record Intent(string? Lifetime, long? Seconds, long LeaseVersion, DateTimeOffset ActivationBase,
         IReadOnlyList<ReservationLine> Lines, string OperationId, bool Restart = false);
     public sealed record Reply(VmState State, Lease? Lease, string? Code = null);
+
+    /// <summary>
+    /// A new start of a primary on its owner's behalf, for starts that are no lifecycle request: <c>POST /vms/{name}/power</c>,
+    /// the HTTPS start on request and a provision that starts its stopped VM (<see cref="ProvisionStart"/>).
+    /// </summary>
+    public OperationKeyRecord PrimaryKey(Vm vm, string? key = null) => new(vm.Owner, "lifecycle-start", key ?? Guid.NewGuid().ToString("n"),
+        "primary-power-start:" + vm.Name, vm.Name, null, OperationKeyState.InFlight, null, vm.PowerGeneration, null, clock.UtcNow);
     public async Task<Reply> RunAsync(Vm vm, string? lifetime, long? seconds, OperationKeyRecord proposed, CancellationToken ct)
     {
         if ((await keys.ListInFlightAsync(vm.Name, ct)).Any(k => ConfigurationIntent.Applies(k, vm))) throw new LifecycleException("configuration-incomplete");

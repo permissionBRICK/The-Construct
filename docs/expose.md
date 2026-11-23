@@ -73,7 +73,8 @@ test diffs them against the previous commit. The verb documents itself through
 ## Command reference
 
 ```
-construct expose <port> [--label <text>] [--to client|host] [--wait <sec>] [--reuse]
+construct expose <port> [--label <text>] [--purpose <text>] [--source <path>]
+                        [--to client|host] [--wait <sec>] [--reuse]
 construct expose --list
 construct expose --close <id|port>
 construct expose --help
@@ -83,9 +84,10 @@ construct expose --help
 |---|---|
 | `construct expose 3000` | Requests a client forward for VM port 3000, waits (default 30 s) until it is open, prints the link. |
 | `construct expose 3000 --label "api"` | Same, with a label that shows up in `--list` and in the extension's UI. |
+| `construct expose 3000 --purpose "API for the chart page" --source /root/repos/charts` | Same, with a **note**: what the forward is for and where the service behind it lives. `--list` shows both under the forward's row. Without `--source` the git repository the command runs in is taken; outside one, no source is recorded. |
 | `construct expose 3000 --to host` | Requests a host forward. Local mode prints the VM's own externally reachable URL (NAT already reaches it); remote mode asks the service to publish a port and prints the URL it returns. |
 | `construct expose 3000 --reuse` | **Get-or-create**: reuses this VM's existing forward for the same port *and* target instead of allocating a second one, and prints its link. |
-| `construct expose --list` | Lists this VM's forwards with id, port, target, status, label and URL. |
+| `construct expose --list` | Lists this VM's forwards with id, port, target, status, label and URL, and under a forward with a note its `purpose:` and `source:` lines. |
 | `construct expose --close 3000` | Closes the forward for VM port 3000. An id works too; a port that has several forwards is ambiguous and is rejected. |
 
 Notes:
@@ -98,6 +100,12 @@ Notes:
   client connects. The CLI says so and exits 6 so a script can tell the difference.
 - Local `--to host` forwards are stateless — the VM is already reachable at that address, so
   there is nothing to allocate, nothing to close and nothing for `--list` to show.
+- **The forward limit.** A VM has at most 100 forwards unless the host sets
+  `Constructd:MaxForwardsPerVm` to another number (0 = uncapped). At the limit the service
+  answers `403` with code `forward-limit`, and the CLI exits 7 and passes on how to make room:
+  list the forwards, read each one's purpose and source, close the ones that are no longer
+  needed. That is what the note is for; forwards made without one (by older clients too) keep
+  working and are listed as before.
 - **`--reuse` (get-or-create)** exists because the service has no upsert and provisioning
   runs again on every reprovision: `bin/provision.sh` asks for one host forward per enabled
   web service (plan §4.12), and without `--reuse` each run would leave another public port
@@ -115,7 +123,7 @@ Notes:
 | 0 | Success — the forward is open (or the list/close completed). |
 | 1 | Usage or local error: bad port, unknown option, unknown id, spool not writable. |
 | 6 | No Construct client is attached. The request stays queued and opens later. |
-| 7 | The host service refused the request (e.g. host forwards disabled for this user, or the per-VM forward cap is reached). |
+| 7 | The host service refused the request (e.g. host forwards disabled for this user, or the per-VM forward limit is reached: code `forward-limit`). |
 | 8 | The host service could not be reached, or answered something unusable. |
 
 ## Configuration
@@ -185,6 +193,9 @@ extension re-opens the tunnel for anything still queued.
 - `id` — `<unix-seconds>-<4 hex>`, unique per request, filename-safe, and the handle used by
   `--close` and `--list`.
 - `label` — free text, control characters stripped, capped at 100 characters. May be empty.
+- `purpose`, `source` — optional, the forward's note (`--purpose`, `--source`), one line each,
+  capped at 200 and 400 characters. Absent when not given; a reader that does not know them
+  ignores them.
 - `target` — always `client`; host targets are not spooled in local mode.
 - Written to `requests/.tmp.<pid>.<rand>` and published with `mv`, so a watcher never reads a
   half-written file (same guarantee as the notification spool).
@@ -275,7 +286,7 @@ the VM token:
 
 | Step | Call |
 |---|---|
-| create | `POST {url}/api/v1/vms/{instance}/forwards` with `{"vmPort":5173,"label":"vite dev","target":"client"}` → `201 {id, vmPort, publicPort, target, label, created, url}` |
+| create | `POST {url}/api/v1/vms/{instance}/forwards` with `{"vmPort":5173,"label":"vite dev","target":"client"}` and optionally `"purpose"` (at most 200 characters) and `"source"` (at most 400) → `201 {id, vmPort, publicPort, target, label, created, url}`, plus `purpose` and `source` when the forward has them |
 | get-or-create (`--reuse`) | `GET …/forwards` first; the first entry with the same `vmPort` **and** `target` is used as-is and nothing is created |
 | wait / list | `GET {url}/api/v1/vms/{instance}/forwards` → the array of the same objects |
 | close | `DELETE {url}/api/v1/vms/{instance}/forwards/{id}` → `204` |
@@ -292,7 +303,7 @@ the VM token:
   `localPort` (plus optional `hostLabel`) as in the spool ack, or a `status` of `error` with
   a `message`. Anything else is "not open yet".
 - **403** → exit 7 with the service's own explanation (host forwards disabled for the owner,
-  or the per-VM forward cap reached). **Transport failure, 401, 5xx, a 2xx whose body is not
+  or the per-VM forward limit reached, code `forward-limit`, with how to make room). **Transport failure, 401, 5xx, a 2xx whose body is not
   the promised JSON shape** → exit 8. This holds *while polling* too: a failed or unreadable
   list ends the command with 7/8, never with the "queued" answer (exit 6) — the request may
   well be open, and telling an agent to keep waiting would be a lie. Only a list that
@@ -314,6 +325,11 @@ cacheReadTokens, totalTokens, costUsd, models}]}` to
 The route accepts up to 200 rows and 64 models per row and overwrites repeated
 VM-incarnation/tool/date keys. Negative counts or costs, unknown tools and invalid
 calendar dates are rejected. The host records receipt time for freshness.
+
+The report also lists the VM's coding agents, `agents: [{tool, version}]` for each of
+`claude`, `codex`, `opencode` and `t3` installed (the first semver of its `--version`).
+A guest with no usage rows but agents posts `days: []`. The host keeps the last list per
+VM and shows it with the newest release at `GET /api/v1/vms/{instance}/agents`.
 
 The matching VM token can write usage as well as its activity heartbeat. It cannot
 read host usage, read another VM's usage, or post for another VM. Owners and admins
@@ -426,7 +442,7 @@ Each run evaluates four probes and posts the result to
 
 | Reason | Probe |
 |---|---|
-| `ssh-session` | An established TCP connection to port 22 (`ss -tn state established '( sport = :22 )'`), or a login in `who` when `ss` is missing **or fails**. A probe that cannot answer falls through to the next source; it never counts as "nobody is connected". |
+| `ssh-session` | An established TCP connection to port 22 (`ss -tn state established '( sport = :22 )'`), or a login in `who` when `ss` is missing **or fails**. A probe that cannot answer falls through to the next source; it never counts as "nobody is connected". The device agent's notification watch is not counted: it holds an SSH connection of its own (no multiplexing, no forwards), records it in `/run/construct/watch-sessions/notify-<pid>`, and the report skips the connection with both of those ends while the watch runs. A watch that cannot write there (a non-root SSH user) still counts. |
 | `agent-log:<claude\|codex\|opencode>` | An agent transcript written within the last interval + 30 s: Claude Code session files under `~/.claude/projects/**/*.jsonl`, Codex rollouts under `~/.codex/sessions/**/rollout-*.jsonl`, or the OpenCode database (`~/.local/share/opencode/opencode.db` and its `-wal`). Every home directory is checked (`/root` and `/home/*`; override with `CONSTRUCT_IDLE_AGENT_HOMES`). Agents append to their transcript on every model turn and tool call, so a working agent keeps its file fresh while an idle one, or a resident server process, does not. |
 | `t3-thread-running` | The T3 Code database (`~/.t3/userdata/statev2.sqlite`, or `state.sqlite` before T3 Code 0.1.0) has a thread with a run that is starting, running or waiting on its background work, is not deleted, and is not waiting on the user (no pending question, approval or secret request). A thread blocked on the user is *not* busy — nobody is going to answer it while the VM sits unattended. |
 | `provisioning` | `/run/construct/provisioning` exists **and** the PID it contains is still alive. `provision.sh` writes the marker at the start of a run and removes it at the end; the PID check is what keeps a run killed mid-flight (dropped SSH, reboot) from pinning the VM as busy forever. |

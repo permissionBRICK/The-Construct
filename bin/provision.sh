@@ -167,6 +167,54 @@ _finish_provision() {
   exit "${final_rc}"
 }
 
+# The step's name on the host's progress bar, in one to three words. Pure (unit-tested).
+_step_label() {
+  case "$1" in
+    "Checking root privileges") printf 'Checking access' ;;
+    "Checking free disk space") printf 'Checking disk' ;;
+    "Recording busy T3 Code threads") printf 'Saving T3 threads' ;;
+    Granting*"passwordless sudo") printf 'Setting up sudo' ;;
+    "Running core host bootstrap") printf 'Installing packages' ;;
+    "Writing configuration to"*) printf 'Writing config' ;;
+    "Setting up the swap file") printf 'Setting up swap' ;;
+    "Installing the VM service token") printf 'Installing token' ;;
+    "Requesting host port forwards"*) printf 'Requesting forwards' ;;
+    "Configuring global git identity") printf 'Configuring git' ;;
+    "Setting up SMB share"*) printf 'Setting up SMB' ;;
+    "Setting up root SSH key") printf 'Setting up SSH' ;;
+    "Installing AI tool: claude-code") printf 'Installing Claude' ;;
+    "Installing AI tool: codex") printf 'Installing Codex' ;;
+    "Installing AI tool: opencode") printf 'Installing OpenCode' ;;
+    "Installing AI tool: antigravity") printf 'Installing Antigravity' ;;
+    "Installing AI tool: "*) printf 'Installing %s' "${1#Installing AI tool: }" ;;
+    "Installing T3 Code web GUI") printf 'Installing T3' ;;
+    "Disabling T3 Code"*) printf 'Disabling T3' ;;
+    "Recording the forwarded T3 address") printf 'Recording T3 address' ;;
+    "Installing AI tool console integration") printf 'Installing integrations' ;;
+    "Installing construct CLI") printf 'Installing CLI' ;;
+    "Setting up reflink-seeded git worktrees") printf 'Setting up worktrees' ;;
+    "Installing browser console gateway") printf 'Installing console' ;;
+    "Setting up the notification spool") printf 'Setting up notifications' ;;
+    "Setting up the OOM guard") printf 'Setting up OOM guard' ;;
+    "Keeping pkill/pgrep off the calling shell") printf 'Guarding pkill' ;;
+    "Setting up the activity heartbeat timer") printf 'Setting up heartbeat' ;;
+    "Setting up the token usage timer") printf 'Setting up usage' ;;
+    "Setting up endpoint refresh at boot") printf 'Setting up refresh' ;;
+    "Generating runtime config") printf 'Generating config' ;;
+    "Configuring MCP servers"*) printf 'Configuring MCP' ;;
+    "Installing project SDKs/runtimes") printf 'Installing SDKs' ;;
+    "Seeding git credentials"*) printf 'Seeding credentials' ;;
+    "Checking out project repos") printf 'Cloning projects' ;;
+    "Running project provisioning commands") printf 'Project commands' ;;
+    "Requesting project port forwards") printf 'Project forwards' ;;
+    "(Re)starting construct service") printf 'Restarting services' ;;
+    "Setting up VS Code server"*) printf 'Setting up VS Code' ;;
+    "Recording provisioning timestamps") printf 'Finishing' ;;
+    "Scheduling the resume of interrupted T3 Code threads") printf 'Resuming T3 threads' ;;
+    *) printf '%s' "$1" | awk '{ print $1 (NF > 1 ? " " $2 : "") (NF > 2 ? " " $3 : "") }' | tr -d '\n' ;;
+  esac
+}
+
 run_step() {
   local criticality="$1" title="$2" rc log_file
   shift 2
@@ -175,6 +223,10 @@ run_step() {
     *) printf '%srun_step: invalid criticality: %s%s\n' "${_C_ERR}" "${criticality}" "${_C_RESET}"; return 2 ;;
   esac
 
+  # One countable marker per step for the host's progress bar (label|title); the host shows the label.
+  local shown
+  shown="$(_sanitize_step_title "${title}")"
+  printf '::construct-step %s|%s\n' "$(_step_label "${shown}")" "${shown}"
   step "${title}"
   log_file="${_PROVISION_LOG_DIR}/step-$(( ${#_FAILED_TITLES[@]} + 1 ))-${RANDOM}.log"
   if "$@" 2>&1 | tee "${log_file}"; then
@@ -886,9 +938,9 @@ setup_host_forwards() {
 
   # KEY|label|port|https-flags, one per ENABLED web service ('|' because a label may
   # carry a colon). A service that is switched off asks for nothing, so its key is
-  # simply absent from the file.
+  # simply absent from the file. Each forward's note names the service and its unit.
   local -a wanted=()
-  local -a https_args=()
+  local -a https_args=() note_args=()
   local https_flags
   case ",${AI_TOOLS}," in
     *,opencode,*) wanted+=("OPENCODE|opencode server|${OPENCODE_PORT}|") ;;
@@ -912,8 +964,13 @@ setup_host_forwards() {
     rc=0
     # stdout is the link and nothing else; the CLI's own diagnostics go to stderr and
     # therefore into the provisioning log the host is streaming.
+    case "${key}" in
+      OPENCODE) note_args=(--purpose "OpenCode server, set up by Construct provisioning" --source /etc/systemd/system/opencode-serve.service) ;;
+      T3) note_args=(--purpose "T3 Code web GUI, set up by Construct provisioning" --source /etc/systemd/system/t3code-serve.service) ;;
+      *) note_args=() ;;
+    esac
     url="$(CONFIG_FILE="${CONFIG_FILE}" bash "${expose}" "${port}" --to host --reuse --label "${label}" \
-      ${https_args[@]+"${https_args[@]}"})" || rc=$?
+      "${note_args[@]}" ${https_args[@]+"${https_args[@]}"})" || rc=$?
     authority=""
     if (( rc == 0 )) && [[ -n "${url}" ]]; then
       authority="$(url_authority "${url}")"
@@ -1126,7 +1183,8 @@ fi
 IFS=',' read -ra _selected_ai_tools <<<"${AI_TOOLS}"
 for _ai_tool in "${_selected_ai_tools[@]}"; do
   _ai_tool="${_ai_tool//[[:space:]]/}"
-  [[ -n "${_ai_tool}" ]] || continue
+  # "none": every coding agent switched off for this VM.
+  [[ -n "${_ai_tool}" && "${_ai_tool}" != none ]] || continue
   run_step optional "Installing AI tool: ${_ai_tool}" \
     env TARGET_USER="${CLAUDE_USER}" AI_TOOLS_OVERRIDE="${_ai_tool}" AI_CONSOLE_INTEGRATION=false \
     OPENCODE_BACKGROUND_WATCHER="${OPENCODE_BACKGROUND_WATCHER}" \
@@ -1185,7 +1243,7 @@ run_step optional "Installing AI tool console integration" \
 #     raise host desktop notifications, expose ports, manage delegated child
 #     VMs, use the key vault and change per-VM settings from the VM shell
 #     (`construct project`, `construct notify`, `construct expose`, `construct vm`,
-#     `construct secret`, `construct config`).
+#     `construct secret`, `construct config`, `construct update`).
 #     Runs every provision so an updated script always gets redeployed on
 #     reprovision. Silent (install prints nothing), including the forward spool:
 #     the default path's output must stay byte-identical.
@@ -1201,6 +1259,12 @@ install_construct_cli() {
   install -m 0755 "${REPO_DIR}/bin/construct-backup.sh" "${bin_dir}/construct-backup.sh" || return 1
   install -m 0755 "${REPO_DIR}/bin/construct-config.sh" "${bin_dir}/construct-config.sh" || return 1
   install -m 0755 "${REPO_DIR}/bin/construct-idle-report.sh" "${bin_dir}/construct-idle-report.sh" || return 1
+  # `construct project` on a VM with a host service (docs/config-sync.md, "The new stack").
+  install -m 0755 "${REPO_DIR}/bin/construct-project.sh" "${bin_dir}/construct-project.sh" || return 1
+  # `construct update` (the VM's own update route at its engine).
+  install -m 0755 "${REPO_DIR}/bin/construct-update.sh" "${bin_dir}/construct-update.sh" || return 1
+  install -d -m 0755 "${bin_dir}/lib" || return 1
+  install -m 0644 "${REPO_DIR}/bin/lib/construct-api.sh" "${bin_dir}/lib/construct-api.sh" || return 1
   # Forward spool (docs/expose.md): root-owned 0755, deliberately NOT 1777 like
   # the notification spool -- a request opens a port on the user's PC.
   install -d -m 0755 "${forwards_dir}" "${forwards_dir}/requests" \
@@ -1387,6 +1451,8 @@ setup_usage_report_timer() {
   install -m 0755 "${REPO_DIR}/bin/construct-usage-report.sh" "${bin_dir}/construct-usage-report.sh" || return 1
   install -m 0644 "${REPO_DIR}/extension/vm/usage-collect.sh" "${bin_dir}/lib/usage-collect.sh" || return 1
   install -m 0644 "${REPO_DIR}/bin/lib/usage-normalize.jq" "${bin_dir}/lib/usage-normalize.jq" || return 1
+  # The report says whether each agent is signed in, by the sign-in script's checks.
+  install -m 0644 "${REPO_DIR}/bin/construct-agent-sign-in.py" "${bin_dir}/lib/construct-agent-sign-in.py" || return 1
   install -m 0644 "${REPO_DIR}/systemd/construct-usage-report.service" "${unit_dir}/construct-usage-report.service" || return 1
   install -m 0644 "${REPO_DIR}/systemd/construct-usage-report.timer" "${unit_dir}/construct-usage-report.timer" || return 1
   sed -i "s/^OnUnitActiveSec=.*/OnUnitActiveSec=${CONSTRUCT_USAGE_REPORT_INTERVAL_MIN}min/" "${unit_dir}/construct-usage-report.timer" || return 1
@@ -1596,6 +1662,18 @@ record_timestamps() {
     kept="$(grep -v '^CONSTRUCT_COMMIT=' "${MARKER_FILE}" || true)"
     printf '%s\n' "${kept}" >"${MARKER_FILE}" || return
     note "    CONSTRUCT_COMMIT removed (this Construct could not resolve its own commit)"
+  fi
+  # What the host engine provisioned with (design 7.5): the source payload's sha256, the hash of
+  # the settings and profiles it applied, and its release channel. Written only when the engine
+  # gives them; a run without them (the PowerShell path) leaves the file as it was.
+  if [[ "${CONSTRUCT_PAYLOAD_HASH:-}" =~ ^[0-9a-f]{64}$ ]]; then
+    mark CONSTRUCT_PAYLOAD_HASH "${CONSTRUCT_PAYLOAD_HASH}" || return
+  fi
+  if [[ "${CONSTRUCT_DESIRED_HASH:-}" =~ ^[0-9a-f]{64}$ ]]; then
+    mark CONSTRUCT_DESIRED_HASH "${CONSTRUCT_DESIRED_HASH}" || return
+  fi
+  if [[ "${CONSTRUCT_CHANNEL:-}" =~ ^[A-Za-z0-9._/-]{1,64}$ ]]; then
+    mark CONSTRUCT_CHANNEL "${CONSTRUCT_CHANNEL}" || return
   fi
   chmod 0644 "${MARKER_FILE}"
 }

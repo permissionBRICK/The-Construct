@@ -50,6 +50,7 @@ public static partial class AdminCli
           users remove <name>
           users list
           vms adopt <name> --owner <user> --cpu <n> --ram-mb <n> --disk-gb <n> --incarnation <guid>
+          vms adopt-local <name> --owner <user> --settings <file> [--instance-state <file>] --ssh-key <file>
           tokens issue <user> --label <label>
           tokens revoke-all <user>
           forwards reconcile
@@ -101,6 +102,7 @@ public static partial class AdminCli
                 ("users", "remove") => await RemoveUserAsync(positional, services, writer, cancellationToken).ConfigureAwait(false),
                 ("users", "list") => await ListUsersAsync(positional, services, writer, cancellationToken).ConfigureAwait(false),
                 ("vms", "adopt") => await AdoptVmAsync(positional, services, writer, cancellationToken),
+                ("vms", "adopt-local") => await AdoptLocalVmAsync(positional, services, writer, error, cancellationToken),
                 ("tokens", "issue") => await IssueTokenAsync(positional, services, writer, cancellationToken).ConfigureAwait(false),
                 ("tokens", "revoke-all") => await RevokeTokensAsync(positional, services, writer, cancellationToken).ConfigureAwait(false),
                 ("forwards", "reconcile") => await ReconcileAsync(positional, services, writer, cancellationToken).ConfigureAwait(false),

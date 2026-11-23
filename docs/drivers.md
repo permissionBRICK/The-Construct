@@ -97,6 +97,7 @@ future OIDC or Proxmox-token provider needs no driver change.
 | `Get-ConstructVmEndpoint` | `-Name` | `@{ SshHost; SshPort }` |
 | `Wait-ConstructVmReachable` | `-Name [-TimeoutSeconds] [-PollIntervalSeconds] [-SettleSeconds]` | `$true` if the port opened; an expired wait is **non-fatal** (`$false`) |
 | `Detach-ConstructInstallMedia` | `-Name` | unmount install media + reset the boot order |
+| `Set-ConstructVmStartWithHost` | `-Name -Enabled <bool>` | any power state: `AutomaticStartAction` `StartIfRunning` (`$true`) or `Nothing`; written only when it differs |
 
 Capability-gated — implement these only when `Capabilities.Checkpoints` is `$true`,
 and call them only after checking that flag:
@@ -188,11 +189,19 @@ creation.
 | `Nested` | | `$true` | non-fatal: an unsupported host warns and continues |
 | `AutomaticCheckpoints` | | `$false` | Construct's default, not Hyper-V's |
 | `CheckpointType` | | `Standard` | |
-| `AutomaticStartAction` | | `StartIfRunning` | |
+| `AutomaticStartAction` | | `StartIfRunning` | the service always passes it: `StartIfRunning` only for a primary whose idle policy is off, `Nothing` otherwise (see below) |
 | `AutomaticStopAction` | | `Save` | |
 
 Pass `MemoryBytes` when you already computed an exact, aligned byte count (as
 `Create-AgentVM.ps1` does after its prompt) so nothing round-trips through a double.
+
+**Which VMs a host boot brings back** (`HostStartRules` in the service): never a child, and a
+primary only while its effective idle policy is off (the host's cap and forced idling count). A
+VM that idles out stays down after a host boot, also when the idle action had saved it. The
+service sets it at creation, when a primary's idle policy changes, after an adoption, and for
+every VM it manages once at each engine start (`HostStartStartupService`), which also covers
+VMs made before the rule and a changed host idle setting. A driver that has the setting
+implements `IVmHostStartDriver`; one that does not (external machines) is left alone.
 
 Starting the VM is deliberately **not** part of `New-ConstructVm`: the caller owns when
 that happens (and, for a manual-install ISO, whether a console is opened), so it calls
@@ -406,7 +415,7 @@ Capping the maximum at `ramMb` keeps admission and capacity accounting unchanged
 returns idle guest RAM to the host without overcommit. Restoring a parked Windows license
 machine reapplies the same policy. No OS installation, credentials, SSH wait or ISO patching
 is part of this contract. Automatic checkpoints are off; automatic stop is Save and
-automatic start is StartIfRunning.
+automatic start is Nothing: a host boot never brings a child back.
 
 The `.vhdx.childvm.json` ownership record is created exclusively before allocation
 at the canonical configured/default VHD location (also for an explicit disk override).

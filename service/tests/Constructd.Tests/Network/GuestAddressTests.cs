@@ -43,7 +43,7 @@ public sealed class GuestAddressTests
         var vms = new InMemoryVmRepository();
         await vms.AddAsync(new("child", "alice", 1, 1, 10, DateTimeOffset.UtcNow, VmState.Running, null, null, IdlePolicy.Disabled, [], Kind: VmKind.Child, Incarnation: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"), 10, default);
         var clock = new MutableClock();
-        var provider = new HyperVGuestAddressProvider(runner, new ConstructdOptions { ScriptsDir = @"C:\Construct" }, vms, clock);
+        var provider = new HyperVGuestAddressProvider(runner, new ConstructdOptions(), vms, clock);
         var address = Assert.Single(await provider.GetReportedAddressesAsync("child", default));
         Assert.False(address.Verified); Assert.Equal(clock.UtcNow, address.ObservedAt);
         var call = Assert.Single(runner.Calls); Assert.Equal("powershell.exe", call.FileName);
@@ -61,7 +61,7 @@ public sealed class GuestAddressTests
     {
         var runner = new RecordingProcessRunner().RespondStdout(output);
         using var logs = new CapturedLogs(); using var factory = LoggerFactory.Create(b => b.AddProvider(logs));
-        var provider = new HyperVGuestAddressProvider(runner, new ConstructdOptions { ScriptsDir = @"C:\Construct" }, new InMemoryVmRepository(), new MutableClock(), factory.CreateLogger<HyperVGuestAddressProvider>());
+        var provider = new HyperVGuestAddressProvider(runner, new ConstructdOptions(), new InMemoryVmRepository(), new MutableClock(), factory.CreateLogger<HyperVGuestAddressProvider>());
         Assert.Empty(await provider.GetHostAddressesAsync(default));
         Assert.Contains(logs.Entries, e => e.Level == LogLevel.Warning);
         runner.Failure = new IOException("sensitive guest output");
@@ -108,7 +108,7 @@ public sealed class GuestAddressTests
             [new("healthy", [report], []), new("missing", [report], [], error)], [], [], ["10.2.3.1"]);
         var runner = new RecordingProcessRunner().RespondStdout(JsonSerializer.Serialize(new { ok = true, value = facts }, Constructd.Api.Infrastructure.ApiJson.Options));
         using var logs = new CapturedLogs(); using var factory = LoggerFactory.Create(b => b.AddProvider(logs));
-        var provider = new HyperVGuestAddressProvider(runner, new ConstructdOptions { ScriptsDir = @"C:\Construct" }, vms, clock, factory.CreateLogger<HyperVGuestAddressProvider>());
+        var provider = new HyperVGuestAddressProvider(runner, new ConstructdOptions(), vms, clock, factory.CreateLogger<HyperVGuestAddressProvider>());
         var snapshot = await provider.CaptureAsync(default);
         Assert.Equal("10.2.3.4", Assert.Single(await snapshot.GetReportedAddressesAsync("healthy", default)).Address);
         Assert.Empty(await snapshot.GetReportedAddressesAsync("missing", default));

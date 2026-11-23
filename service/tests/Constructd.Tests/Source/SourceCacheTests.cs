@@ -63,7 +63,7 @@ public sealed class SourceCacheTests
     public async Task RealGitArchiveDirectoriesAndModeZeroFilesAreAccepted()
     {
         using var f = new SourceFixture(); var root = Directory.GetCurrentDirectory();
-        while (!File.Exists(Path.Combine(root,"Provision-AgentVM.ps1"))) root = Directory.GetParent(root)!.FullName;
+        while (!File.Exists(Path.Combine(root,"bin","provision.sh"))) root = Directory.GetParent(root)!.FullName;
         var zip = Path.Combine(f.Files.Root, "fixture.zip");
         var start = new ProcessStartInfo("git") { WorkingDirectory = root, RedirectStandardError = true };
         foreach (var arg in new[] { "archive", "--format=zip", "--prefix=The-Construct-main/", "-o", zip, "HEAD" }) start.ArgumentList.Add(arg);

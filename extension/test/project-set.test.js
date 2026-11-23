@@ -30,6 +30,9 @@ function ok(name, cond, detail) {
 }
 const eq = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 
+const NO_SERVICE_CONFIG = path.join(os.tmpdir(), "construct-test-no-service.env");
+fs.writeFileSync(NO_SERVICE_CONFIG, "");
+
 function mkTmpDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), "construct-test-"));
 }
@@ -51,7 +54,9 @@ function runSetJs(store, args, input) {
 
 // Helper: run the construct CLI.
 function runCli(store, args, opts) {
-  const env = { ...process.env, PROJECTS_STORE: store, CONSTRUCT_REPO_DIR: REPO_ROOT };
+  // No host service: these tests are about the file path, and must never reach the real
+  // service of the machine they run on (a Construct VM has one in /etc/construct/config.env).
+  const env = { ...process.env, PROJECTS_STORE: store, CONSTRUCT_REPO_DIR: REPO_ROOT, CONFIG_FILE: NO_SERVICE_CONFIG, CONSTRUCT_SERVICE_URL: "" };
   const spawnOpts = { env, encoding: "utf8", timeout: 10000, ...opts };
   return spawnSync("bash", [CONSTRUCT_CLI, ...args], spawnOpts);
 }
@@ -277,7 +282,7 @@ console.log("\n── construct CLI ──────────────�
   }
 
   const r = spawnSync(path.join(shimDir, "bash"), [CONSTRUCT_CLI, "project", "set", "test"], {
-    env: { PATH: shimDir, PROJECTS_STORE: store, CONSTRUCT_REPO_DIR: REPO_ROOT, HOME: process.env.HOME || "/root" },
+    env: { PATH: shimDir, PROJECTS_STORE: store, CONSTRUCT_REPO_DIR: REPO_ROOT, HOME: process.env.HOME || "/root", CONFIG_FILE: NO_SERVICE_CONFIG },
     input: '{"name":"test"}',
     encoding: "utf8",
     timeout: 10000,

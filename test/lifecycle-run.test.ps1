@@ -1,6 +1,7 @@
 # lib/AgentVm.LifecycleRun.ps1: one lifecycle run at a time on this PC. Acquire, release, a run held
-# by another live process, a stale marker of a dead one, nested scripts of the same run, and the real
-# Update-T3Code.ps1 / Update-Construct.ps1 holding and refusing it. Nothing contacts a VM.
+# by another live process, a stale marker of a dead one, nested scripts of the same run. The old updater
+# of class F loads it (test/agent-bootstrap.test.ps1); the old scripts that also took it are gone.
+# Nothing contacts a VM.
 $ErrorActionPreference = 'Stop'
 function Assert($condition, $message) { if (-not $condition) { throw $message } }
 $root = Join-Path ([IO.Path]::GetTempPath()) ('lifecycle-run-' + [guid]::NewGuid().ToString('N'))
@@ -113,66 +114,8 @@ Set-Content -LiteralPath $Out -Value "wrong=$wrong|owned=$owned|holder=$($run.pi
     $child.WaitForExit()
     Assert ((Get-Content $adopted) -eq "wrong=refused|owned=True|holder=$($child.Id)|action=reinstall|left=False") "the relaunched copy adopts, owns and releases the run: $(Get-Content $adopted)"
 
-    # Auto-Install.ps1 claims a bound reprovision/reinstall/redownload before anything on this PC changes
-    # (the Remote-SSH/panel setup, the installed marker, the Companion installer and the elevation);
-    # an export or add-config is not a lifecycle run.
-    $installer = Join-Path $root 'installer'
-    New-Item -ItemType Directory (Join-Path $installer 'lib') -Force | Out-Null
-    Copy-Item (Join-Path $PSScriptRoot '../Auto-Install.ps1') $installer
-    foreach ($lib2 in 'AgentVm.FeatureSet.ps1', 'AgentVm.LifecycleRun.ps1') { Copy-Item (Join-Path $PSScriptRoot "../lib/$lib2") (Join-Path $installer 'lib') }
-    Set-Content (Join-Path $installer 'lib/AgentVm.Common.ps1') 'Add-Content -LiteralPath $env:FAKE_LOG -Value common'
-    Set-Content (Join-Path $installer 'lib/Construct.Companion.ps1') 'Add-Content -LiteralPath $env:FAKE_LOG -Value companion'
-    $env:FAKE_LOG = Join-Path $root 'installer.log'
-    Write-Marker $holder.Id
-    foreach ($action in 'reinstall', 'redownload', 'reprovision') {
-        $output = '' | & $powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $installer 'Auto-Install.ps1') -Action $action -FromPanel 2>&1
-        Assert ("$output" -match "Another Construct run is in progress: Reprovision of 'work-vm'" -and "$output" -notmatch 'Windows Principal|Relaunching') "Auto-Install -Action $action is refused before its pre-elevation steps: $output"
-        Assert (-not (Test-Path -LiteralPath $env:FAKE_LOG)) "the refused $action changed nothing on this PC"
-        Assert ((Marker).pid -eq $holder.Id) "the refused $action leaves the other run alone"
-    }
-    foreach ($action in 'export', 'add-config') {
-        $output = '' | & $powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $installer 'Auto-Install.ps1') -Action $action -FromPanel 2>&1
-        Assert ("$output" -notmatch 'Another Construct run') "Auto-Install -Action $action is not a lifecycle run: $output"
-    }
-    Remove-Item -LiteralPath $marker -Force
-    $output = '' | & $powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $installer 'Auto-Install.ps1') -Action reinstall -FromPanel 2>&1
-    Assert (-not (Test-Path -LiteralPath $marker)) "a run that stops early (here: no Windows) releases its claim: $output"
-
-    # Update-T3Code.ps1 holds the run for its provisioner, which runs inside it; a held host refuses it
-    # before the provisioner starts.
-    $scripts = Join-Path $root 'scripts'
-    New-Item -ItemType Directory (Join-Path $scripts 'lib') -Force | Out-Null
-    Copy-Item (Join-Path $PSScriptRoot '../Update-T3Code.ps1'), (Join-Path $PSScriptRoot '../Update-Construct.ps1') $scripts
-    foreach ($lib in 'AgentVm.LifecycleRun.ps1', 'AgentVm.SettingsMigration.ps1', 'AgentVm.InstanceState.ps1') { Copy-Item (Join-Path $PSScriptRoot "../lib/$lib") (Join-Path $scripts 'lib') }
-    Set-Content (Join-Path $scripts 'Provision-AgentVM.ps1') @'
-param([string]$Action, [switch]$FromPanel, [switch]$NonInteractive, [string]$InstanceName)
-. (Join-Path $PSScriptRoot 'lib/AgentVm.LifecycleRun.ps1')
-$owned = Enter-ConstructLifecycleRun -Action 'updateT3' -Instance 'agent-vm'
-$run = Read-ConstructLifecycleRun
-Set-Content -LiteralPath $env:FAKE_LOG -Value "$Action|owned=$owned|holder=$($run.pid)|action=$($run.action)|instance=$($run.instance)"
-'@
-    $log = Join-Path $root 'provision.log'
-    $env:FAKE_LOG = $log
-    $output = & $powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $scripts 'Update-T3Code.ps1') -Mode quick 2>&1
-    $code = $LASTEXITCODE
-    $call = Get-Content -LiteralPath $log -ErrorAction SilentlyContinue
-    Assert ($code -eq 0 -and $call -match '^t3update\|owned=False\|holder=\d+\|action=updateT3\|instance=agent-vm$') "Update-T3Code holds the run its provisioner runs in: $code $call $output"
-    Assert ($call -notmatch "holder=$PID\|") 'the run belongs to the Update-T3Code process'
-    Assert (-not (Test-Path -LiteralPath $marker)) 'Update-T3Code releases the run when it ends'
-    Remove-Item $log -ErrorAction SilentlyContinue
-    Write-Marker $holder.Id
-    $output = & $powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $scripts 'Update-T3Code.ps1') -Mode quick 2>&1
-    $code = $LASTEXITCODE
-    Assert ($code -ne 0 -and -not (Test-Path -LiteralPath $log) -and "$output" -match 'Another Construct run is in progress') "a held host refuses Update-T3Code before the provisioner: $code $output"
-    Assert ((Marker).pid -eq $holder.Id) 'the refused update leaves the run alone'
-
-    # Update-Construct.ps1 refuses before downloading anything and reports the failure to its launcher.
-    $result = Join-Path $root 'update.result'
-    $env:CONSTRUCT_UPDATE_RESULT = $result
-    $output = '' | & $powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $scripts 'Update-Construct.ps1') 2>&1
-    $code = $LASTEXITCODE
-    Assert ($code -eq 1 -and (Get-Content -LiteralPath $result) -eq 'fail' -and "$output" -match 'Another Construct run is in progress') "a held host refuses the Construct update: $code $output"
-    Assert ((Marker).pid -eq $holder.Id) 'the refused Construct update leaves the run alone'
+    # Update-T3Code.ps1 and Update-Construct.ps1 hand over to the device agent now and take no run
+    # (test/agent-bootstrap.test.ps1).
     Write-Host 'lifecycle-run tests passed'
 }
 finally {

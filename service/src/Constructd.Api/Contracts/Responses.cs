@@ -1,7 +1,9 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.Json.Serialization;
 using Constructd.Core.Domain;
 using Constructd.Core.Logic;
+using Constructd.Api.Jobs;
 
 // Endpoint also exists in Microsoft.AspNetCore.Http (routing); the domain record is the one meant here.
 using DomainEndpoint = Constructd.Core.Domain.Endpoint;
@@ -32,7 +34,7 @@ public sealed record UserResponse(string Name, Role Role, int MaxVms, bool Allow
 }
 
 /// <param name="Token">The plaintext secret — returned exactly once, never stored, never logged.</param>
-public sealed record TokenIssuedResponse(string Id, string Label, string Token, DateTimeOffset Created);
+public sealed record TokenIssuedResponse(string Id, string Label, [property: Infrastructure.ConstructSecret] string Token, DateTimeOffset Created);
 
 public sealed record IdlePolicyResponse(int TimeoutMinutes, IdleAction Action, int MaxTimeoutMinutes, bool Clamped, bool ForceEnabled = false);
 
@@ -73,7 +75,9 @@ public sealed record ForwardResponse(
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)] bool Main = false,
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] bool? UpstreamTls = null,
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] string? PortUrl = null,
-    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] string? Name = null)
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] string? Name = null,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] string? Purpose = null,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] string? Source = null)
 {
     /// <summary>
     /// <paramref name="publicHost"/> is the LAN name host forwards are advertised on. A client
@@ -105,7 +109,7 @@ public sealed record ForwardResponse(
                 forward.Id, forward.VmName, forward.VmPort, forward.PublicPort,
                 forward.Target, forward.Label, forward.Created, sharedUrl ?? portUrl,
                 Https: true, Main: forward.Main, UpstreamTls: forward.UpstreamTls == true, PortUrl: sharedUrl is null ? null : portUrl,
-                Name: HttpsForwardNames.Effective(forward));
+                Name: HttpsForwardNames.Effective(forward), Purpose: forward.Purpose, Source: forward.Source);
         }
 
         // Every host in a link goes through the one rule (ForwardHost, docs/expose.md): an IPv6
@@ -118,7 +122,8 @@ public sealed record ForwardResponse(
         {
             return new(
                 forward.Id, forward.VmName, forward.VmPort, forward.PublicPort,
-                forward.Target, forward.Label, forward.Created, url, Destination: forward.Destination);
+                forward.Target, forward.Label, forward.Created, url, Destination: forward.Destination,
+                Purpose: forward.Purpose, Source: forward.Source);
         }
 
         if (ack.Status == AckStatus.Open && ack.LocalPort is int local)
@@ -137,7 +142,7 @@ public sealed record ForwardResponse(
             LocalPort: ack.LocalPort,
             HostLabel: ack.HostLabel,
             Message: ack.Message,
-            AckedAt: ack.At, Destination: forward.Destination);
+            AckedAt: ack.At, Destination: forward.Destination, Purpose: forward.Purpose, Source: forward.Source);
     }
 }
 
@@ -176,7 +181,11 @@ public sealed record VmResponse(
 /// <paramref name="SshHost"/> unless the host runs a <c>Constructd:PublicHostPattern</c>; SSH is
 /// dialled on <paramref name="SshHost"/>:<paramref name="SshPort"/> either way.
 /// </param>
-public sealed record EndpointResponse(string SshHost, int SshPort, string PublicHost)
+/// <param name="Forwarded">On <c>GET /vms/{name}/endpoint</c>: the address every client dials (the engine's relay port, or the VM's own address in direct network mode); the same as <paramref name="SshHost"/>:<paramref name="SshPort"/>.</param>
+/// <param name="Direct">On <c>GET /vms/{name}/endpoint</c>, where the driver knows it: the VM's own address and port, reachable from the engine's machine (design 7.2).</param>
+public sealed record EndpointResponse(string SshHost, int SshPort, string PublicHost,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] SshAddress? Forwarded = null,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] SshAddress? Direct = null)
 {
     /// <summary>
     /// An endpoint with no public host — a driver-reported one, or a creation result stored by a
@@ -188,22 +197,37 @@ public sealed record EndpointResponse(string SshHost, int SshPort, string Public
             string.IsNullOrWhiteSpace(endpoint.PublicHost) ? endpoint.SshHost : endpoint.PublicHost);
 }
 
+/// <summary>Where a client dials a VM's SSH.</summary>
+public sealed record SshAddress(string Host, int Port);
+
 public sealed record VmStateResponse(VmState State);
 
 /// <summary>Answer to every call that starts a job: <c>202 Accepted</c> plus the job id.</summary>
 public sealed record JobAcceptedResponse(string JobId);
 
-public sealed record JobProgressResponse(DateTimeOffset At, string Text)
+/// <param name="Overall">The whole job's percentage when this line was reported (see <see cref="JobResponse.Overall"/>).</param>
+/// <param name="Label">The sub-step the job was in, in a few words.</param>
+public sealed record JobProgressResponse(DateTimeOffset At, string Text, string? Step = null, string? State = null, int? Percent = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? Overall = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Label = null)
 {
-    public static JobProgressResponse From(JobProgressLine line) => new(line.At, line.Text);
+    public static JobProgressResponse From(JobProgressLine line) => new(line.At, line.Text, line.Step, line.State, line.Percent, line.Overall, line.Label);
 }
+
+/// <summary>
+/// One progress bar for a whole job: <paramref name="Percent"/> from 0 to 100 (100 only once the job succeeded; it never
+/// goes back) and the current sub-step in one to three words (<paramref name="Label"/>: "Downloading ISO", "Installing T3").
+/// </summary>
+public sealed record JobOverallResponse(int Percent, string Label);
 
 /// <summary>
 /// Result of a creation job as the API presents it: the durable part (<see cref="Name"/>,
 /// <see cref="Endpoint"/>) plus <see cref="VmToken"/>, which is filled in on the retrieval that
 /// consumes the job's one-time secret and is <c>null</c> on every later one.
 /// </summary>
-public sealed record VmCreateResultResponse(string Name, EndpointResponse Endpoint, string? VmToken);
+/// <param name="Provision">The first provision, when the create request carried settings; left out otherwise.</param>
+public sealed record VmCreateResultResponse(string Name, EndpointResponse Endpoint, string? VmToken,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] ProvisionJobResult? Provision = null);
 
 public sealed record JobResponse(
     string Id,
@@ -214,7 +238,8 @@ public sealed record JobResponse(
     DateTimeOffset? Finished,
     IReadOnlyList<JobProgressResponse> Progress,
     object? Result,
-    string? Error, string? Initiator = null, string? OperationKey = null, string? Phase = null)
+    string? Error, string? Initiator = null, string? OperationKey = null, string? Phase = null,
+    JobOverallResponse? Overall = null, IReadOnlyList<string>? Warnings = null)
 {
     /// <param name="vmToken">
     /// The consumed one-time secret, if this projection is the one that got it. It is merged into the
@@ -230,7 +255,22 @@ public sealed record JobResponse(
             job.Finished,
             [.. job.Progress.Select(JobProgressResponse.From)],
             ProjectResult(job, vmToken),
-            job.Error, job.Initiator, job.OperationKey, job.Phase);
+            job.Error, job.Initiator, job.OperationKey, job.Phase, OverallOf(job), JobWarnings.Of(job));
+
+    /// <summary>
+    /// The job's bar: the overall percentage and label of its latest line that has one, 100 once it succeeded; null for a
+    /// job that names no sub-steps.
+    /// </summary>
+    private static JobOverallResponse? OverallOf(Job job)
+    {
+        for (var i = job.Progress.Count - 1; i >= 0; i--)
+        {
+            if (job.Progress[i] is { Overall: { } percent, Label: { } label })
+                return new(job.State == JobState.Succeeded ? 100 : percent, label);
+        }
+
+        return null;
+    }
 
     /// <summary>
     /// Projects the stored (secret-free) result for the wire. For a creation job the VM token is
@@ -246,7 +286,7 @@ public sealed record JobResponse(
 
         if (job.Result is VmCreateResult create)
         {
-            return new VmCreateResultResponse(create.Name, EndpointResponse.From(create.Endpoint), vmToken);
+            return new VmCreateResultResponse(create.Name, EndpointResponse.From(create.Endpoint), vmToken, create.Provision);
         }
 
         // Read back from a store: a JSON object without the token.

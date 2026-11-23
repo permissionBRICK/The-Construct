@@ -5,8 +5,13 @@ namespace Constructd.Core.Abstractions;
 public sealed record ReleaseAsset(string Name, Uri Url, long SizeBytes);
 public sealed record ReleaseDescriptor(string Tag, string Commit, DateTimeOffset PublishedAt, IReadOnlyList<ReleaseAsset> Assets);
 public sealed record SourceAssetDescriptor(string Commit, string Tag, Uri Url, long SizeBytes, string Sha256);
+/// <summary>A channel's current release: the channel fields of its manifest and the release the host stager installs.</summary>
+public sealed record ChannelRelease(Constructd.Core.Logic.ChannelManifest Channel, ReleaseDescriptor Release);
 public interface IReleaseSource
 {
+    /// <summary>Reads the channel manifest at <paramref name="manifestUrl"/> (12A.2) and allows its packages for download.</summary>
+    Task<ChannelRelease> GetChannelReleaseAsync(Uri manifestUrl, string repository, bool github, CancellationToken ct) =>
+        throw new Constructd.Core.Logic.UpdateException("release-source-unreachable");
     Task<IReadOnlyList<ReleaseDescriptor>> ListHostReleasesAsync(string repository, CancellationToken ct, string? releaseTag = null);
     Task<SourceAssetDescriptor> GetSourceAssetAsync(string repository, string commit, CancellationToken ct);
     Task DownloadAsync(ReleaseAsset asset, string destinationPath, IProgress<string>? progress, CancellationToken ct);
@@ -56,8 +61,9 @@ public interface IUpdateStager
     Task RemoveStagedAsync(string updateId, CancellationToken ct);
 }
 
+/// <param name="RestoreDatabase">False for the one-action update (12.1): a failed update puts the files back and keeps the database copy for a manual restore.</param>
 /// <param name="HealthToken">Random secret written only into the SYSTEM-only handoff file; the new binary accepts it on loopback /health for the full body.</param>
-public sealed record UpdateHandoff(string UpdateId, string Commit, string StagedPath, string PublishDir, string ScriptsDir, string DataDir, string ServiceName, string PreviousCommit, string HealthUrl, string CertificateThumbprint, string AdminCliPath, string HealthToken, DateTimeOffset WrittenAt, int PreviousSchemaVersion = 0, int HealthTimeoutSeconds = 120);
+public sealed record UpdateHandoff(string UpdateId, string Commit, string StagedPath, string PublishDir, string ScriptsDir, string DataDir, string ServiceName, string PreviousCommit, string HealthUrl, string CertificateThumbprint, string AdminCliPath, string HealthToken, DateTimeOffset WrittenAt, int PreviousSchemaVersion = 0, int HealthTimeoutSeconds = 120, bool RestoreDatabase = true);
 /// <summary>What the fence permits, scoped to ONE update id (§11.7). Checked by the updater under updater.lock before stop, replace and rollback.</summary>
 public enum FenceDisposition
 {

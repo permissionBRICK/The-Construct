@@ -1,0 +1,30 @@
+{
+  "name": "construct-ui",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 0.0.0.0",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview --host 0.0.0.0",
+    "test": "vitest run",
+    "test:screens": "playwright test",
+    "test:screens:update": "playwright test --update-snapshots=all",
+    "typecheck": "tsc --noEmit",
+    "gen:api": "openapi-typescript ../agent/openapi/agent.v1.json -o src/backend/generated/agent.ts && openapi-typescript ../service/openapi/constructd.v1.json -o src/backend/generated/engine.ts",
+    "test:e2e": "dotnet build tests/e2e/engine-host -c Release -v q -nologo && dotnet build ../agent/src/construct-agent -c Release -v q -nologo && playwright test -c playwright.e2e.config.ts"
+  },
+  "dependencies": {
+    "openapi-fetch": "^0.14.1",
+    "preact": "^10.29.8"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.64.1",
+    "@preact/preset-vite": "^2.10.6",
+    "@types/node": "^22.20.5",
+    "openapi-typescript": "^7.13.0",
+    "typescript": "^5.9.3",
+    "vite": "^6.4.6",
+    "vitest": "^3.2.7"
+  }
+}
