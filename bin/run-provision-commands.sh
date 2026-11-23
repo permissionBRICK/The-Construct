@@ -19,6 +19,10 @@
 # (provision.sh) can warn without failing the whole provision -- matching how
 # checkout-projects.sh / configure-mcp.sh behave.
 #
+# python3 is the distro's for every shell. A profile that requests a Python version
+# (`sdks.python`) gets the newest one it requested as `python3` and `python` in its
+# own commands: a directory of wrappers for /usr/bin/python3.X goes first on PATH.
+#
 # Idempotency is the project's responsibility. Run as root.
 #
 set -euo pipefail
@@ -121,6 +125,7 @@ jq '
   | sort_by(.[0].index)
   | map({name: (.[0].profile // "legacy commands"),
          dir: (if .[0].profile then (.[0].dir // "") else "" end),
+         python: (if .[0].profile then (.[0].python // []) else [] end),
          commands: .})
 ' "${GENERATED_JSON}" >"${commands_tmp}/groups.json"
 group_count="$(jq 'length' "${commands_tmp}/groups.json")"
@@ -163,6 +168,39 @@ run_project_group() {
 }
 export -f run_project_group note ok warn err
 export WORKSPACE_ROOT count _C_DIM _C_OK _C_WARN _C_ERR _C_RESET
+
+SYSTEM_PYTHON="${SYSTEM_PYTHON:-/usr/bin/python3}"
+# Where the Debian packages (Ubuntu's and deadsnakes') put their python3.X.
+PYTHON_BIN_DIR="${PYTHON_BIN_DIR:-/usr/bin}"
+distro_python="$("${SYSTEM_PYTHON}" -c 'import sys; print("%d.%d" % sys.version_info[:2])' 2>/dev/null || true)"
+# The newest Python minor version among a profile's requests, read like install-sdks.sh
+# does ("3" is the distro's); empty when that is the distro's own python3.
+profile_python() {
+  local v minor newest=""
+  for v in "$@"; do
+    [[ "${v}" =~ ^3(\.([0-9]+))?(\.[0-9]+)?$ ]] || continue
+    minor="${BASH_REMATCH[2]:+3.${BASH_REMATCH[2]}}"
+    minor="${minor:-${distro_python}}"
+    [[ -n "${minor}" ]] || continue
+    if [[ -z "${newest}" || "$(printf '%s\n%s\n' "${newest}" "${minor}" | sort -V | tail -1)" == "${minor}" ]]; then
+      newest="${minor}"
+    fi
+  done
+  if [[ "${newest}" != "${distro_python}" ]]; then printf '%s' "${newest}"; fi
+}
+# A directory whose python3 and python run <interpreter>. Wrappers rather than links: a
+# venv made through a link would point at this temporary directory.
+python_shim_dir() {
+  local dir="${commands_tmp}/python-${1##*/}" name
+  if [[ ! -d "${dir}" ]]; then
+    mkdir -p "${dir}"
+    for name in python3 python; do
+      printf '#!/bin/sh\nexec %q "$@"\n' "$1" >"${dir}/${name}"
+      chmod 0755 "${dir}/${name}"
+    done
+  fi
+  printf '%s' "${dir}"
+}
 
 # Serialize groups which would write into shared/nested working directories or
 # linked worktrees. Missing/no-repo profiles use the workspace root and therefore
@@ -259,9 +297,20 @@ for (( group=0; group<group_count; group++ )); do
     wait_for_one
   done
   note "[$((group + 1))/${group_count} started] ${name} (${target})"
+  group_path="${PATH}"
+  mapfile -t python_requested < <(jq -r '.python[]' "${group_file}")
+  python_minor="$(profile_python ${python_requested[@]+"${python_requested[@]}"})"
+  if [[ -n "${python_minor}" ]]; then
+    if [[ -x "${PYTHON_BIN_DIR}/python${python_minor}" ]]; then
+      group_path="$(python_shim_dir "${PYTHON_BIN_DIR}/python${python_minor}"):${PATH}"
+      note "  python3 is Python ${python_minor} in the commands of ${name}"
+    else
+      warn "Profile ${name} requests Python ${python_minor}, but ${PYTHON_BIN_DIR}/python${python_minor} is missing; its commands run with the distro's python3"
+    fi
+  fi
   # $1 is the worker shell's positional argument.
   # shellcheck disable=SC2016
-  setsid bash -c 'set -euo pipefail; run_project_group "$1"' -- "${group_file}" \
+  PATH="${group_path}" setsid bash -c 'set -euo pipefail; run_project_group "$1"' -- "${group_file}" \
     < /dev/null >"${commands_tmp}/${group}.log" 2>&1 &
   pid=$!
   active[${pid}]="${group}"

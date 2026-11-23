@@ -450,10 +450,12 @@ Selecting a profile pulls in its declared repos and `sdks`. When `INSTALL_SDKS=t
 `bin/install-sdks.sh` installs the merged runtimes on the VM host: `node` (via NodeSource),
 `python`, and `dotnet` (via Microsoft's `dotnet-install.sh`). Every requested Python minor
 version is installed side by side: the distro's own `python3` (with venv and pip) from Ubuntu,
-any other version (`python3.X` with `python3.X-venv`) from the deadsnakes PPA. The newest
-requested version becomes `python3` for every shell through a `/usr/local/bin/python3` link;
-the distro's own tools call `/usr/bin/python3` and keep its version. A request names a minor
-version (`"3.14"`); patch versions are not pinned.
+any other version (`python3.X` with `python3.X-venv`) from the deadsnakes PPA. `python3` stays
+the distro's `/usr/bin/python3` for every shell; a requested version is `python3.X` there. Only
+the requesting profile's `provisionCommands` get the newest version that profile requested as
+`python3` and `python`. A request names a minor version (`"3.14"`, `"3"` is the distro's); patch
+versions are not pinned. The `/usr/local/bin/python3` link earlier versions made is removed on
+the next provision.
 
 ## AI tool setup (`bin/ui-setup.sh`)
 

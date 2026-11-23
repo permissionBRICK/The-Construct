@@ -12,10 +12,12 @@
 #                profiles disagree on the major).
 #   - python  -> EVERY requested minor version side by side, like .NET: the distro's own
 #                python3 (+ venv, pip) from Ubuntu, any other minor version from the
-#                deadsnakes PPA (python3.X + python3.X-venv). The newest requested version
-#                becomes `python3` for every shell through /usr/local/bin/python3, which PATH
-#                puts ahead of /usr/bin; the distro's own tools call /usr/bin/python3 and keep
-#                theirs. A request names a minor version ("3.14"); "3" is the distro's.
+#                deadsnakes PPA (python3.X + python3.X-venv). `python3` stays the distro's
+#                /usr/bin/python3 for every shell; a requested version is `python3.X`. Only
+#                the requesting profile's provisionCommands get it as `python3`
+#                (run-provision-commands.sh). A request names a minor version ("3.14"); "3"
+#                is the distro's. The python3 link earlier versions made at
+#                /usr/local/bin/python3 is removed.
 #   - dotnet  -> .NET SDKs via Microsoft's dotnet-install.sh, EVERY requested
 #                channel/version: SDKs are side-by-side by design in one install dir,
 #                and `dotnet` picks per project (global.json, else latest). A project
@@ -109,6 +111,7 @@ install_node() {
 SYSTEM_PYTHON="${SYSTEM_PYTHON:-/usr/bin/python3}"
 # Where the Debian packages (Ubuntu's and deadsnakes') put their python3.X.
 PYTHON_BIN_DIR="${PYTHON_BIN_DIR:-/usr/bin}"
+# Earlier versions pointed python3 at the newest requested version for every shell here.
 PYTHON_DEFAULT_LINK="${PYTHON_DEFAULT_LINK:-/usr/local/bin/python3}"
 PYTHON_PPA="${PYTHON_PPA:-ppa:deadsnakes/ppa}"
 APT_SOURCES_DIR="${APT_SOURCES_DIR:-/etc/apt/sources.list.d}"
@@ -117,7 +120,7 @@ deb_installed() { [[ "$(dpkg-query -W -f='${Status}' "$1" 2>/dev/null)" == "inst
 # Whether the configured repositories (a mirror included) offer a package.
 apt_offers() { local c; c="$(LC_ALL=C apt-cache policy "$1" 2>/dev/null | sed -n 's/^ *Candidate: *//p' | head -1)"; [[ -n "${c}" && "${c}" != "(none)" ]]; }
 # A link at PYTHON_DEFAULT_LINK to a packaged interpreter (PYTHON_BIN_DIR/python3.X) is
-# Construct's to change; anything else there was put by someone else and stays.
+# Construct's; anything else there was put by someone else and stays.
 python_link_ours() {
   local target
   [[ -L "${PYTHON_DEFAULT_LINK}" ]] || return 1
@@ -125,8 +128,18 @@ python_link_ours() {
   [[ "${target%/*}" == "${PYTHON_BIN_DIR}" && "${target##*/}" =~ ^python3\.[0-9]+$ ]]
 }
 
+# python3 is the distro's for every shell: remove the link earlier versions made.
+remove_old_python_link() {
+  if python_link_ours; then
+    rm -f "${PYTHON_DEFAULT_LINK}"
+    ok "Removed Construct's old link ${PYTHON_DEFAULT_LINK}; python3 is the distro's again"
+  elif [[ -e "${PYTHON_DEFAULT_LINK}" || -L "${PYTHON_DEFAULT_LINK}" ]]; then
+    warn "${PYTHON_DEFAULT_LINK} was not made by Construct; leaving it, so python3 in shells is not the distro's"
+  fi
+}
+
 install_python() {
-  local requested=("$@") distro v p minor newest="" seen=" " missing=() extra=() updated=false need_ppa=false target
+  local requested=("$@") distro v p minor seen=" " others="" missing=() extra=() updated=false need_ppa=false
   [[ ${#requested[@]} -gt 0 ]] || requested=(3)
   step "Installing Python (requested: ${requested[*]})"
   for p in python3 python3-venv python3-pip; do deb_installed "${p}" || missing+=("${p}"); done
@@ -144,11 +157,9 @@ install_python() {
     minor="${BASH_REMATCH[2]:+3.${BASH_REMATCH[2]}}"
     minor="${minor:-${distro}}"
     [[ -z "${BASH_REMATCH[3]}" ]] || warn "Python ${v}: patch versions are not pinned; the newest ${minor}.x is installed"
-    if [[ -z "${newest}" || "$(printf '%s\n%s\n' "${newest}" "${minor}" | sort -V | tail -1)" == "${minor}" ]]; then
-      newest="${minor}"
-    fi
     [[ "${seen}" != *" ${minor} "* ]] || continue
     seen+="${minor} "
+    [[ "${minor}" == "${distro}" ]] || others+=" python${minor}"
     # The distro's own version is the python3 packages above. Any other one needs both its
     # interpreter and its venv package (without it, `python3 -m venv` cannot set up pip).
     local before=${#extra[@]}
@@ -171,22 +182,7 @@ install_python() {
     fi
     apt_get install -y "${extra[@]}"
   fi
-  [[ -n "${newest}" ]] || return 0
-  if [[ "${newest}" == "${distro}" ]]; then
-    if python_link_ours; then rm -f "${PYTHON_DEFAULT_LINK}"; fi
-    ok "python3 is the distro's Python ${distro}"
-    return 0
-  fi
-  # The packaged interpreter, not whatever python3.X comes first on PATH (a user's shim).
-  target="${PYTHON_BIN_DIR}/python${newest}"
-  [[ -x "${target}" ]] || { err "${target} is missing after its install"; return 1; }
-  if [[ -e "${PYTHON_DEFAULT_LINK}" || -L "${PYTHON_DEFAULT_LINK}" ]] && ! python_link_ours; then
-    warn "${PYTHON_DEFAULT_LINK} was not made by Construct; leaving it, so python3 is not switched to ${newest}"
-    return 0
-  fi
-  mkdir -p "$(dirname "${PYTHON_DEFAULT_LINK}")"
-  ln -sfn "${target}" "${PYTHON_DEFAULT_LINK}"
-  ok "python3 is Python ${newest} (${PYTHON_DEFAULT_LINK} -> ${target})"
+  ok "python3 is the distro's Python ${distro}${others:+; also installed:${others}}"
 }
 
 install_dotnet() {
@@ -251,10 +247,12 @@ if want node; then
 fi
 if want python; then
   installed_any=true
-  # Side by side as well: every requested version, the newest one as `python3`.
+  # Side by side as well: every requested version; python3 stays the distro's.
   mapfile -t python_requested < <(all_vers python)
   run_runtime "Python runtime installation" install_python ${python_requested[@]+"${python_requested[@]}"}
 fi
+# Also when no profile asks for Python any more.
+run_runtime "Removing the old python3 link" remove_old_python_link
 if want dotnet; then
   installed_any=true
   # Side-by-side: every requested SDK, so a project whose global.json pins an older
