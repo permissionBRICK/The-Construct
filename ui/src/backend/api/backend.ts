@@ -1955,16 +1955,27 @@ export class ApiBackend implements Backend {
   }
 
   setRepairAuto(hostId: string, on: boolean) {
-    const h = this.s.hosts.find(x => x.id === hostId);
-    if (h?.repairAuto === undefined) return;
-    // A section is replaced whole: the other switch goes along as it is.
-    this.hostAct(hostId, c => ok(c.PUT('/api/v1/host/config', { body: { repair: { auto: on, chat: h.repairChat ?? false } } as never })), on ? 'The repair agent starts by itself' : 'The repair agent starts when asked');
+    const repair = this.repairSwitch(hostId, { auto: on });
+    if (!repair) return;
+    this.hostAct(hostId, c => ok(c.PUT('/api/v1/host/config', { body: { repair } as never })), on ? 'The repair agent starts by itself' : 'The repair agent starts when asked');
   }
 
   setRepairChat(hostId: string, on: boolean) {
-    const h = this.s.hosts.find(x => x.id === hostId);
-    if (h?.repairAuto === undefined) return;
-    this.hostAct(hostId, c => ok(c.PUT('/api/v1/host/config', { body: { repair: { auto: h.repairAuto, chat: on } } as never })), on ? 'The repair runs in Construct\'s chat' : 'The repair runs in T3 Code');
+    const repair = this.repairSwitch(hostId, { chat: on });
+    if (!repair) return;
+    this.hostAct(hostId, c => ok(c.PUT('/api/v1/host/config', { body: { repair } as never })), on ? 'The repair runs in Construct\'s chat' : 'The repair runs in T3 Code');
+  }
+
+  /** The repair section with one switch changed. A section is replaced whole, so the switch shows its new position at
+      once: a second switch flipped before the host is read again must not send the first one's old position. */
+  private repairSwitch(hostId: string, change: { auto?: boolean; chat?: boolean }): { auto: boolean; chat: boolean } | null {
+    const a = this.slices.get(hostId)?.admin;
+    if (a?.repairAuto === undefined) return null;
+    const repair = { auto: change.auto ?? a.repairAuto, chat: change.chat ?? a.repairChat ?? false };
+    a.repairAuto = repair.auto;
+    a.repairChat = repair.chat;
+    this.compose();
+    return repair;
   }
 
   setLanAccess(hostId: string, on: boolean) {
