@@ -18,10 +18,11 @@ namespace Constructd.Tests.Provisioning;
 /// <c>construct backup</c> against the real backup routes: the whole reinstall, its failures before and
 /// after the delete and their retries, the job key's reach, the host key, and Appendix C.1's engine kill.
 /// </summary>
-public sealed class ReinstallJobTests : IAsyncDisposable
+public sealed class ReinstallJobTests : IAsyncLifetime
 {
     private readonly string _root = Path.Combine(Path.GetTempPath(), "construct-reinstall-" + Guid.NewGuid().ToString("n"));
-    private readonly (string PrivatePem, string PublicPem, string Fingerprint) _pc = BackupJobKey.Create();
+    // The PC's key, one for the whole class: an RSA-3072 key takes most of a second to make, and the tests only read it.
+    private static readonly (string PrivatePem, string PublicPem, string Fingerprint) Pc = BackupJobKey.Create();
     private readonly List<ProvisionHarness> _hosts = [];
     private string? _token;
 
@@ -46,7 +47,7 @@ public sealed class ReinstallJobTests : IAsyncDisposable
         if (createVm)
         {
             guest.Adopt();
-            guest.Recipients[_pc.Fingerprint] = (_pc.PublicPem, "PC");
+            guest.Recipients[Pc.Fingerprint] = (Pc.PublicPem, "PC");
         }
 
         return h;
@@ -99,7 +100,7 @@ public sealed class ReinstallJobTests : IAsyncDisposable
         (await h.App.Service<IBackupStore>().ListAsync("alice", ProvisionHarness.Vm, default)).Where(b => b.IsComplete).ToList();
 
     private string JobRecipient(FakeBackupGuest guest, string backupId) =>
-        guest.Made[backupId].Recipients.Single(r => r.Key != _pc.Fingerprint).Key;
+        guest.Made[backupId].Recipients.Single(r => r.Key != Pc.Fingerprint).Key;
 
     [Fact]
     public async Task A_reinstall_backs_up_deletes_creates_provisions_restores_and_leaves_no_job_key()
@@ -122,7 +123,7 @@ public sealed class ReinstallJobTests : IAsyncDisposable
 
         // Made for the user's key and the job's; verified before the delete, restored after the create.
         var jobKey = JobRecipient(guest, id);
-        Assert.Contains(_pc.Fingerprint, guest.Made[id].Recipients.Keys);
+        Assert.Contains(Pc.Fingerprint, guest.Made[id].Recipients.Keys);
         Assert.Equal([id], guest.Verified);
         Assert.Equal([id], guest.Restored);
         var calls = h.App.Driver.Calls.ToList();
@@ -135,7 +136,7 @@ public sealed class ReinstallJobTests : IAsyncDisposable
         Assert.True(restoreAt < commands.FindIndex(c => c.Contains("PROVISION_PHASE", StringComparison.Ordinal)));
 
         // The user's key came back with the backup; the job's is gone again.
-        Assert.Equal([_pc.Fingerprint], guest.Recipients.Keys);
+        Assert.Equal([Pc.Fingerprint], guest.Recipients.Keys);
         Assert.DoesNotContain(jobKey, guest.Recipients.Keys);
 
         // The host kept it as the protected pre-reinstall backup, readable with the user's key.
@@ -143,7 +144,7 @@ public sealed class ReinstallJobTests : IAsyncDisposable
         Assert.Equal(BackupTriggers.PreReinstall, backup.Trigger);
         Assert.False(backup.IsSlot);
         Assert.True(backup.IsPinned(h.App.Clock.UtcNow));
-        Assert.Equal(guest.Made[id].Key, BackupJobKey.Unwrap(backup.KeysJson, id, _pc.PrivatePem));
+        Assert.Equal(guest.Made[id].Key, BackupJobKey.Unwrap(backup.KeysJson, id, Pc.PrivatePem));
 
         // A new VM token for the new VM, staged on stdin; the old host key of the address is gone, others stay.
         Assert.Contains(guest.Calls, c => c.StandardInput?.Contains(ProvisionScript.VmTokenVariable + "=", StringComparison.Ordinal) == true);
@@ -272,7 +273,7 @@ public sealed class ReinstallJobTests : IAsyncDisposable
         Assert.False(result.VmDeleted);
         Assert.DoesNotContain(h.App.Driver.Calls, c => c.StartsWith("remove:", StringComparison.Ordinal));
         Assert.Equal(VmState.Running, h.App.Driver.StateOf(ProvisionHarness.Vm));
-        Assert.Equal([_pc.Fingerprint], guest.Recipients.Keys);
+        Assert.Equal([Pc.Fingerprint], guest.Recipients.Keys);
         // The backup it made stays on the host.
         Assert.Equal(result.BackupId, Assert.Single(await BackupsAsync(h)).Id);
 
@@ -280,7 +281,7 @@ public sealed class ReinstallJobTests : IAsyncDisposable
         guest.VerifyExit = 0;
         var again = await ReinstallAsync(h, "reinstall-2");
         Assert.True(again.State == JobState.Succeeded, again.Error);
-        Assert.Equal([_pc.Fingerprint], guest.Recipients.Keys);
+        Assert.Equal([Pc.Fingerprint], guest.Recipients.Keys);
     }
 
     [Fact]
@@ -301,7 +302,7 @@ public sealed class ReinstallJobTests : IAsyncDisposable
         Assert.Empty(guest.Made);
         Assert.DoesNotContain(h.App.Driver.Calls, c => c.StartsWith("remove:", StringComparison.Ordinal));
         Assert.Equal(VmState.Running, h.App.Driver.StateOf(ProvisionHarness.Vm));
-        Assert.Equal([_pc.Fingerprint], guest.Recipients.Keys);
+        Assert.Equal([Pc.Fingerprint], guest.Recipients.Keys);
 
         // With media the reinstall builds it first and creates the VM from what it built, once.
         iso.Failure = null;
@@ -321,7 +322,7 @@ public sealed class ReinstallJobTests : IAsyncDisposable
         var job = await ReinstallAsync(h, "reinstall-1");
         Assert.Equal("backup-failed", Result<ReinstallJobResult>(job).Code);
         Assert.DoesNotContain(h.App.Driver.Calls, c => c.StartsWith("remove:", StringComparison.Ordinal));
-        Assert.Equal([_pc.Fingerprint], guest.Recipients.Keys);
+        Assert.Equal([Pc.Fingerprint], guest.Recipients.Keys);
     }
 
     [Fact]
@@ -378,7 +379,7 @@ public sealed class ReinstallJobTests : IAsyncDisposable
         Assert.Equal(failed.BackupId, Assert.Single(guest.Made.Keys));
         Assert.Equal(failed.BackupId, Assert.Single(await BackupsAsync(h)).Id);
         Assert.Equal([failed.BackupId!], guest.Restored);
-        Assert.Equal([_pc.Fingerprint], guest.Recipients.Keys);
+        Assert.Equal([Pc.Fingerprint], guest.Recipients.Keys);
         Assert.Equal(1, guest.Commands.Count(c => c.Contains(" create --trigger", StringComparison.Ordinal)));
     }
 
@@ -748,7 +749,9 @@ public sealed class ReinstallJobTests : IAsyncDisposable
         }
     }
 
-    public async ValueTask DisposeAsync()
+    public Task InitializeAsync() => Task.CompletedTask;
+
+    public async Task DisposeAsync()
     {
         foreach (var h in _hosts)
         {

@@ -5,7 +5,7 @@ using Construct.Agent.Update;
 namespace Construct.Agent.Tests;
 
 /// <summary>"Update everything" asks only engines the user administers to update and each engine only for the user's own VMs.</summary>
-public sealed class UpdateEverythingTests : IAsyncDisposable
+public sealed class UpdateEverythingTests : IAsyncLifetime
 {
     private readonly string _directory = Path.Combine(Path.GetTempPath(), "agent-test-everything-" + Guid.NewGuid().ToString("n"));
     private FakeDevice? _device;
@@ -303,7 +303,9 @@ public sealed class UpdateEverythingTests : IAsyncDisposable
         Assert.Equal(3, health);
     }
 
-    public async ValueTask DisposeAsync()
+    public Task InitializeAsync() => Task.CompletedTask;
+
+    public async Task DisposeAsync()
     {
         if (_device is not null) await _device.DisposeAsync();
         try { Directory.Delete(_directory, true); }

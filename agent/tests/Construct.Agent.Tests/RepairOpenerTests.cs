@@ -9,7 +9,7 @@ namespace Construct.Agent.Tests;
 /// A repair that started on this PC opens T3 Desktop on its thread by itself (design 11.5): the agent follows the
 /// engines' repair events, reads each session it has not decided yet and opens the desktop app once, never the browser.
 /// </summary>
-public sealed class RepairOpenerTests : IAsyncDisposable
+public sealed class RepairOpenerTests : IAsyncLifetime
 {
     private const string After = "?after=9223372036854775807";
 
@@ -258,7 +258,9 @@ public sealed class RepairOpenerTests : IAsyncDisposable
         Assert.Single(Opened);
     }
 
-    public async ValueTask DisposeAsync()
+    public Task InitializeAsync() => Task.CompletedTask;
+
+    public async Task DisposeAsync()
     {
         await _opener.DisposeAsync();
         await _device.DisposeAsync();

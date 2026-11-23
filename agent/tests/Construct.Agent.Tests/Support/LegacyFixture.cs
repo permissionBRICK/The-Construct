@@ -234,10 +234,21 @@ public sealed class LegacyFixture : IDisposable
         Write(Path.Combine("The-Construct-Vault", "vault.dat"), Convert.ToBase64String(Protection.Protect(Encoding.UTF8.GetBytes(document.ToJsonString()))));
     }
 
+    /// <summary>
+    /// One RSA-3072 key for every fixture of the run: making one takes most of a second, and no test needs two old
+    /// installs with different keys.
+    /// </summary>
+    private static readonly Lazy<string> SharedBackupKey = new(() =>
+    {
+        using var rsa = RSA.Create(3072);
+        return rsa.ToXmlString(true);
+    });
+
     /// <summary>backup\pc-key.dpapi: the protected XML of an RSA-3072 key, as lib/AgentVm.Backup.ps1 writes it; its fingerprint.</summary>
     public string BackupKey()
     {
-        using var rsa = RSA.Create(3072);
+        using var rsa = RSA.Create();
+        rsa.FromXmlString(SharedBackupKey.Value);
         var path = Path.Combine(Root, "backup", "pc-key.dpapi");
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         File.WriteAllBytes(path, Protection.Protect(Encoding.UTF8.GetBytes(rsa.ToXmlString(true))));

@@ -8,7 +8,7 @@ using Construct.Agent.Update;
 namespace Construct.Agent.Tests;
 
 /// <summary>The agent updating itself against a fake channel: hash check, switch, self-test at start and the way back.</summary>
-public sealed class SelfUpdateTests : IAsyncDisposable
+public sealed class SelfUpdateTests : IAsyncLifetime
 {
     private const string Old = "1.0.0+1111111111111111111111111111111111111111";
     private const string New = "1.1.0+2222222222222222222222222222222222222222";
@@ -224,7 +224,9 @@ public sealed class SelfUpdateTests : IAsyncDisposable
         return stream.ToArray();
     }
 
-    public async ValueTask DisposeAsync()
+    public Task InitializeAsync() => Task.CompletedTask;
+
+    public async Task DisposeAsync()
     {
         if (_device is not null) await _device.DisposeAsync();
         try { Directory.Delete(_directory, true); }

@@ -149,6 +149,11 @@ public sealed class TestApp(
             ["Constructd:PublicHost"] = "buildbox.test",
             // Per instance: the HTTPS certificate lives in files, and tests must not see each other's.
             ["Constructd:Https:CertificateDirectory"] = Path.Combine(Path.GetTempPath(), "constructd-test-https-" + Guid.NewGuid().ToString("n")),
+            // Per instance too, although nothing is stored in it in memory mode: the engine keeps the SSH keys of the VMs
+            // it adopted, its source cache and its backups next to the database. Left at the default (a relative name on
+            // Linux) every engine of the run would share the test's working directory, and two adoptions of a VM of the
+            // same name would race on one key file.
+            ["Constructd:DatabasePath"] = Path.Combine(Path.GetTempPath(), "constructd-test-" + Guid.NewGuid().ToString("n"), "constructd.db"),
             ["Constructd:MaxForwardsPerVm"] = "3",
             ["Constructd:VmReachableTimeoutMinutes"] = "1",
             ["Constructd:SshForwardPorts:Start"] = "2201",

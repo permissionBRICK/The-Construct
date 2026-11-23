@@ -33,6 +33,11 @@
     <Using Include="Xunit" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- Shared by the .NET test projects: the per-run temporary directory and the disposal check. -->
+    <Compile Include="../../../test/dotnet/*.cs" LinkBase="Shared" />
+  </ItemGroup>
+
   <ItemGroup><None Update="Foundation/PreFeatureSchema.sql" CopyToOutputDirectory="PreserveNewest" /></ItemGroup>
   <ItemGroup><None Update="Windows/synthetic-windows.iso.gz.b64" CopyToOutputDirectory="PreserveNewest" /></ItemGroup>
   <ItemGroup><None Update="Api/host-wire-shape.txt" CopyToOutputDirectory="PreserveNewest" /></ItemGroup>

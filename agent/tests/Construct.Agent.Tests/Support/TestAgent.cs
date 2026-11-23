@@ -13,14 +13,17 @@ namespace Construct.Agent.Tests.Support;
 /// </summary>
 public sealed class TestAgent : IAsyncDisposable
 {
-    private TestAgent(AgentHost host, string directory)
+    private TestAgent(AgentHost host, string directory, FakePlatform platform)
     {
         Host = host;
+        _platform = platform;
         Directory = directory;
         var endpoint = EndpointFile.Read(host.Options.EndpointPath)!;
         Api = new HttpClient { BaseAddress = new Uri(endpoint.BaseUrl + "/") };
         Api.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", endpoint.Token);
     }
+
+    private readonly FakePlatform _platform;
 
     public AgentHost Host { get; }
 
@@ -34,9 +37,10 @@ public sealed class TestAgent : IAsyncDisposable
         Upgrade.IUpgradePlatform? upgrade = null, string? gitSearchPath = null, Action<DeviceAgent>? configure = null, TimeProvider? time = null)
     {
         directory ??= Path.Combine(Path.GetTempPath(), "agent-test-" + Guid.NewGuid().ToString("n"));
+        var platform = new FakePlatform();
         var options = new AgentOptions
         {
-            DataDirectory = directory, UiDirectory = ui, Protection = "file", LocalEnginePort = localEnginePort, Platform = new FakePlatform(),
+            DataDirectory = directory, UiDirectory = ui, Protection = "file", LocalEnginePort = localEnginePort, Platform = platform,
             WindowsSignIn = windowsSignIn, Upgrade = upgrade, Time = time ?? TimeProvider.System,
             // No test reaches the machine's own git (and its credentials): an empty directory unless a fake is given.
             GitSearchPath = gitSearchPath ?? Path.Combine(directory, "no-git"),
@@ -45,7 +49,7 @@ public sealed class TestAgent : IAsyncDisposable
         configure?.Invoke(agent);
         var host = AgentHost.Create(options, agent, device);
         await host.StartAsync();
-        return new TestAgent(host, directory);
+        return new TestAgent(host, directory, platform);
     }
 
     public async Task<JsonNode> PostAsync(string path, object? body, HttpStatusCode expected = HttpStatusCode.OK)
@@ -95,6 +99,7 @@ public sealed class TestAgent : IAsyncDisposable
     {
         Api.Dispose();
         await Host.DisposeAsync();
+        _platform.Dispose();
         return await StartAsync(directory: Directory, upgrade: upgrade);
     }
 
@@ -102,6 +107,7 @@ public sealed class TestAgent : IAsyncDisposable
     {
         Api.Dispose();
         await Host.DisposeAsync();
+        _platform.Dispose();
         try { System.IO.Directory.Delete(Directory, true); }
         catch (IOException) { }
     }
