@@ -67,6 +67,7 @@ public sealed class UpgradeService
         _setup = setup;
         Bridge = new BridgeFile(Path.Combine(options.DataDirectory, "bridge.json"));
         ReopenStaleConversion();
+        ReopenOldStoreHost();
         // The first-device setup of an upgrade takes the old vault key as K (8.2, 13.1).
         agent.SetupVaultKey = SetupVaultKey;
     }
@@ -131,11 +132,26 @@ public sealed class UpgradeService
             Bridge.Update(b => b with { Stage = "converting" });
     }
 
+    /// <summary>
+    /// The first step before this one finished with the store on a shared host it noted as still on the old stack, so the
+    /// recovery step's setup there could only fail ("The store answered 404"). Until this device has an account, that step is
+    /// open again: Retry there moves the host first, or says why it cannot.
+    /// </summary>
+    private void ReopenOldStoreHost()
+    {
+        if (_agent.IsRegistered) return;
+        var bridge = Bridge.Read();
+        if (bridge.Engine is not ("done" or "skipped") || bridge.LocalEngine is not null || bridge.StoreEngine is not { } store) return;
+        if (_agent.Engines().FirstOrDefault(e => e.Id == store) is not { } engine || !bridge.OldHosts.Contains(engine.Name)) return;
+        Bridge.Update(b => b with { Engine = null, StoreEngine = null });
+    }
+
     // ---- the view ----
 
     public UpgradeView View()
     {
         ReopenStaleConversion();
+        ReopenOldStoreHost();
         var bridge = Bridge.Read();
         LegacyState? legacy;
         string? error;
@@ -294,19 +310,22 @@ public sealed class UpgradeService
     /// </summary>
     private async Task<string?> StoreHostAsync(IReadOnlyList<(string Id, LegacyHost Host)> hosts, CancellationToken ct)
     {
-        (string Id, LegacyHost Host)? old = null;
-        string? unknown = null;
+        (string Id, LegacyHost Host)? old = null, unknown = null;
         foreach (var (id, host) in hosts)
         {
             switch (await MarkOldHostAsync(_agent, Bridge, id, ct).ConfigureAwait(false))
             {
                 case false: return id;
                 case true: old ??= (id, host); break;
-                default: unknown ??= id; break; // it did not tell; the setup there says why it fails
+                default: unknown ??= (id, host); break;
             }
         }
 
-        if (old is not { } move) return unknown;
+        // A host that did not tell which Construct it runs (offline, restarting) is no store yet: the step stays open.
+        if (old is null && unknown is { } silent)
+            throw new AgentFailure(409, "store-host-unreachable",
+                $"{new Uri(silent.Host.Url).Host} could not be reached to check its version. Retry when it is online.");
+        if (old is not { } move) return null;
         var name = new Uri(move.Host.Url).Host;
         var update = OldHostUpdate(_engines);
         if (await update.OfferAsync(move.Id, ct).ConfigureAwait(false) is not { } offer)

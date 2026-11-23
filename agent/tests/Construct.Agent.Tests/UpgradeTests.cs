@@ -992,6 +992,30 @@ public sealed class UpgradeTests
         Assert.Equal(0, old.StoreCalls);
     }
 
+    [Fact]
+    public async Task A_store_the_previous_first_step_left_on_an_old_host_opens_that_step_again_and_Retry_moves_the_host()
+    {
+        // The field PC: the release before finished the first step with the old host as the store, and the recovery step
+        // stopped with "The store answered 404". After the update the first step is open again.
+        var old = new OldUntilStaged { Refusals = 1 };
+        var (rig, remote, _) = await OnlyAnOldHostAsync(old, Role.Admin);
+        using var _ = remote;
+        await using var __ = rig;
+        await EngineStepAsync(rig); // adds the host and notes it as old, as that step did; its update is refused once here
+        var hostId = (await rig.Agent.GetAsync("api/state"))["engines"]!.AsArray().Single(e => e!["url"]!.GetValue<string>() == remote.Url)!["id"]!.GetValue<string>();
+        rig.Agent.Host.Upgrade.Bridge.Update(b => b with { Engine = "skipped", StoreEngine = hostId });
+
+        var view = await rig.Agent.GetAsync("api/upgrade");
+        Assert.Equal("todo", view["steps"]![0]!["state"]!.GetValue<string>());
+        Assert.True(view["storeEngine"] is null, view.ToJsonString());
+
+        view = await EngineStepAsync(rig);
+        Assert.True(view["error"] is null, view.ToJsonString());
+        Assert.Equal(hostId, view["storeEngine"]!.GetValue<string>());
+        await rig.SetupAsync();
+        Assert.Equal((0, 1), (old.StoreCalls, old.Stages));
+    }
+
     /// <summary>
     /// An old host the user administers with one VM of theirs ("far"), which the engine there reaches only as root with the old
     /// client's key (the old provisioning removed the bootstrap key from the seed user), and the PC's old install pointing at it.
