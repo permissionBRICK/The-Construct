@@ -86,6 +86,9 @@ public sealed class UpgradeService
     /// <summary>How an old host's update is followed; tests make it quick.</summary>
     public TimeSpan OldHostPoll { get; set; } = TimeSpan.FromSeconds(5);
 
+    /// <summary>How often the old client's key goes again to a VM on a moved host that was started and boots; tests make it quick.</summary>
+    public TimeSpan StartedVmPoll { get; set; } = TimeSpan.FromSeconds(10);
+
     private OldHostUpdate OldHostUpdate(IDeviceEngines engines) =>
         new(engines, ShipsAgent ?? ((_, _, _) => Task.FromResult(false)), _options.Time) { PollInterval = OldHostPoll };
 
@@ -407,7 +410,7 @@ public sealed class UpgradeService
             _agent.Events.Publish("upgrade", null, JsonSerializer.SerializeToNode(item, Http.AgentJson.Options));
         })
         {
-            BeforeItem = BeforeItem, OldHosts = OldHostUpdate(_engines),
+            BeforeItem = BeforeItem, OldHosts = OldHostUpdate(_engines), StartedVmPoll = StartedVmPoll,
             Overall = p => { lock (_gate) _convertProgress = p; },
         };
         var converted = await converter.RunAsync(legacy, ct).ConfigureAwait(false);

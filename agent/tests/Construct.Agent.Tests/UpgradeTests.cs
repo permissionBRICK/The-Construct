@@ -862,7 +862,7 @@ public sealed class UpgradeTests
     /// An old host the user administers with one VM of theirs ("far"), which the engine there reaches only as root with the old
     /// client's key (the old provisioning removed the bootstrap key from the seed user), and the PC's old install pointing at it.
     /// </summary>
-    private static async Task<(UpgradeRig Rig, EngineHost Remote, OldUntilStaged Old, OldHostGuest Guest)> OldHostWithVmAsync()
+    private static async Task<(UpgradeRig Rig, EngineHost Remote, OldUntilStaged Old, OldHostGuest Guest)> OldHostWithVmAsync(VmState state = VmState.Running)
     {
         var old = new OldUntilStaged();
         var guest = new OldHostGuest();
@@ -873,8 +873,8 @@ public sealed class UpgradeTests
         }).AddSource(OldUntilStaged.NewCommit);
         var remoteToken = await remote.AddUserAsync("alice", Role.Admin);
         await remote.Services.GetRequiredService<IVmRepository>().AddAsync(new Vm("far", "alice", 2, 4, 50, DateTimeOffset.UtcNow.AddDays(-30),
-            VmState.Running, null, null, IdlePolicy.Disabled, Vm.NoForwards, TokenKind: VmTokenKind.Primary), 10, CancellationToken.None);
-        remote.Services.GetRequiredService<FakeHypervisorDriver>().SetState("far", VmState.Running);
+            state, null, null, IdlePolicy.Disabled, Vm.NoForwards, TokenKind: VmTokenKind.Primary), 10, CancellationToken.None);
+        remote.Services.GetRequiredService<FakeHypervisorDriver>().SetState("far", state);
         var rig = await UpgradeRig.CreateAsync(f =>
         {
             SingleVm(f);
@@ -897,6 +897,7 @@ public sealed class UpgradeTests
         });
         rig.Agent.Host.Upgrade.ShipsAgent = (_, tag, _) => Task.FromResult(tag == "host-" + OldUntilStaged.NewCommit);
         rig.Agent.Host.Upgrade.OldHostPoll = TimeSpan.FromMilliseconds(50);
+        rig.Agent.Host.Upgrade.StartedVmPoll = TimeSpan.FromMilliseconds(50);
         await rig.EngineStepAsync();
         await rig.SetupAsync();
         return (rig, remote, old, guest);
@@ -953,6 +954,24 @@ public sealed class UpgradeTests
         var again = await rig.ConvertAsync();
         Assert.Equal("skipped", Row(again, "host-reprovision:" + slug).State);
         Assert.Equal(1, guest.Inner.Provisions);
+    }
+
+    [Fact]
+    public async Task A_VM_that_is_off_on_a_moved_host_is_started_gets_the_old_key_and_is_reprovisioned()
+    {
+        var (rig, remote, _, guest) = await OldHostWithVmAsync(VmState.Off);
+        using var _ = remote;
+        await using var __ = rig;
+        var slug = LegacyState.Slug(remote.Url);
+
+        var view = await rig.ConvertAsync();
+
+        Assert.Equal(("done", "On the new version"), Row(view, "host-reprovision:" + slug));
+        Assert.Equal(VmState.Running, remote.Services.GetRequiredService<FakeHypervisorDriver>().StateOf("far"));
+        Assert.Contains("start:far", remote.Services.GetRequiredService<FakeHypervisorDriver>().Calls);
+        Assert.Equal(1, guest.Inner.Provisions);
+        var options = remote.Services.GetRequiredService<ConstructdOptions>();
+        Assert.True(File.Exists(Constructd.Api.Jobs.ProvisionTargets.AdoptedKeyPath(options, "far")));
     }
 
     [Fact]

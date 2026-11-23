@@ -374,7 +374,8 @@ public sealed class LegacyConverter(DeviceAgent agent, IDeviceEngines engines, D
                     await Task.Delay(StartedVmPoll, ct).ConfigureAwait(false);
                     refused = await SendAsync().ConfigureAwait(false);
                 }
-                while (refused?.Code is "key-rejected" or "vm-not-running" or "vm-endpoint-unknown" && DateTimeOffset.UtcNow < until);
+                // While it boots the engine may not reach it yet, or take a while trying.
+                while (refused?.Code is "key-rejected" or "vm-not-running" or "vm-endpoint-unknown" or "engine-unreachable" && DateTimeOffset.UtcNow < until);
             }
 
             return refused switch
