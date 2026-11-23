@@ -124,7 +124,7 @@ public sealed class UpgradeService
     /// <summary>
     /// A converter before this one could finish the move as converted with "host-vms:&lt;host&gt;" marked done right after
     /// asking a moved host to reprovision, which that host could not do. Such a move is open again (converting), so the
-    /// dialog offers Move over once more and the converter redoes the host's row; it finishes it as converted itself.
+    /// dialog offers Move over once more and the converter redoes the host's VMs; it finishes it as converted itself.
     /// </summary>
     private void ReopenStaleConversion()
     {

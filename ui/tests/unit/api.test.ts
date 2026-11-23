@@ -1774,13 +1774,13 @@ describe('ApiBackend one-time upgrade', () => {
     expect(be.snapshot().upgrade?.progress).toEqual({ pct: 60, label: 'Installing' });
 
     const items = [{ id: 'vm:atlas', label: 'VM atlas', state: 'done', message: 'Switched over' },
-      { id: 'reprovision:atlas', label: 'VM atlas on the new version', state: 'running', message: 'Installing packages', percent: 15 }];
+      { id: 'reprovision:atlas', label: 'Reprovision atlas', state: 'running', message: 'Installing packages', percent: 15 }];
     on('GET', '/api/upgrade', { json: view({ engine: 'done', recovery: 'done', close: 'done', convert: 'running' },
-      { running: true, stage: 'converting', items, progress: { percent: 33, label: 'VM atlas on the new version' } }) });
+      { running: true, stage: 'converting', items, progress: { percent: 33, label: 'Reprovision atlas' } }) });
     be.onEvent('upgrade', null);
     await settle();
     const u = be.snapshot().upgrade!;
-    expect(u.progress).toEqual({ pct: 33, label: 'VM atlas on the new version' });
+    expect(u.progress).toEqual({ pct: 33, label: 'Reprovision atlas' });
     expect(u.items.find(i => i.id === 'reprovision:atlas')).toMatchObject({ state: 'running', count: 'Installing packages', pct: 15 });
   });
 
