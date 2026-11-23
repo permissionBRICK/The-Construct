@@ -15,7 +15,13 @@ public static class VaultSeal
 {
     public const int KeyBytes = 32, NonceBytes = 12, TagBytes = 16;
 
+    /// <summary>A vault kept in an engine's table proves its key with this text sealed under the AAD <c>check</c>.</summary>
+    public const string CheckText = "construct-vault-check", CheckAad = "check";
+
     public static string EntryAad(string name, long updatedAt) => "entry:" + name + ":" + updatedAt.ToString(CultureInfo.InvariantCulture);
+
+    /// <summary>A key check for <paramref name="key"/> (<see cref="CheckText"/> sealed with it).</summary>
+    public static string KeyCheck(ReadOnlySpan<byte> key) => Seal(key, Encoding.UTF8.GetBytes(CheckText), CheckAad);
 
     public static string Seal(ReadOnlySpan<byte> key, ReadOnlySpan<byte> plaintext, string aad)
     {

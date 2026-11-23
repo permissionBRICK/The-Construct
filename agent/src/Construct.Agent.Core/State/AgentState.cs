@@ -80,6 +80,12 @@ public sealed class EngineEntry
     /// <summary>The user signs in at the engine as the Windows user (Negotiate) until a device token replaces it.</summary>
     public bool WindowsSignIn { get; set; }
 
+    /// <summary>
+    /// The engine answered the withdrawal of keys an earlier version granted it outside the account's store (E12):
+    /// asked once per engine (<see cref="DeviceAgent.WithdrawStrayGrantsAsync"/>).
+    /// </summary>
+    public bool GrantsWithdrawn { get; set; }
+
     /// <summary>The engine's id from an address (<see cref="Id"/>).</summary>
     public static string IdFor(string url) =>
         Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(url.ToLowerInvariant())))[..12].ToLowerInvariant();

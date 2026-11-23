@@ -6454,6 +6454,27 @@
             }
           }
         }
+      },
+      "delete": {
+        "tags": [
+          "EngineParticipationEndpoints"
+        ],
+        "operationId": "WithdrawEngineGrants",
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "description": "An error, as a Problem document.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/api/v1/sync/records/{id}": {

@@ -1752,7 +1752,7 @@
         "tags": [
           "vault"
         ],
-        "description": "available grants the engine K; locked withdraws it (VMs a device unlocked keep it until they stop).",
+        "description": "available grants the engine K; locked withdraws it (VMs a device unlocked keep it until they stop). An engine that keeps the vault in its table (outside the account's store) gets the vault settings the Companion set.",
         "operationId": "SetVaultMode",
         "parameters": [
           {

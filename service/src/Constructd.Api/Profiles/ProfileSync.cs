@@ -47,8 +47,8 @@ public abstract record ProfileResolveOutcome
 
 /// <summary>
 /// Profile sync in the engine (docs/plans/construct-platform-design.md 9.3, 9.6; docs/config-sync.md,
-/// "The new stack"). For every account a device granted this engine <c>D</c>, an
-/// <see cref="EngineReplica"/> against the account's store (<see cref="EngineStores"/>). One loop
+/// "The new stack"). For every account a device granted this engine <c>D</c> and whose store this engine takes part in
+/// (<see cref="EngineStores.TakesPart"/>), an <see cref="EngineReplica"/> against the account's store (<see cref="EngineStores"/>). One loop
 /// (<see cref="SyncAsync"/>, run by <see cref="ProfileSyncService"/> on a timer and when an edit is
 /// queued) per account:
 /// <list type="number">
@@ -136,20 +136,46 @@ public sealed class ProfileSync : IDisposable
     /// <summary>Waits for <see cref="Wake"/> or the interval.</summary>
     public Task WaitAsync(CancellationToken ct) => _wake.WaitAsync(Interval, ct);
 
-    /// <summary>The replica of an account this engine takes part in; null when no device granted it <c>D</c>.</summary>
+    /// <summary>
+    /// The replica of an account this engine takes part in (<see cref="EngineStores.TakesPart"/>); null when no device
+    /// granted it <c>D</c>, or when the account's store is elsewhere and not named here (E12): a replica against this
+    /// engine's own store would be a second account store.
+    /// </summary>
     public EngineReplica? Replica(string account)
     {
         if (_replicas.TryGetValue(account, out var existing)) return existing;
-        if (!_keys.GrantingAccounts(EngineGrants.Records).Contains(account, StringComparer.Ordinal)) return null;
+        if (!_keys.GrantingAccounts(EngineGrants.Records).Contains(account, StringComparer.Ordinal) || !_stores.TakesPart(account)) return null;
         lock (_create)
         {
             if (_replicas.TryGetValue(account, out existing)) return existing;
-            var path = _inMemory ? ":memory:" : Path.Combine(_directory, "replica-" + Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(account)))[..16] + ".db");
-            var replica = new EngineReplica(path, account, EngineId, _stores.For(account), _recordKeys);
+            var replica = new EngineReplica(_inMemory ? ":memory:" : ReplicaPath(account), account, EngineId, _stores.For(account), _recordKeys);
             _replicas[account] = replica;
             return replica;
         }
     }
+
+    /// <summary>
+    /// Forgets the replica of an account this engine does not take part in, its file included: the keys a device granted
+    /// here by mistake were withdrawn (<c>DELETE /engine/grants</c>). <see cref="Replica"/> opens none for such an
+    /// account, so only a file an earlier version left is there to go.
+    /// </summary>
+    public void Drop(string account)
+    {
+        lock (_create)
+        {
+            if (_replicas.TryRemove(account, out var replica)) replica.Dispose();
+        }
+
+        if (_inMemory) return;
+        var path = ReplicaPath(account);
+        foreach (var file in new[] { path, path + "-wal", path + "-shm" })
+        {
+            if (File.Exists(file)) File.Delete(file);
+        }
+    }
+
+    private string ReplicaPath(string account) =>
+        Path.Combine(_directory, "replica-" + Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(account)))[..16] + ".db");
 
     /// <summary>One pass of the loop over every account. Passes never overlap.</summary>
     public async Task SyncAsync(CancellationToken ct)
@@ -157,7 +183,8 @@ public sealed class ProfileSync : IDisposable
         await _loop.WaitAsync(ct);
         try
         {
-            foreach (var account in _keys.GrantingAccounts(EngineGrants.Records))
+            // The accounts that granted D here and whose store this engine takes part in.
+            foreach (var account in _keys.GrantingAccounts(EngineGrants.Records).Where(_stores.TakesPart).ToArray())
             {
                 try
                 {

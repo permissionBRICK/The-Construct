@@ -104,6 +104,17 @@ public sealed class EngineStores(RecordStore store, StoreDirectory directory, En
         ? new HttpStoreClient(Http(remote))
         : identity.Client(store, a));
 
+    /// <summary>Whether this engine's own store is the account's: a device of the account registered there (5.4).</summary>
+    public bool Holds(string account) => directory.Holds(account);
+
+    /// <summary>
+    /// Whether this engine takes part in the account's store (8.7): its own store is the account's, or a store elsewhere
+    /// is named for the account. Only then does a device's grant of <c>D</c> put the account in the new stack here; on
+    /// any other engine (a shared host whose account store is the user's PC, E12) the account keeps the old routes and
+    /// the vault in the table.
+    /// </summary>
+    public bool TakesPart(string account) => Remote(account) is not null || Holds(account);
+
     /// <summary>Tells the account's store that this engine applied a device's revocation (8.4).</summary>
     public async Task AcknowledgeAsync(string account, string deviceId, CancellationToken ct)
     {
