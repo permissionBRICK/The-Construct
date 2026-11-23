@@ -223,6 +223,10 @@ Behaviour:
 - **Environment** — runs as root with `config.env` sourced and the merged `AGENT_*`
   vars derived from `generated.json`, so `WORKSPACE_ROOT`, `AGENT_PROJECTS`,
   `AGENT_REPOS_JSON` (valid JSON), `AGENT_SDKS_JSON`, etc. are available.
+- **Python** — `python3` is the distro's. A profile that requests a Python version in
+  `sdks.python` gets the newest one it requested as `python3` and `python` in its own
+  commands; other profiles and agent shells reach it as `python3.X`. When that version
+  failed to install, the runner warns and the commands use the distro's `python3`.
 
 Keep dependent commands in the same profile. Declare shared system packages in
 `hostPackages` where applicable, so they are installed before parallel commands.

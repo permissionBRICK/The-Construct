@@ -170,7 +170,8 @@ jq -s --argjson files "${profile_files_json}" '
       # checkout-projects.sh does: explicit "directory", else the repo basename
       # without .git) so the runner can cd into the cloned repo before running it.
       # Empty when the profile declares no repos -> runner falls back to the
-      # workspace root.
+      # workspace root. python lists the Python versions THIS profile requests:
+      # the runner makes the newest one python3 for these commands.
       map(
         .name as $profile
         | (
@@ -179,9 +180,11 @@ jq -s --argjson files "${profile_files_json}" '
             else ($repo.directory // ($repo.url | sub("\\.git$"; "") | sub(".*/"; "")))
             end
         ) as $dir
+        | ((.sdks // {}).python // [] | if type == "array" then . else [.] end | unique_strings) as $python
         | ((.provisionCommands // [])
            | map(select(type == "string" and length > 0))
-           | map({ profile: $profile, dir: $dir, command: . }))
+           | map({ profile: $profile, dir: $dir, command: . }
+                 + (if ($python | length) > 0 then { python: $python } else {} end)))
       )
       | add
     ),

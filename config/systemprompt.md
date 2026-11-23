@@ -126,6 +126,10 @@ Write profiles so a fresh VM installs everything needed to build, test, and run
 the project. Declare runtimes in `sdks`, system packages in `hostPackages` where
 applicable, and the remaining setup in `provisionCommands`.
 
+`python3` is the distro's in every shell. A Python version a profile requests in
+`sdks` is `python3.X` (e.g. `python3.14`) in your shells; only that profile's
+`provisionCommands` get it as `python3`.
+
 `provisionCommands` run on EVERY provision, including reprovisions. Make them
 complete on a fresh install and incremental when run again:
 
