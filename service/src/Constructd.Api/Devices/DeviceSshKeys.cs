@@ -31,7 +31,7 @@ namespace Constructd.Api.Devices;
 /// remembered in memory only: after a restart every running VM is written once more.
 /// </summary>
 public sealed partial class DeviceSshKeys(EngineKeyStore keys, EngineDevices devices, IVmRepository vms, IProvisionTargets targets,
-    ISshRunner ssh, ILogger<DeviceSshKeys> log, IHostApplicationLifetime lifetime)
+    ISshRunner ssh, ILogger<DeviceSshKeys> log, IHostApplicationLifetime lifetime, Constructd.Api.Composition.EngineStores stores)
 {
     // Background writes end with the engine.
     private CancellationToken Stopping => lifetime.ApplicationStopping;
@@ -78,12 +78,14 @@ public sealed partial class DeviceSshKeys(EngineKeyStore keys, EngineDevices dev
 
     /// <summary>
     /// Whether the engine manages device keys for the account: only an account that granted this
-    /// engine <c>D</c> has devices here (enrolment reads the device records with it).
+    /// engine <c>D</c>, on an engine that takes part in its store, has devices here (enrolment reads
+    /// the device records with it).
     /// </summary>
     public bool Manages(string account) => Account(account) is not null;
 
     /// <summary>The account as it granted <c>D</c> here (user names compare without case, as ownership does).</summary>
-    private string? Account(string owner) => keys.GrantingAccounts(EngineGrants.Records).FirstOrDefault(a => Ownership.SameName(a, owner));
+    private string? Account(string owner) =>
+        keys.GrantingAccounts(EngineGrants.Records).FirstOrDefault(a => Ownership.SameName(a, owner) && stores.TakesPart(a));
 
     /// <summary>Registers (or replaces) a device's key and writes the account's VMs.</summary>
     public void Register(string account, string deviceId, string normalizedKey)

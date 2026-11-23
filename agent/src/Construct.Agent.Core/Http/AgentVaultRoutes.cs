@@ -96,7 +96,7 @@ public static class AgentVaultRoutes
 
         vault.MapPut("/engines/{engine}/mode", async (DeviceAgent agent, string engine, [FromBody] VaultModeRequest request, CancellationToken ct) =>
             TypedResults.Ok(await agent.SetVaultModeAsync(engine, request.Mode, ct)))
-            .WithName("SetVaultMode").WithDescription("available grants the engine K; locked withdraws it (VMs a device unlocked keep it until they stop).");
+            .WithName("SetVaultMode").WithDescription("available grants the engine K; locked withdraws it (VMs a device unlocked keep it until they stop). An engine that keeps the vault in its table (outside the account's store) gets the vault settings the Companion set.");
 
         vault.MapPost("/engines/{engine}/vms/{vm}/unlock", async (DeviceAgent agent, string engine, string vm, CancellationToken ct) =>
         {

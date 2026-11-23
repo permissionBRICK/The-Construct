@@ -2228,7 +2228,7 @@ export interface paths {
         get?: never;
         put: operations["PutEngineGrants"];
         post?: never;
-        delete?: never;
+        delete: operations["WithdrawEngineGrants"];
         options?: never;
         head?: never;
         patch?: never;
@@ -11142,6 +11142,33 @@ export interface operations {
                 "application/json": components["schemas"]["EngineGrantsRequest"];
             };
         };
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description An error, as a Problem document. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    WithdrawEngineGrants: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
         responses: {
             /** @description No Content */
             204: {

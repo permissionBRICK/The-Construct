@@ -649,7 +649,7 @@ export interface paths {
             cookie?: never;
         };
         get: operations["GetVaultMode"];
-        /** @description available grants the engine K; locked withdraws it (VMs a device unlocked keep it until they stop). */
+        /** @description available grants the engine K; locked withdraws it (VMs a device unlocked keep it until they stop). An engine that keeps the vault in its table (outside the account's store) gets the vault settings the Companion set. */
         put: operations["SetVaultMode"];
         post?: never;
         delete?: never;
