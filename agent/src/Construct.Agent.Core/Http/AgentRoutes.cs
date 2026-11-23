@@ -5,6 +5,8 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Http.HttpResults;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Routing;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 
 namespace Construct.Agent.Http;
 
@@ -131,13 +133,16 @@ public static class AgentRoutes
         using var subscription = agent.Events.Subscribe(from);
         context.Response.ContentType = "text/event-stream";
         context.Response.Headers.CacheControl = "no-store";
-        var ct = context.RequestAborted;
-        await context.Response.WriteAsync(": connected\n\n", ct);
-        if (subscription.Gap) await context.Response.WriteAsync($"event: reset\ndata: {{\"seq\":{subscription.Current}}}\n\n", ct);
-        foreach (var item in subscription.Replay) await WriteAsync(context, item, ct);
-        await context.Response.Body.FlushAsync(ct);
+        // Also ends when the agent stops: Kestrel waits for open requests until the shutdown timeout. The UI connects again.
+        using var open = CancellationTokenSource.CreateLinkedTokenSource(context.RequestAborted,
+            context.RequestServices.GetRequiredService<IHostApplicationLifetime>().ApplicationStopping);
+        var ct = open.Token;
         try
         {
+            await context.Response.WriteAsync(": connected\n\n", ct);
+            if (subscription.Gap) await context.Response.WriteAsync($"event: reset\ndata: {{\"seq\":{subscription.Current}}}\n\n", ct);
+            foreach (var item in subscription.Replay) await WriteAsync(context, item, ct);
+            await context.Response.Body.FlushAsync(ct);
             while (!ct.IsCancellationRequested)
             {
                 using var keepalive = CancellationTokenSource.CreateLinkedTokenSource(ct);

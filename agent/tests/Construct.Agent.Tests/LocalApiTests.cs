@@ -200,6 +200,25 @@ public sealed class LocalApiTests
         Assert.Single(seen, t => t == "job.ended");
     }
 
+    [Fact]
+    public async Task The_agent_stops_promptly_while_the_UI_holds_the_event_stream()
+    {
+        // Kestrel waits for open requests when the agent stops (self-update, quit), up to its 4 s shutdown timeout.
+        await using var laptop = await TestAgent.StartAsync();
+        using var ui = new HttpClient { BaseAddress = laptop.Api.BaseAddress, Timeout = Timeout.InfiniteTimeSpan };
+        ui.DefaultRequestHeaders.Authorization = laptop.Api.DefaultRequestHeaders.Authorization;
+        using var stream = await ui.GetAsync("api/events", HttpCompletionOption.ResponseHeadersRead);
+        var reader = new StreamReader(await stream.Content.ReadAsStreamAsync());
+        Assert.Equal(": connected", await reader.ReadLineAsync());
+
+        var stopping = System.Diagnostics.Stopwatch.StartNew();
+        await laptop.Host.App.StopAsync();
+        Assert.True(stopping.Elapsed < TimeSpan.FromSeconds(3), $"The stop took {stopping.Elapsed.TotalSeconds:0.0} s.");
+        // The stream ended cleanly; the UI connects again.
+        using var bounded = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        await reader.ReadToEndAsync(bounded.Token);
+    }
+
     private static async IAsyncEnumerable<(string Type, JsonNode? Data)> ReadEventsAsync(StreamReader reader, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct)
     {
         string? type = null;

@@ -484,7 +484,8 @@ public sealed partial class VaultHostService
     /// <c>GET /vms/{name}/vault/requests/{id}?wait=…</c>: the response document once decided (the first
     /// retrieval consumes it), or null while still pending after waiting at most <paramref name="wait"/>.
     /// </summary>
-    public async Task<JsonObject?> PollAsync(Vm vm, string id, TimeSpan wait, CancellationToken ct)
+    /// <param name="endWait">Ends the wait early (the engine stops); a decided request is still answered.</param>
+    public async Task<JsonObject?> PollAsync(Vm vm, string id, TimeSpan wait, CancellationToken ct, CancellationToken endWait = default)
     {
         Pending? record;
         lock (pendingGate)
@@ -498,7 +499,7 @@ public sealed partial class VaultHostService
             var span = wait < left ? wait : left;
             if (span > TimeSpan.Zero)
             {
-                using var timer = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                using var timer = CancellationTokenSource.CreateLinkedTokenSource(ct, endWait);
                 var delay = Task.Delay(span, timer.Token);
                 await Task.WhenAny(record.Done.Task, delay).ConfigureAwait(false);
                 await timer.CancelAsync().ConfigureAwait(false);

@@ -3,6 +3,8 @@ using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.Routing;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 
 namespace Construct.Agent.Http;
 
@@ -82,14 +84,27 @@ public static class EngineProxy
                 else context.Response.Headers.Remove("Location");
             }
 
-            await using var body = await response.Content.ReadAsStreamAsync(context.RequestAborted);
-            var buffer = new byte[16 * 1024];
-            int read;
-            while ((read = await body.ReadAsync(buffer, context.RequestAborted)) > 0)
+            // An event stream also ends when the agent stops: Kestrel waits for open requests until the shutdown timeout.
+            using var open = CancellationTokenSource.CreateLinkedTokenSource(context.RequestAborted,
+                response.Content.Headers.ContentType?.MediaType == "text/event-stream"
+                    ? context.RequestServices.GetRequiredService<IHostApplicationLifetime>().ApplicationStopping
+                    : CancellationToken.None);
+            var ct = open.Token;
+            try
             {
-                await context.Response.Body.WriteAsync(buffer.AsMemory(0, read), context.RequestAborted);
-                // Event streams reach the UI as they come.
-                await context.Response.Body.FlushAsync(context.RequestAborted);
+                await using var body = await response.Content.ReadAsStreamAsync(ct);
+                var buffer = new byte[16 * 1024];
+                int read;
+                while ((read = await body.ReadAsync(buffer, ct)) > 0)
+                {
+                    await context.Response.Body.WriteAsync(buffer.AsMemory(0, read), ct);
+                    // Event streams reach the UI as they come.
+                    await context.Response.Body.FlushAsync(ct);
+                }
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested && !context.RequestAborted.IsCancellationRequested)
+            {
+                // The agent stops; the client connects again.
             }
         }
     }
