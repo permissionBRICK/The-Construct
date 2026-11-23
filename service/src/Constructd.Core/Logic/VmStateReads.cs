@@ -16,13 +16,16 @@ public static class VmStateReads
     public static readonly TimeSpan SettleWindow = TimeSpan.FromSeconds(15);
 
     /// <summary>
-    /// The VM's state, read again every half second while it is Unknown or Absent. The window counts from
+    /// The VM's state, read again every half second while it is Unknown or Absent (a driver that is an
+    /// <see cref="IStateReadSettling"/> sets both times). The window counts from
     /// the first read; a later read still running at its end is cut off, and the last answer stands. The
     /// caller's own cancellation still throws.
     /// </summary>
     public static async Task<VmState> GetSettledStateAsync(this IHypervisorDriver driver, string name, CancellationToken ct, TimeSpan? window = null)
     {
-        var settle = window ?? SettleWindow;
+        var settling = driver as IStateReadSettling;
+        var settle = window ?? settling?.SettleWindow ?? SettleWindow;
+        var interval = settling?.RereadInterval ?? TimeSpan.FromMilliseconds(500);
         var waited = Stopwatch.StartNew();
         var state = await driver.GetStateAsync(name, ct).ConfigureAwait(false);
         while (state is VmState.Unknown or VmState.Absent && waited.Elapsed < settle)
@@ -32,7 +35,7 @@ public static class VmStateReads
             deadline.CancelAfter(left > TimeSpan.Zero ? left : TimeSpan.Zero);
             try
             {
-                await Task.Delay(TimeSpan.FromMilliseconds(500), deadline.Token).ConfigureAwait(false);
+                await Task.Delay(interval, deadline.Token).ConfigureAwait(false);
                 state = await driver.GetStateAsync(name, deadline.Token).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (!ct.IsCancellationRequested)

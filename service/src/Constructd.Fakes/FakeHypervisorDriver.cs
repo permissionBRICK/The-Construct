@@ -9,8 +9,13 @@ namespace Constructd.Fakes;
 /// so the API, the creation job and the idle engine can be tested on Linux. The real driver (B7)
 /// implements the same interface by invoking PowerShell.
 /// </summary>
-public sealed class FakeHypervisorDriver : IHypervisorDriver, IVmCpuDriver, IVmMemoryDriver, IGuestNetworkConfigurator, IVmNestedDriver, IVmMemoryFloorDriver, IVmFactsDriver, IVmHostStartDriver
+public sealed class FakeHypervisorDriver : IHypervisorDriver, IVmCpuDriver, IVmMemoryDriver, IGuestNetworkConfigurator, IVmNestedDriver, IVmMemoryFloorDriver, IVmFactsDriver, IVmHostStartDriver, IStateReadSettling
 {
+    /// <summary>The fake answers at once: a read that stays Unknown is given up on soon, a few Unknown answers are read past.</summary>
+    public TimeSpan SettleWindow { get; set; } = TimeSpan.FromMilliseconds(500);
+
+    public TimeSpan RereadInterval { get; set; } = TimeSpan.FromMilliseconds(10);
+
     /// <summary>What <see cref="GetFactsAsync"/> reports for a VM the fake did not create (an existing VM to adopt).</summary>
     public ConcurrentDictionary<string, HypervisorVmFacts> Facts { get; } = new(StringComparer.OrdinalIgnoreCase);
     public Task<HypervisorVmFacts?> GetFactsAsync(string name, CancellationToken ct)
