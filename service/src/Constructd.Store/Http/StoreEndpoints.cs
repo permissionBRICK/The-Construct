@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 
 namespace Constructd.Store.Http;
 
@@ -28,7 +29,9 @@ public static partial class StoreEndpoints
         {
             if (Principal(http) is not { } principal) return Unauthorized(http);
             var waitFor = TimeSpan.FromSeconds(Math.Clamp(wait ?? 0, 0, (int)MaxWait.TotalSeconds));
-            return Json(await store.FeedAsync(principal.Account, since ?? 0, waitFor, limit ?? 500, ct));
+            // The host waits for open requests when it stops: the wait ends then, with what there is.
+            var stopping = http.RequestServices.GetService<IHostApplicationLifetime>()?.ApplicationStopping ?? default;
+            return Json(await store.FeedAsync(principal.Account, since ?? 0, waitFor, limit ?? 500, ct, stopping));
         });
 
         routes.MapGet("/records/{id}", async (HttpContext http, RecordStore store, string id, CancellationToken ct) =>

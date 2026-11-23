@@ -194,7 +194,8 @@ await app.Services.GetRequiredService<UpdateRecoveryService>().ReconcileAsync(Ca
 
 await Bootstrap.RunAsync(app.Services, CancellationToken.None);
 
-await app.RunAsync();
+// As app.RunAsync(), but a stop that runs past the shutdown timeout is logged, not thrown (EngineRun).
+await EngineRun.RunAsync(app, app.Logger);
 
 return 0;
 

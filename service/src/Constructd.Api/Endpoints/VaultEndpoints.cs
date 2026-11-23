@@ -310,7 +310,8 @@ public static class VaultEndpoints
         var wait = 0;
         if (http.Request.Query["wait"].ToString() is { Length: > 0 } text && (!int.TryParse(text, out wait) || wait < 0))
             return CodedProblems.Validation("wait", $"Expected 0 to {MaxWaitSeconds} seconds.");
-        var response = await vault.PollAsync(vm!, id, TimeSpan.FromSeconds(Math.Min(wait, MaxWaitSeconds)), ct).ConfigureAwait(false);
+        // A stopping engine answers "still pending" at once; the guest asks again.
+        var response = await vault.PollAsync(vm!, id, TimeSpan.FromSeconds(Math.Min(wait, MaxWaitSeconds)), ct, OpenResponses.Stopping(http)).ConfigureAwait(false);
         return response is null ? Results.NoContent() : Results.Ok(response);
     });
 

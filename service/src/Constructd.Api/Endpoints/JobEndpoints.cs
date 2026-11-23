@@ -104,9 +104,12 @@ public static class JobEndpoints
         response.Headers["X-Accel-Buffering"] = "no";
         await response.Body.FlushAsync(cancellationToken).ConfigureAwait(false);
 
+        // The wait for the next event ends when the engine stops; the client reads the job again once it is back.
+        // An event already taken (a terminal state may carry the one-time secret) is still written.
+        using var open = OpenResponses.UntilStopping(http);
         try
         {
-            await foreach (var evt in jobs.SubscribeAsync(id, cancellationToken).ConfigureAwait(false))
+            await foreach (var evt in jobs.SubscribeAsync(id, open.Token).ConfigureAwait(false))
             {
                 string name;
                 string payload;
@@ -136,7 +139,7 @@ public static class JobEndpoints
         }
         catch (OperationCanceledException)
         {
-            // Client went away; nothing to report.
+            // Client went away, or the engine stops; nothing to report.
         }
 
         return TypedResults.Empty;

@@ -52,7 +52,8 @@ public static class EventEndpoints
         response.ContentType = "text/event-stream";
         response.Headers.CacheControl = "no-cache";
         response.Headers["X-Accel-Buffering"] = "no";
-        using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(http.RequestAborted);
+        // Also ends when the engine stops: the client connects again with its cursor once it is back.
+        using var lifetime = OpenResponses.UntilStopping(http);
         lifetime.CancelAfter(Lifetime);
         var ct = lifetime.Token;
         try
@@ -83,7 +84,7 @@ public static class EventEndpoints
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
-            // The client went away, or the stream's lifetime ended: the client connects again with its cursor.
+            // The client went away, the stream's lifetime ended or the engine stops: the client connects again with its cursor.
         }
     }
 

@@ -118,9 +118,11 @@ public sealed class RecordStore : IDisposable
     /// Current records whose revision is after <paramref name="since"/>, oldest first. With a
     /// <paramref name="wait"/>, an empty answer waits for the next accepted write (long-poll).
     /// </summary>
-    public async Task<FeedPage> FeedAsync(string account, long since, TimeSpan wait, int limit, CancellationToken ct)
+    /// <param name="endWait">Ends the wait early with an empty answer (the host stops).</param>
+    public async Task<FeedPage> FeedAsync(string account, long since, TimeSpan wait, int limit, CancellationToken ct, CancellationToken endWait = default)
     {
         var deadline = _time.GetUtcNow() + wait;
+        using var waiting = CancellationTokenSource.CreateLinkedTokenSource(ct, endWait);
         while (true)
         {
             Task changed;
@@ -136,7 +138,7 @@ public sealed class RecordStore : IDisposable
 
             var left = deadline - _time.GetUtcNow();
             if (left <= TimeSpan.Zero) return new FeedPage([], since);
-            await Task.WhenAny(changed, Task.Delay(left, _time, ct)).ConfigureAwait(false);
+            await Task.WhenAny(changed, Task.Delay(left, _time, waiting.Token)).ConfigureAwait(false);
             ct.ThrowIfCancellationRequested();
             if (!changed.IsCompleted) return new FeedPage([], since);
         }
