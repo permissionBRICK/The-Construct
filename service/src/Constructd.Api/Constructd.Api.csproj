@@ -9,6 +9,7 @@
     <RootNamespace>Constructd.Api</RootNamespace>
     <!-- The tests drive the host through WebApplicationFactory<Program>. -->
     <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <EnableRequestDelegateGenerator>true</EnableRequestDelegateGenerator>
   </PropertyGroup>
 
   <ItemGroup>
