@@ -77,7 +77,11 @@ public sealed partial class VaultHostService
         foreach (var record in (await store.ListAsync<VaultLease>(null, ct).ConfigureAwait(false)).Where(match)) await store.DeleteAsync<VaultLease>(record.Id, ct).ConfigureAwait(false);
         foreach (var record in (await store.ListAsync<VaultCleanup>(null, ct).ConfigureAwait(false)).Where(match)) await store.DeleteAsync<VaultCleanup>(record.Id, ct).ConfigureAwait(false);
         foreach (var record in (await store.ListAsync<VaultScrubJob>(null, ct).ConfigureAwait(false)).Where(match)) await store.DeleteAsync<VaultScrubJob>(record.Id, ct).ConfigureAwait(false);
-        foreach (var record in (await store.ListAsync<VaultFileDecision>(null, ct).ConfigureAwait(false)).Where(match)) await store.DeleteAsync<VaultFileDecision>(record.Id, ct).ConfigureAwait(false);
+        foreach (var record in (await store.ListAsync<VaultFileDecision>(null, ct).ConfigureAwait(false)).Where(match))
+        {
+            await store.DeleteAsync<VaultFileDecision>(record.Id, ct).ConfigureAwait(false);
+            Notify(FileEnded, record.Id, record.Vm, record.Owner);
+        }
     }
 
     // One scan per VM at a time, for every cleanup that is due — unless that VM holds the same value
@@ -268,8 +272,12 @@ public sealed partial class VaultHostService
             await store.SaveAsync(new VaultScrubJob(NewId(), vm.Owner, vm.Name, "apply", "agent", job.Items,
                 agent.Select(t => new VaultScrubFile(t.Path, t.PathB64, "redact", t.Indexes.ToArray(), t.Type)).ToArray(), job.Id, now, now, null, []), ct).ConfigureAwait(false);
         foreach (var target in other)
-            await store.SaveAsync(new VaultFileDecision(NewId(), vm.Owner, vm.Name, target.Path, target.PathB64, target.Indexes.ToArray(), target.Type, target.Size,
-                job.Items, job.Id, now), ct).ConfigureAwait(false);
+        {
+            var decision = new VaultFileDecision(NewId(), vm.Owner, vm.Name, target.Path, target.PathB64, target.Indexes.ToArray(), target.Type, target.Size,
+                job.Items, job.Id, now);
+            await store.SaveAsync(decision, ct).ConfigureAwait(false);
+            Notify(FileAdded, decision.Id, decision.Vm, decision.Owner);
+        }
         if (other.Length > 0)
             await RecordAsync(vm.Owner, vm.Name, $"{VaultRules.Files(other.Length)} on the VM still {(other.Length == 1 ? "holds" : "hold")} {names}; choose keep, redact or delete for each.", true, ct).ConfigureAwait(false);
         if (targets.Count == 0 && scannable.Count > 0)
@@ -324,6 +332,7 @@ public sealed partial class VaultHostService
             var decision = (await store.ListAsync<VaultFileDecision>(owner, ct).ConfigureAwait(false)).FirstOrDefault(f => f.Id == id)
                 ?? throw NotFound("No such file.");
             await store.DeleteAsync<VaultFileDecision>(decision.Id, ct).ConfigureAwait(false);
+            Notify(FileEnded, decision.Id, decision.Vm, decision.Owner);
             if (action == "keep")
             {
                 await RecordAsync(owner, decision.Vm, $"Kept {decision.Path}; it still holds {string.Join(", ", decision.Names)}.", true, ct).ConfigureAwait(false);

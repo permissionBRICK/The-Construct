@@ -43,7 +43,7 @@ fingerprint, creating a VM with its settings (the engine provisions it; the page
 changed and the dot on Reprovision, a reprovision, a failed reprovision retried through the engine's retry route
 (the scripted guest fails once when the test leaves `fail-next` in the engine's directory), the host's `repair.auto`
 switched off and `repair.chat` on, a failed provision step (`fail-step`) repaired by the agent started from the UI in
-Construct's chat (the engine's fake-mode guest session asks once and fixes on the reply; the engine runs the job again), a secret added and revealed, a VM's vault request allowed from its card, a profile edited and saved, a reinstall, a restore of the
+Construct's chat (the engine's fake-mode guest session asks once and fixes on the reply; the engine runs the job again), a secret added and revealed, a VM's vault request allowed from its card, the secret it gave back found in a file by the VM's scan and redacted from the vault's card, a profile edited and saved, a reinstall, a restore of the
 backup it left through the agent's restore route, and pairing a second device in headless Chromium. Nothing in
 the product enrols the account's backup key on a VM yet; the scripted guest adds it from the store once the test
 names the account, so the device can open the backup.
@@ -52,7 +52,7 @@ names the account, so the device can open the backup.
 
 `ApiBackend` follows the agent's merged event stream. An engine's event names what changed, never the state:
 a job event re-reads that job, a backup event that VM's backups, a VM, update or `engine.reset` event the
-engine, a vault approval or entry-request event the pending vault requests. The agent's own `update` event
+engine, a vault approval, entry-request or file event the pending vault requests and files. The agent's own `update` event
 re-reads this device's update and the "update everything" run, `connections` this device's links to the VMs.
 A job the page saw end stays ended whatever an older read says. What has no event is read once a minute:
 usage, guest reports (coding agents), host administration, profiles, secrets, and the vault requests of an
@@ -118,7 +118,9 @@ with notes, they show once with one button (`POST /api/upgrade/notes/read`); the
 A secret's value reaches the page only from the agent's `reveal` route, into the element that shows it for
 half a minute, or from a field the user types in; neither goes into the state, a log or the URL, and both are
 emptied when they close. A vault card names the VM and host as the engine that holds the request names them
-and shows the agent's description and reason marked as the agent's; its answer goes to that engine. A profile
+and shows the agent's description and reason marked as the agent's; its answer goes to that engine. Files a scrub
+found still holding a secret ask in the same yellow card, one per VM: each file's path and the secrets in it, Keep,
+Delete (asked in place) and Redact, and Redact all for several. A profile
 is saved through the engine with the revision the editor read: the engine merges a newer revision or opens a
 conflict that an agent in a VM resolves, shown only as a state of that profile. A host other than the one on
 this machine is added only after the user confirmed the certificate fingerprint the agent probed.

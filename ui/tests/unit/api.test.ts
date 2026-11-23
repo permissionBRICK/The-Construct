@@ -778,6 +778,7 @@ describe('ApiBackend key vault', () => {
     w.on('GET', '/api/vault/history', { json: [{ name: 'db', action: 'added', revision: 1, at: '2026-11-13T10:00:00Z', actor: 'device:d1', provenance: { kind: 'device', vm: null, engine: null, device: 'd1', requestId: null } }] });
     w.on('GET', '/api/vault/approvals', { json: { approvals: [], unreachable: [] } });
     w.on('GET', '/api/vault/entry-requests', { json: { requests: [], unreachable: [] } });
+    w.on('GET', '/api/vault/files', { json: { files: [], unreachable: [] } });
     for (const e of engines ?? [{ id: E1 }]) w.on('GET', `/api/vault/engines/${e.id}/mode`, { json: { engine: e.id, mode: 'locked', holdsKey: false, records: true, unlockedVms: [] } });
     return w;
   }
@@ -881,6 +882,65 @@ describe('ApiBackend key vault', () => {
     await settle();
     expect(be.snapshot().vaultRequests.map(x => x.id)).toEqual([`${E1}/a1`]);
     expect(be.snapshot().notice?.text).toBe('engine-unreachable');
+  });
+
+  const file = (engine: string, id: string, vm: string, path: string, extra: Record<string, unknown> = {}) => ({
+    engine, engineName: engine === E1 ? 'orchard' : 'lab', id, vm, path, names: ['db'], type: 'text', size: 42, createdAt: 1, ...extra,
+  });
+
+  it('lists the files that still hold a secret with the VM and host that hold them, and answers each at its engine', async () => {
+    const two = [{ id: E1, name: 'orchard', url: 'https://orchard.test:8443' }, { id: E2, name: 'lab', url: 'https://lab.test:8443' }];
+    const { be, calls, on, settle } = vaultWorld(two);
+    on('GET', '/api/vault/files', { json: { files: [file(E1, 'f1', 'atlas', '/root/.env', { names: ['db', 'npm'] }), file(E2, 'f1', 'harbor', '/srv/app.db', { type: 'sqlite' }), file(E1, 'f2', 'atlas', '/root/x', { type: 'odd' })], unreachable: [] } });
+    on('POST', `/api/vault/files/${E2}/f1`, { status: 204 });
+    on('POST', `/api/vault/files/${E1}/f1`, { status: 404, json: { title: 'No such file.', status: 404, code: 'not-found' } });
+    await be.start();
+    expect(be.snapshot().vaultFiles.map(f => [f.id, f.hostId, f.vmId, f.vmName, f.hostName, f.path, f.secrets, f.type, f.size])).toEqual([
+      [`${E1}/f1`, E1, 'atlas', 'atlas', 'orchard', '/root/.env', ['db', 'npm'], 'text', 42],
+      [`${E2}/f1`, E2, 'harbor', 'harbor', 'lab', '/srv/app.db', ['db'], 'sqlite', 42],
+      [`${E1}/f2`, E1, 'atlas', 'atlas', 'orchard', '/root/x', ['db'], 'text', 42],
+    ]);
+    // The same id on two engines: the answer goes to the engine of the file that was clicked, and it leaves at once.
+    be.answerFile(`${E2}/f1`, 'redact');
+    expect(be.snapshot().vaultFiles.map(f => f.id)).toEqual([`${E1}/f1`, `${E1}/f2`]);
+    await settle();
+    expect(be.snapshot().notice?.text).toBe('Redacting app.db');
+    // Decided elsewhere meanwhile: it stays away, nothing to retry.
+    be.answerFile(`${E1}/f1`, 'keep');
+    await settle();
+    expect(be.snapshot().notice?.text).toBe('.env: decided already');
+    expect(posts(calls).map(c => [c.path, c.body])).toEqual([[`/api/vault/files/${E2}/f1`, { action: 'redact' }], [`/api/vault/files/${E1}/f1`, { action: 'keep' }]]);
+    // A read that still lists them does not bring the answered files back.
+    be.onEvent('agent', { seq: 1, type: 'agent', engine: null, data: null });
+    await settle();
+    expect(be.snapshot().vaultFiles.map(f => f.id)).toEqual([`${E1}/f2`]);
+  });
+
+  it('brings a file back when its answer failed, and drops one decided on another device', async () => {
+    const two = [{ id: E1, name: 'orchard', url: 'https://orchard.test:8443' }, { id: E2, name: 'lab', url: 'https://lab.test:8443' }];
+    const { be, on, settle } = vaultWorld(two);
+    on('GET', '/api/vault/files', { json: { files: [file(E1, 'f1', 'atlas', '/root/.env'), file(E2, 'f2', 'harbor', '/root/.npmrc')], unreachable: [] } });
+    on('POST', `/api/vault/files/${E1}/f1`, { status: 502, json: { title: 'engine-unreachable', status: 502, code: 'engine-unreachable' } });
+    await be.start();
+    be.answerFile(`${E1}/f1`, 'delete');
+    expect(be.snapshot().vaultFiles.map(f => f.id)).toEqual([`${E2}/f2`]);
+    await settle();
+    expect(be.snapshot().vaultFiles.map(f => f.id)).toEqual([`${E1}/f1`, `${E2}/f2`]);
+    expect(be.snapshot().notice?.text).toBe('engine-unreachable');
+
+    // Decided elsewhere: the engine's event takes it away at once, also while the next read cannot reach that engine.
+    on('GET', '/api/vault/files', { json: { files: [file(E1, 'f1', 'atlas', '/root/.env')], unreachable: [E2] } });
+    be.onEvent('vault.file.ended', { seq: 3, type: 'vault.file.ended', engine: E2, data: { id: 'f2' } });
+    expect(be.snapshot().vaultFiles.map(f => f.id)).toEqual([`${E1}/f1`]);
+    await settle();
+    expect(be.snapshot().vaultFiles.map(f => f.id)).toEqual([`${E1}/f1`]);
+    expect(be.snapshot().problems.requests).toBe('Not reachable: lab');
+
+    // A new one arrives as an event.
+    on('GET', '/api/vault/files', { json: { files: [file(E1, 'f1', 'atlas', '/root/.env'), file(E1, 'f3', 'atlas', '/root/.pgpass')], unreachable: [] } });
+    be.onEvent('vault.file.added', { seq: 4, type: 'vault.file.added', engine: E1, data: { id: 'f3', vm: 'atlas' } });
+    await settle();
+    expect(be.snapshot().vaultFiles.map(f => f.id)).toEqual([`${E1}/f1`, `${E1}/f3`]);
   });
 
   it('saves an entered value at the engine that asked, overwrites nothing, and declines', async () => {

@@ -1,4 +1,4 @@
-import type { AgentId, Backend, CreateVmRequest, FirstRun, FirstRunRequest, Host, HostProbe, HostUser, Job, JobKind, Prefs, Profile, ProfileSave, SettingsPatch, SignInInput, State, T3Thread, Upgrade, Vm } from './types';
+import type { AgentId, Backend, CreateVmRequest, FileAction, FirstRun, FirstRunRequest, Host, HostProbe, HostUser, Job, JobKind, Prefs, Profile, ProfileSave, SettingsPatch, SignInInput, State, T3Thread, Upgrade, VaultFile, Vm } from './types';
 import { NEXT_RELEASE, NIGHTLY_RELEASE, PAIR_WORDS, RECOVERY_CODE, REINSTALL_STEPS, REPROVISION_STEPS, SIGN_IN_BROWSER_TEXT, SIGN_IN_TEXT, sampleState } from './sample';
 import { activeJob, newer, vmUpdateTarget } from '../model/vm';
 import { AGENTS, agentSwitches, applies, applyPatch } from '../model/settings';
@@ -12,15 +12,15 @@ import { spanText } from './api/map';
    own, so a scene stays exactly as it is. */
 
 export type Scene =
-  | 'calm' | 'update' | 'update-nightly' | 'everything' | 'off' | 'changed' | 'lease' | 'enter' | 'job' | 'failed' | 'failed-reinstall' | 'repair' | 'repair-chat' | 'updating' | 'restart'
+  | 'calm' | 'update' | 'update-nightly' | 'everything' | 'off' | 'changed' | 'lease' | 'enter' | 'files' | 'file' | 'file-fails' | 'job' | 'failed' | 'failed-reinstall' | 'repair' | 'repair-chat' | 'updating' | 'restart'
   | 'pairing' | 'pair-confirm' | 'revoked' | 'handout' | 'creating' | 'created' | 'sign-in' | 'sign-in-failed' | 'sign-in-browser' | 'sign-in-key' | 'signed-out' | 'signed-out-two'
   | 'upgrade-intro' | 'upgrade-engine' | 'upgrade-name' | 'upgrade-code' | 'upgrade-close' | 'upgrade-convert' | 'upgrade-host' | 'upgrade-done' | 'upgrade-restart'
   | 'first-run' | 'first-run-restart' | 'warned' | 'old-guest' | 'upstream';
 
-export const SCENES: Scene[] = ['calm', 'update', 'update-nightly', 'everything', 'off', 'changed', 'lease', 'enter', 'job', 'failed', 'failed-reinstall', 'repair', 'repair-chat', 'updating', 'restart', 'pairing', 'pair-confirm', 'revoked', 'handout', 'creating', 'created', 'sign-in', 'sign-in-failed', 'sign-in-browser', 'sign-in-key', 'signed-out', 'signed-out-two', 'upgrade-intro', 'upgrade-engine', 'upgrade-name', 'upgrade-code', 'upgrade-close', 'upgrade-convert', 'upgrade-host', 'upgrade-done', 'upgrade-restart', 'first-run', 'first-run-restart', 'warned', 'old-guest', 'upstream'];
+export const SCENES: Scene[] = ['calm', 'update', 'update-nightly', 'everything', 'off', 'changed', 'lease', 'enter', 'files', 'file', 'file-fails', 'job', 'failed', 'failed-reinstall', 'repair', 'repair-chat', 'updating', 'restart', 'pairing', 'pair-confirm', 'revoked', 'handout', 'creating', 'created', 'sign-in', 'sign-in-failed', 'sign-in-browser', 'sign-in-key', 'signed-out', 'signed-out-two', 'upgrade-intro', 'upgrade-engine', 'upgrade-name', 'upgrade-code', 'upgrade-close', 'upgrade-convert', 'upgrade-host', 'upgrade-done', 'upgrade-restart', 'first-run', 'first-run-restart', 'warned', 'old-guest', 'upstream'];
 
 /** Things the preview frame can make happen, beside the user's own actions. */
-export type Demo = 'lease' | 'enter' | 'release' | 'fail-next' | 'change';
+export type Demo = 'lease' | 'enter' | 'file' | 'release' | 'fail-next' | 'change';
 
 export interface FakeOptions {
   scene?: Scene;
@@ -39,6 +39,8 @@ export class FakeBackend implements Backend {
   private tickMs: number;
   private seq = 1;
   private failNext = false;
+  /** File answers that fail (scene file-fails): the engine did not take them, the file comes back. */
+  private failFiles = 0;
   private pending: ReturnType<typeof setTimeout>[] = [];
 
   constructor(opts: FakeOptions = {}) {
@@ -119,6 +121,10 @@ export class FakeBackend implements Backend {
       case 'changed': this.vm(d, 'atlas').changeWaits = 'webshop'; break;
       case 'lease': d.vaultRequests.push({ id: 'r1', kind: 'lease', secret: 'forge-token', vmId: 'atlas', vmName: 'atlas', hostName: 'This PC', reason: 'Push the release', span: '2 h', ttlSeconds: 7200 }); break;
       case 'enter': d.vaultRequests.push({ id: 'r2', kind: 'enter', secret: 'payments-sandbox', vmId: 'atlas', vmName: 'atlas', hostName: 'This PC', reason: 'API key of the payments sandbox', span: '' }); break;
+      // A scrub after a lease ended found the secret in files outside the agent logs: each waits for keep, redact or delete.
+      case 'files': d.vaultFiles.push(...FILES.map(f => ({ ...f }))); break;
+      case 'file': d.vaultFiles.push({ ...FILES[0] }); break;
+      case 'file-fails': d.vaultFiles.push({ ...FILES[0] }); this.failFiles = 1; break;
       case 'job': d.jobs.push(this.newJob('atlas', 'reprovision', 3, 62)); break;
       case 'failed': case 'repair': case 'repair-chat': {
         // 'repair-chat': the host runs the repair in Construct's chat (`repair.chat`) instead of a T3 Code thread.
@@ -216,6 +222,7 @@ export class FakeBackend implements Backend {
     switch (what) {
       case 'lease': return this.set(d => { d.vaultRequests.push({ id: 'r' + this.seq++, kind: 'lease', secret: 'forge-token', vmId: 'atlas', vmName: 'atlas', hostName: 'This PC', reason: 'Push the release', span: '2 h', ttlSeconds: 7200 }); });
       case 'enter': return this.set(d => { d.vaultRequests.push({ id: 'r' + this.seq++, kind: 'enter', secret: 'payments-sandbox', vmId: 'harbor', vmName: 'harbor', hostName: 'orchard', reason: 'API key of the payments sandbox', span: '' }); });
+      case 'file': return this.set(d => { d.vaultFiles.push({ ...FILES[1], id: 'f' + this.seq++ }); });
       case 'release': return this.set(d => { d.release = NEXT_RELEASE; });
       case 'fail-next': this.failNext = true; return this.set(() => {}, 'The next job fails');
       case 'change': return this.set(d => { this.vm(d, 'atlas').changeWaits = 'webshop'; });
@@ -676,6 +683,22 @@ export class FakeBackend implements Backend {
     }, value === null ? 'Skipped' : 'Saved in the vault');
   }
 
+  answerFile(fileId: string, action: FileAction): Promise<boolean> {
+    const f = this.s.vaultFiles.find(x => x.id === fileId);
+    if (!f) return Promise.resolve(true);
+    if (this.failFiles > 0) {
+      this.failFiles--;
+      this.set(d => { d.vaultFiles = d.vaultFiles.filter(x => x.id !== fileId); });
+      return new Promise(done => setTimeout(() => { this.set(d => { d.vaultFiles.push({ ...f }); }, 'The engine did not answer in time.'); done(false); }, 50));
+    }
+    const name = f.path.split('/').pop() || f.path;
+    this.set(d => {
+      d.vaultFiles = d.vaultFiles.filter(x => x.id !== fileId);
+      d.history.unshift({ at: 'now', vmName: f.vmName, secret: f.secrets.join(', '), event: action === 'keep' ? `Kept ${f.path}` : action === 'redact' ? `Redacted ${f.path}` : `Deleted ${f.path}` });
+    }, `${action === 'keep' ? 'Kept' : action === 'redact' ? 'Redacting' : 'Deleting'} ${name}`);
+    return Promise.resolve(true);
+  }
+
   addSecret(name: string, note: string, value: string) {
     const n = name.trim();
     if (!n || !value || this.s.secrets.some(x => x.name === n)) return;
@@ -981,6 +1004,12 @@ const APT_LOG = [
 ];
 
 const ROTATE = [{ secret: 'forge-token', last: '4 d' }, { secret: 'deploy-key', last: '9 d' }, { secret: 'staging-db', last: '12 d' }];
+
+/** What a scrub of atlas found after the lease of forge-token ended: a secrets file and a project's .env. */
+const FILES: VaultFile[] = [
+  { id: 'f1', hostId: 'pc', vmId: 'atlas', vmName: 'atlas', hostName: 'This PC', path: '/root/.secrets/forge.json', secrets: ['forge-token'], type: 'text', size: 214 },
+  { id: 'f2', hostId: 'pc', vmId: 'atlas', vmName: 'atlas', hostName: 'This PC', path: '/root/repos/webshop/.env.local', secrets: ['forge-token', 'npm-publish'], type: 'text', size: 1830 },
+];
 
 function upgrade(step: Upgrade['step'], extra: Partial<Upgrade> = {}): Upgrade {
   return { step, running: false, error: null, code: null, writers: [], items: [], found: { vms: ['atlas', 'harbor', 'mesa', 'quarry'], stayOld: ['quarry'], profiles: 4, vault: true },

@@ -177,7 +177,7 @@ public sealed record AgentHealth(string Status, string Version, int Pid, DateTim
     [
         "update", "update-everything", "engine-proxy", "events", "vault-approvals", "vault-entry-requests",
         "connections", "t3-pairing", "shell-open", "upgrade", "git-jobs", "sign-in-forward", "agent-notices", "notices-dismissed",
-        "upstream",
+        "upstream", "vault-files",
     ];
 }
 

@@ -1,4 +1,5 @@
 using System.Net;
+using System.Net.Http.Json;
 using System.Security.Claims;
 using System.Text.Json.Nodes;
 using Constructd.Api.Auth;
@@ -156,6 +157,67 @@ public class ChangeStreamTests
         var vault = seen.Where(c => c.Type.StartsWith("vault.", StringComparison.Ordinal)).ToArray();
         Assert.Equal([VaultHostService.ApprovalAdded, VaultHostService.ApprovalEnded], vault.Select(c => c.Type));
         Assert.All(vault, c => Assert.Equal((approval, "dev", "bob", true), (c.Id, c.Vm, c.Owner, c.OwnerOnly)));
+    }
+
+    [Fact]
+    public async Task A_file_that_still_holds_a_secret_is_announced_to_its_owner_when_found_and_when_decided()
+    {
+        using var h = await Constructd.Tests.Vault.VaultHarness.CreateAsync();
+        await h.PutEntriesAsync(h.Entry("db", "pw-123456-long"));
+        await h.ApprovedAsync(h.Request("request", ["db"]));
+        await h.AnswerAsync(h.Request("release", ["db"]));
+        h.App.Clock.Advance(TimeSpan.FromSeconds(6));
+        var scan = (await h.Guest.GetFromJsonAsync<JsonObject>("/api/v1/vms/dev/vault/scrubs"))!["jobs"]!.AsArray().Single()!;
+        using var changes = h.App.Service<ChangeFeed>().Subscribe(null);
+
+        // An agent log is redacted without asking: only the other file is filed for the user.
+        static string B64(string text) => Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(text));
+        using (var found = await h.Guest.PostAsJsonAsync($"/api/v1/vms/dev/vault/scrubs/{scan["id"]!.GetValue<string>()}", new
+        {
+            step = "scan", complete = true,
+            hits = new object[]
+            {
+                new { path = B64("/root/.claude/projects/-root-repo/abc.jsonl"), indexes = new[] { 0 }, size = 20, type = "text" },
+                new { path = B64("/root/.secrets/db.json"), indexes = new[] { 0 }, size = 30, type = "text" },
+            },
+        }))
+            Assert.Equal(HttpStatusCode.NoContent, found.StatusCode);
+        var file = (await h.Bob.GetFromJsonAsync<JsonObject>("/api/v1/vault/files"))!["files"]!.AsArray().Single()!["id"]!.GetValue<string>();
+        using (var keep = await h.Bob.PostAsJsonAsync($"/api/v1/vault/files/{file}", new { action = "keep" }))
+            Assert.Equal(HttpStatusCode.NoContent, keep.StatusCode);
+
+        var seen = new List<Change>();
+        while (changes.Live.TryRead(out var change)) seen.Add(change);
+        var vault = seen.Where(c => c.Type.StartsWith("vault.", StringComparison.Ordinal)).ToArray();
+        Assert.Equal([VaultHostService.FileAdded, VaultHostService.FileEnded], vault.Select(c => c.Type));
+        Assert.All(vault, c => Assert.Equal((file, "dev", "bob", true), (c.Id, c.Vm, c.Owner, c.OwnerOnly)));
+    }
+
+    [Fact]
+    public async Task A_file_waiting_for_its_owner_ends_when_its_vm_is_deleted()
+    {
+        using var h = await Constructd.Tests.Vault.VaultHarness.CreateAsync();
+        await h.PutEntriesAsync(h.Entry("db", "pw-123456-long"));
+        await h.ApprovedAsync(h.Request("request", ["db"]));
+        await h.AnswerAsync(h.Request("release", ["db"]));
+        h.App.Clock.Advance(TimeSpan.FromSeconds(6));
+        var scan = (await h.Guest.GetFromJsonAsync<JsonObject>("/api/v1/vms/dev/vault/scrubs"))!["jobs"]!.AsArray().Single()!;
+        using (var found = await h.Guest.PostAsJsonAsync($"/api/v1/vms/dev/vault/scrubs/{scan["id"]!.GetValue<string>()}", new
+        {
+            step = "scan", complete = true,
+            hits = new[] { new { path = Convert.ToBase64String("/root/a.txt"u8.ToArray()), indexes = new[] { 0 }, size = 10, type = "text" } },
+        }))
+            Assert.Equal(HttpStatusCode.NoContent, found.StatusCode);
+        var file = (await h.Bob.GetFromJsonAsync<JsonObject>("/api/v1/vault/files"))!["files"]!.AsArray().Single()!["id"]!.GetValue<string>();
+        using var changes = h.App.Service<ChangeFeed>().Subscribe(null);
+
+        await h.Vault.PurgeVmAsync("dev", default);
+
+        var seen = new List<Change>();
+        while (changes.Live.TryRead(out var change)) seen.Add(change);
+        var ended = Assert.Single(seen, c => c.Type == VaultHostService.FileEnded);
+        Assert.Equal((file, "dev", "bob", true), (ended.Id, ended.Vm, ended.Owner, ended.OwnerOnly));
+        Assert.Empty((await h.Bob.GetFromJsonAsync<JsonObject>("/api/v1/vault/files"))!["files"]!.AsArray());
     }
 
     private sealed record Event(long Seq, string Type, string? Id, string? Vm);

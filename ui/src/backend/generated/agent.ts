@@ -607,6 +607,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/vault/files": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Files on the user's VMs that a scrub found still holding a secret after its lease ended: path, the secrets' names, type and size, never the content. Agent logs are redacted without asking and are not listed. Each file waits for keep, redact or delete and never expires. */
+        get: operations["ListVaultFiles"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/vault/files/{engine}/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description keep leaves the file as it is; redact replaces the secrets in it and delete removes it, on the VM's next scrub. On a locked engine a redact first unlocks the VM; a VM that is not running keeps the redaction until its next unlock. 404 not-found: no such file, or it was decided already. */
+        post: operations["DecideVaultFile"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/vault/engines/{engine}/mode": {
         parameters: {
             query?: never;
@@ -1259,6 +1293,9 @@ export interface components {
             running: boolean;
             parts: components["schemas"]["UpdatePart"][];
         };
+        FileDecision: {
+            action: string;
+        };
         ForwardView: {
             id: string;
             label: string;
@@ -1573,6 +1610,23 @@ export interface components {
         };
         VaultEntryRequestsView: {
             requests: components["schemas"]["VaultEntryRequestItem"][];
+            unreachable: string[];
+        };
+        VaultFileItem: {
+            engine: string;
+            engineName: string;
+            id: string;
+            vm: string;
+            path: string;
+            names: string[];
+            type: string;
+            /** Format: int64 */
+            size: number;
+            /** Format: int64 */
+            createdAt: number;
+        };
+        VaultFilesView: {
+            files: components["schemas"]["VaultFileItem"][];
             unreachable: string[];
         };
         VaultModeRequest: {
@@ -2874,6 +2928,69 @@ export interface operations {
             cookie?: never;
         };
         requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description An error. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["AgentProblem"];
+                };
+            };
+        };
+    };
+    ListVaultFiles: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VaultFilesView"];
+                };
+            };
+            /** @description An error. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["AgentProblem"];
+                };
+            };
+        };
+    };
+    DecideVaultFile: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                engine: string;
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FileDecision"];
+            };
+        };
         responses: {
             /** @description No Content */
             204: {

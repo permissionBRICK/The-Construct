@@ -324,7 +324,7 @@ upstream certificate comes from the VM's local CA, `/etc/construct/tls/ca.crt` o
 
 **Scrubs on hosted VMs** run inside the VM, so they need neither your PC nor SSH. When a lease ends,
 the host queues a scan. The VM's minute heartbeat picks it up and runs the same scan, and agent
-logs are redacted at once. Other files wait for your decision in the Companion or on the phone,
+logs are redacted at once. Other files wait for your decision in the Companion, Construct's vault card or on the phone,
 and are handled on a later heartbeat. Only one scan per VM runs at a time. A scan that never
 reports back is handed out again after 30 minutes. A locked VM's scrub waits until it is unlocked.
 
@@ -349,6 +349,17 @@ leases on the old one and scrubs it from those VMs, as the sync does today.
 | `GET /api/v1/vault/entry-requests` | user or device | Pending `ask` requests: VM, name, the agent's description and reason, expiry |
 | `POST /api/v1/vault/entry-requests/{id}` | device | `{payload, updatedAt, hasUsername}`: the value sealed with `K`; `409 exists` when the name is taken |
 | `POST /api/v1/vault/entry-requests/{id}/decline` | user or device | Removes the request |
+| `GET /api/v1/vault/files` | owner or paired phone | Files a scrub found still holding a secret: VM, path, secret names, type, size |
+| `POST /api/v1/vault/files/{id}` | owner or paired phone | `{action: keep\|redact\|delete}`; `404` once decided |
+
+**Files that still hold a secret.** When a scrub finds a value outside the agent logs, the host keeps a
+decision for that file and announces it (`vault.file.added`, and `vault.file.ended` once answered). Construct
+on your devices asks for it the way it asks for an approval: a yellow card per VM, on top of the pop-out, the
+window's pages and the phone, and on its own from the tray while Construct is closed. Each file shows its path
+and the secrets in it, with **Keep**, **Delete** (asked again in place) and **Redact**; **Redact all** answers
+every file of that VM. A file waits until you answer; it never expires. Redact and Delete reach the VM on its
+next scrub. On a `locked` host a redaction needs `K` on the VM, so **Redact** first unlocks the VM, as an allow
+does; a VM that is off keeps the redaction until it is unlocked again.
 
 ## Security model
 

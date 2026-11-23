@@ -6,8 +6,9 @@ import { section, VM_PAGES, type Page, type Route } from '../model/route';
 import { Icon, type IconName } from './icons';
 import { Btn, Dot, Pip } from './kit';
 import { na, useApp } from './ctx';
-import { EverythingBlock, JobBlock, NEEDS_RUNNING, PowerBtn, ReinstallConfirm, SignInBlock, SignInCard, SignInCards, Tiles, VaultCard, VaultCards, WarnedBlock } from './blocks';
+import { EverythingBlock, FilesCard, JobBlock, NEEDS_RUNNING, PowerBtn, ReinstallConfirm, SignInBlock, SignInCard, SignInCards, Tiles, VaultCard, VaultCards, WarnedBlock } from './blocks';
 import { lostSignIns } from '../model/signin';
+import { filesByVm } from '../model/vault';
 import { PageView } from './pages';
 
 /* The three surfaces from the same parts: the tray pop-out (the stack), the window (sidebar, VM tabs,
@@ -127,25 +128,33 @@ export function PopOut() {
   return <div class="pop" ref={fit}>{s.firstRun ? <PageView /> : <Stack footer />}</div>;
 }
 
-/** A card alone, popped from the tray while Construct is closed: the vault's, else a lost sign-in's (S36). The vault
-    card's buttons and the cross close it; a sign-in started from the card runs here and closes it once nothing is
-    left to show. */
+/** A card alone, popped from the tray while Construct is closed: the vault's (a request, else a VM's files that still
+    hold a secret), else a lost sign-in's (S36). The vault card's buttons and the cross close it; a sign-in started
+    from the card runs here and closes it once nothing is left to show. */
 export function Alone() {
   const { s, shell } = useApp();
   // A card done gives way to the next one waiting; the surface closes once none is left.
   const [gone, setGone] = useState<string[]>([]);
   const r = s.vaultRequests.find(x => !gone.includes('v:' + x.id));
+  const files = filesByVm(s.vaultFiles.filter(f => !gone.includes('f:' + f.id)))[0];
   const lost = lostSignIns(s.vms).find(l => !gone.includes('n:' + l.vm.id + '/' + l.id.id));
-  const any = !!r || !!lost || !!s.signIn;
+  // A file answer that has not landed keeps the surface open: if it fails, the file comes back for another try.
+  const [landing, setLanding] = useState(0);
+  const open = !!r || !!files || !!lost || !!s.signIn || landing > 0;
   const shown = useRef(false);
   useEffect(() => {
-    if (any) shown.current = true;
+    if (open) shown.current = true;
     else if (shown.current) shell.close();
-  }, [any]);
+  }, [open]);
+  const fileDone = (id: string, landed: Promise<boolean>) => {
+    setLanding(n => n + 1);
+    void landed.then(ok => { if (ok) setGone(g => [...g, 'f:' + id]); }, () => {}).finally(() => setLanding(n => n - 1));
+  };
   const fit = useFit();
   return (
     <div class="alone" ref={fit}>
       {r ? <VaultCard key={r.id} r={r} onDone={() => setGone(g => [...g, 'v:' + r.id])} />
+        : files ? <FilesCard key={files[0].hostId + '/' + files[0].vmName} files={files} onDone={fileDone} />
         : lost ? <SignInCard key={lost.vm.id + '/' + lost.id.id} vm={lost.vm} agent={lost.id.id} onDone={() => setGone(g => [...g, 'n:' + lost.vm.id + '/' + lost.id.id])} />
         : s.signIn ? <SignInBlock si={s.signIn} /> : null}
     </div>

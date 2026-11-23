@@ -83,6 +83,17 @@ describe('FakeBackend', () => {
     expect(s.history[0].event).toBe('Allowed 2 h');
   });
 
+  it('answers each file that still holds a secret and records it', () => {
+    const be = new FakeBackend({ scene: 'files', timers: false });
+    const [a, b] = be.snapshot().vaultFiles;
+    be.answerFile(a.id, 'keep');
+    be.answerFile(b.id, 'redact');
+    const s = be.snapshot();
+    expect(s.vaultFiles).toEqual([]);
+    expect(s.history.slice(0, 2).map(h => h.event)).toEqual([`Redacted ${b.path}`, `Kept ${a.path}`]);
+    expect(s.notice?.text).toBe('Redacting .env.local');
+  });
+
   it('allows a lease for the span the user chose', () => {
     const be = new FakeBackend({ scene: 'lease', timers: false });
     be.answerLease(be.snapshot().vaultRequests[0].id, true, 900);

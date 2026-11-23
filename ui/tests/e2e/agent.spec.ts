@@ -12,7 +12,7 @@ import { fileURLToPath } from 'node:url';
    and provisioned by the engine alone, an agent signed in on the step after it and the ready screen, a setting changed and the dot on Reprovision, a reprovision to its end,
    a failed reprovision retried, the repair agent's switch turned off and its chat switched on on the host, a failed step
    repaired by the agent started from the UI in Construct's chat (output, one reply, fixed, the job run again), a secret added and revealed, the VM asking for it through the engine's guest
-   routes and the card allowing it, a profile edited and saved, a reinstall to its end, a restore of the backup
+   routes and the card allowing it, the secret it gave back found in a file and redacted from the vault's card, a profile edited and saved, a reinstall to its end, a restore of the backup
    it left, then the second device paired. */
 
 const ui = fileURLToPath(new URL('../..', import.meta.url));
@@ -285,6 +285,36 @@ test('first run, a VM, a reprovision and a second device on the real API', async
     const text = await r.text();
     return text ? JSON.parse(text).status : `${r.status()} pending`;
   }).toBe('ok');
+
+  // The VM gives the lease back; once its cleanup is due the VM scans its disk. The hit in an agent log is redacted
+  // without asking; the one in a secrets file asks in the vault's card, and Redact reaches the VM on its next scrub.
+  const b64 = (t: string) => Buffer.from(t).toString('base64');
+  const text = (b: string) => Buffer.from(b, 'base64').toString();
+  expect((await guest.post('/api/v1/vms/alpha/vault/requests', { data: { v: 1, op: 'release', names: ['deploy-token'] } })).status()).toBe(200);
+  type ScrubJob = { id: string; step: string; files: { path: string; action: string; patterns: string[] }[] };
+  const scrubs = async () => ((await (await guest.get('/api/v1/vms/alpha/vault/scrubs')).json()) as { jobs: ScrubJob[] }).jobs;
+  let scan: ScrubJob | undefined;
+  await expect.poll(async () => (scan = (await scrubs()).find(j => j.step === 'scan'))?.id ?? null, { timeout: 20000 }).not.toBeNull();
+  const found = await guest.post(`/api/v1/vms/alpha/vault/scrubs/${scan!.id}`, {
+    data: { step: 'scan', complete: true, hits: [
+      { path: b64('/root/.claude/projects/-root/session.jsonl'), indexes: [0], size: 900, type: 'text' },
+      { path: b64('/root/.secrets/deploy.json'), indexes: [0], size: 64, type: 'text' },
+    ] },
+  });
+  expect(found.status()).toBe(204);
+  const files = pa.getByRole('alertdialog', { name: 'Secrets in files on alpha' });
+  await expect(files).toBeVisible();
+  await expect(files.getByRole('group')).toHaveCount(1);
+  const deploy = files.getByRole('group', { name: '/root/.secrets/deploy.json' });
+  await expect(deploy).toContainText('deploy-token');
+  await deploy.getByRole('button', { name: 'Redact' }).click();
+  await expect(files).toHaveCount(0);
+  const applied: { path: string; action: string; patterns: string[] }[] = [];
+  await expect.poll(async () => {
+    for (const j of await scrubs()) if (j.step === 'apply') applied.push(...j.files.map(f => ({ ...f, path: text(f.path), patterns: f.patterns.map(text) })));
+    return applied.map(f => `${f.action} ${f.path}`).sort();
+  }).toEqual(['redact /root/.claude/projects/-root/session.jsonl', 'redact /root/.secrets/deploy.json']);
+  expect(applied.find(f => f.path === '/root/.secrets/deploy.json')!.patterns).toContain('e2e-secret-value');
 
   // Claude Code, signed in on the sign-in step, is reported signed out by the VM: a card like the vault's offers Sign
   // in on the overview; put away, it stays away.

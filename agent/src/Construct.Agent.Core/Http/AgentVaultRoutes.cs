@@ -80,6 +80,17 @@ public static class AgentVaultRoutes
             return TypedResults.NoContent();
         }).WithName("DeclineEntryRequest");
 
+        vault.MapGet("/files", async (DeviceAgent agent, CancellationToken ct) => TypedResults.Ok(await agent.VaultFilesAsync(ct)))
+            .WithName("ListVaultFiles")
+            .WithDescription("Files on the user's VMs that a scrub found still holding a secret after its lease ended: path, the secrets' names, type and size, never the content. Agent logs are redacted without asking and are not listed. Each file waits for keep, redact or delete and never expires.");
+
+        vault.MapPost("/files/{engine}/{id}", async (DeviceAgent agent, string engine, string id, [FromBody] FileDecision decision, CancellationToken ct) =>
+        {
+            await agent.DecideFileAsync(engine, id, decision.Action, ct);
+            return TypedResults.NoContent();
+        }).WithName("DecideVaultFile")
+            .WithDescription("keep leaves the file as it is; redact replaces the secrets in it and delete removes it, on the VM's next scrub. On a locked engine a redact first unlocks the VM; a VM that is not running keeps the redaction until its next unlock. 404 not-found: no such file, or it was decided already.");
+
         vault.MapGet("/engines/{engine}/mode", async (DeviceAgent agent, string engine, CancellationToken ct) => TypedResults.Ok(await agent.VaultModeAsync(engine, ct)))
             .WithName("GetVaultMode");
 
