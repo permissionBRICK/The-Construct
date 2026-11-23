@@ -17,19 +17,23 @@ public static class EngineRun
         var stopping = host.Services.GetRequiredService<IHostApplicationLifetime>().ApplicationStopping;
         try
         {
+            // A start that fails, or that a failing background service cancels, still fails the run.
             await host.StartAsync().ConfigureAwait(false);
-            await host.WaitForShutdownAsync().ConfigureAwait(false);
-        }
-        catch (OperationCanceledException) when (stopping.IsCancellationRequested)
-        {
-            logger.LogWarning("The engine's stop ran past its shutdown timeout; requests and work still running were cut off.");
             try
             {
-                await host.Services.GetRequiredService<IHostLifetime>().StopAsync(CancellationToken.None).WaitAsync(LifetimeStop).ConfigureAwait(false);
+                await host.WaitForShutdownAsync().ConfigureAwait(false);
             }
-            catch (Exception ex)
+            catch (OperationCanceledException) when (stopping.IsCancellationRequested)
             {
-                logger.LogWarning("The host lifetime did not finish its stop: {Error}", Core.Logic.SafeError.Describe(ex));
+                logger.LogWarning("The engine's stop ran past its shutdown timeout; requests and work still running were cut off.");
+                try
+                {
+                    await host.Services.GetRequiredService<IHostLifetime>().StopAsync(CancellationToken.None).WaitAsync(LifetimeStop).ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    logger.LogWarning("The host lifetime did not finish its stop: {Error}", Core.Logic.SafeError.Describe(ex));
+                }
             }
         }
         finally

@@ -45,6 +45,18 @@ public sealed class EngineRunTests
         await Assert.ThrowsAsync<InvalidOperationException>(() => EngineRun.RunAsync(host, host.Services.GetRequiredService<ILoggerFactory>().CreateLogger("engine")));
     }
 
+    [Fact]
+    public async Task A_start_cancelled_by_a_failing_background_service_still_fails_the_run()
+    {
+        var builder = Host.CreateApplicationBuilder();
+        builder.Logging.ClearProviders();
+        builder.Services.AddHostedService<FailsInTheBackground>();
+        builder.Services.AddHostedService<StartsUntilCancelled>();
+        var host = builder.Build();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            EngineRun.RunAsync(host, host.Services.GetRequiredService<ILoggerFactory>().CreateLogger("engine")).WaitAsync(TimeSpan.FromSeconds(10)));
+    }
+
     private static (IHost Host, ServiceLikeLifetime Lifetime, CapturedLogs Logs) Build()
     {
         var lifetime = new ServiceLikeLifetime();
@@ -86,6 +98,24 @@ public sealed class EngineRunTests
 
         public Task StopAsync(CancellationToken cancellationToken) =>
             Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken).ContinueWith(_ => { }, TaskScheduler.Default);
+    }
+
+    /// <summary>Fails after its start returned, so the host stops itself while the next service still starts.</summary>
+    private sealed class FailsInTheBackground : BackgroundService
+    {
+        protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+        {
+            await Task.Delay(50, stoppingToken);
+            throw new InvalidOperationException("background failure");
+        }
+    }
+
+    /// <summary>A start that ends only when the host cancels it.</summary>
+    private sealed class StartsUntilCancelled : IHostedService
+    {
+        public Task StartAsync(CancellationToken cancellationToken) => Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+
+        public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
     }
 
     private sealed class FailsToStart : IHostedService
