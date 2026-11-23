@@ -139,8 +139,9 @@ d="$(setup_fixture "opencode-watcher" "false" "stable")"
 printf '{"t3code":false,"t3codeChannel":"stable","opencodeBackgroundWatcher":true}\n' \
   > "${d}/backup/backup-info.json"
 cp "${ROOT}/bin/install-ai-tools.sh" "${d}/repo/bin/install-ai-tools.sh"
-# install-ai-tools.sh sources this helper from its own directory.
+# install-ai-tools.sh sources these helpers from its own directory.
 cp "${ROOT}/bin/t3code-patched.sh" "${d}/repo/bin/t3code-patched.sh"
+cp "${ROOT}/bin/apt-wait.sh" "${d}/repo/bin/apt-wait.sh"
 mkdir -p "${d}/repo/extension/vm"
 cp "${ROOT}/extension/vm/opencode-background.js" "${d}/repo/extension/vm/opencode-background.js"
 make_systemctl_stub "${d}"
