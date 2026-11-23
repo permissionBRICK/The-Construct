@@ -144,7 +144,7 @@ public sealed class ProfileSync : IDisposable
     public EngineReplica? Replica(string account)
     {
         if (_replicas.TryGetValue(account, out var existing)) return existing;
-        if (!Participating().Contains(account, StringComparer.Ordinal)) return null;
+        if (!_keys.GrantingAccounts(EngineGrants.Records).Contains(account, StringComparer.Ordinal) || !_stores.TakesPart(account)) return null;
         lock (_create)
         {
             if (_replicas.TryGetValue(account, out existing)) return existing;
@@ -174,9 +174,6 @@ public sealed class ProfileSync : IDisposable
         }
     }
 
-    // The accounts that granted D here and whose store this engine takes part in.
-    private IEnumerable<string> Participating() => _keys.GrantingAccounts(EngineGrants.Records).Where(_stores.TakesPart);
-
     private string ReplicaPath(string account) =>
         Path.Combine(_directory, "replica-" + Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(account)))[..16] + ".db");
 
@@ -186,7 +183,8 @@ public sealed class ProfileSync : IDisposable
         await _loop.WaitAsync(ct);
         try
         {
-            foreach (var account in Participating().ToArray())
+            // The accounts that granted D here and whose store this engine takes part in.
+            foreach (var account in _keys.GrantingAccounts(EngineGrants.Records).Where(_stores.TakesPart).ToArray())
             {
                 try
                 {
