@@ -12,12 +12,12 @@ import { spanText } from './api/map';
    own, so a scene stays exactly as it is. */
 
 export type Scene =
-  | 'calm' | 'update' | 'update-nightly' | 'everything' | 'off' | 'changed' | 'lease' | 'enter' | 'files' | 'file' | 'job' | 'failed' | 'failed-reinstall' | 'repair' | 'repair-chat' | 'updating' | 'restart'
+  | 'calm' | 'update' | 'update-nightly' | 'everything' | 'off' | 'changed' | 'lease' | 'enter' | 'files' | 'file' | 'file-fails' | 'job' | 'failed' | 'failed-reinstall' | 'repair' | 'repair-chat' | 'updating' | 'restart'
   | 'pairing' | 'pair-confirm' | 'revoked' | 'handout' | 'creating' | 'created' | 'sign-in' | 'sign-in-failed' | 'sign-in-browser' | 'sign-in-key' | 'signed-out' | 'signed-out-two'
   | 'upgrade-intro' | 'upgrade-engine' | 'upgrade-name' | 'upgrade-code' | 'upgrade-close' | 'upgrade-convert' | 'upgrade-host' | 'upgrade-done' | 'upgrade-restart'
   | 'first-run' | 'first-run-restart' | 'warned' | 'old-guest' | 'upstream';
 
-export const SCENES: Scene[] = ['calm', 'update', 'update-nightly', 'everything', 'off', 'changed', 'lease', 'enter', 'files', 'file', 'job', 'failed', 'failed-reinstall', 'repair', 'repair-chat', 'updating', 'restart', 'pairing', 'pair-confirm', 'revoked', 'handout', 'creating', 'created', 'sign-in', 'sign-in-failed', 'sign-in-browser', 'sign-in-key', 'signed-out', 'signed-out-two', 'upgrade-intro', 'upgrade-engine', 'upgrade-name', 'upgrade-code', 'upgrade-close', 'upgrade-convert', 'upgrade-host', 'upgrade-done', 'upgrade-restart', 'first-run', 'first-run-restart', 'warned', 'old-guest', 'upstream'];
+export const SCENES: Scene[] = ['calm', 'update', 'update-nightly', 'everything', 'off', 'changed', 'lease', 'enter', 'files', 'file', 'file-fails', 'job', 'failed', 'failed-reinstall', 'repair', 'repair-chat', 'updating', 'restart', 'pairing', 'pair-confirm', 'revoked', 'handout', 'creating', 'created', 'sign-in', 'sign-in-failed', 'sign-in-browser', 'sign-in-key', 'signed-out', 'signed-out-two', 'upgrade-intro', 'upgrade-engine', 'upgrade-name', 'upgrade-code', 'upgrade-close', 'upgrade-convert', 'upgrade-host', 'upgrade-done', 'upgrade-restart', 'first-run', 'first-run-restart', 'warned', 'old-guest', 'upstream'];
 
 /** Things the preview frame can make happen, beside the user's own actions. */
 export type Demo = 'lease' | 'enter' | 'file' | 'release' | 'fail-next' | 'change';
@@ -39,6 +39,8 @@ export class FakeBackend implements Backend {
   private tickMs: number;
   private seq = 1;
   private failNext = false;
+  /** File answers that fail (scene file-fails): the engine did not take them, the file comes back. */
+  private failFiles = 0;
   private pending: ReturnType<typeof setTimeout>[] = [];
 
   constructor(opts: FakeOptions = {}) {
@@ -122,6 +124,7 @@ export class FakeBackend implements Backend {
       // A scrub after a lease ended found the secret in files outside the agent logs: each waits for keep, redact or delete.
       case 'files': d.vaultFiles.push(...FILES.map(f => ({ ...f }))); break;
       case 'file': d.vaultFiles.push({ ...FILES[0] }); break;
+      case 'file-fails': d.vaultFiles.push({ ...FILES[0] }); this.failFiles = 1; break;
       case 'job': d.jobs.push(this.newJob('atlas', 'reprovision', 3, 62)); break;
       case 'failed': case 'repair': case 'repair-chat': {
         // 'repair-chat': the host runs the repair in Construct's chat (`repair.chat`) instead of a T3 Code thread.
@@ -680,14 +683,20 @@ export class FakeBackend implements Backend {
     }, value === null ? 'Skipped' : 'Saved in the vault');
   }
 
-  answerFile(fileId: string, action: FileAction) {
+  answerFile(fileId: string, action: FileAction): Promise<boolean> {
     const f = this.s.vaultFiles.find(x => x.id === fileId);
-    if (!f) return;
+    if (!f) return Promise.resolve(true);
+    if (this.failFiles > 0) {
+      this.failFiles--;
+      this.set(d => { d.vaultFiles = d.vaultFiles.filter(x => x.id !== fileId); });
+      return new Promise(done => setTimeout(() => { this.set(d => { d.vaultFiles.push({ ...f }); }, 'The engine did not answer in time.'); done(false); }, 50));
+    }
     const name = f.path.split('/').pop() || f.path;
     this.set(d => {
       d.vaultFiles = d.vaultFiles.filter(x => x.id !== fileId);
       d.history.unshift({ at: 'now', vmName: f.vmName, secret: f.secrets.join(', '), event: action === 'keep' ? `Kept ${f.path}` : action === 'redact' ? `Redacted ${f.path}` : `Deleted ${f.path}` });
     }, `${action === 'keep' ? 'Kept' : action === 'redact' ? 'Redacting' : 'Deleting'} ${name}`);
+    return Promise.resolve(true);
   }
 
   addSecret(name: string, note: string, value: string) {

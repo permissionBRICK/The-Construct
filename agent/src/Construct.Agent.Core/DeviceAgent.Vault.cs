@@ -414,22 +414,17 @@ public sealed partial class DeviceAgent
 
     // ---- plumbing ----
 
+    // All engines at once, so one that does not answer delays the others by nothing (each call has its own timeout).
     private async Task<IReadOnlyList<(EngineView Engine, JsonObject Body)>> FromEnginesAsync(string path, CancellationToken ct)
     {
-        var answers = new List<(EngineView, JsonObject)>();
-        foreach (var engine in Engines().Where(e => e.Enrolled || e.SignedIn))
+        async Task<(EngineView Engine, JsonObject? Body)> Ask(EngineView engine)
         {
-            try
-            {
-                if (await EngineSendAsync(Find(engine.Id)!, HttpMethod.Get, path, null, ct).ConfigureAwait(false) is { } body) answers.Add((engine, body));
-            }
-            catch (AgentFailure)
-            {
-                // Not reached or refused: the view names it.
-            }
+            try { return (engine, await EngineSendAsync(Find(engine.Id)!, HttpMethod.Get, path, null, ct).ConfigureAwait(false)); }
+            catch (AgentFailure) { return (engine, null); } // Not reached or refused: the view names it.
         }
 
-        return answers;
+        var answers = await Task.WhenAll(Engines().Where(e => e.Enrolled || e.SignedIn).Select(Ask)).ConfigureAwait(false);
+        return answers.Where(a => a.Body is not null).Select(a => (a.Engine, a.Body!)).ToArray();
     }
 
     private string[] Unanswered(IReadOnlyList<(EngineView Engine, JsonObject Body)> answered) =>

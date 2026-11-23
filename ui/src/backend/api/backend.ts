@@ -1791,22 +1791,24 @@ export class ApiBackend implements Backend {
 
   /** Takes the file off the screen at once and answers it at the engine that found it. One decided meanwhile elsewhere
       stays away; one whose answer failed comes back. */
-  answerFile(key: string, action: FileAction) {
+  answerFile(key: string, action: FileAction): Promise<boolean> {
     const f = this.s.vaultFiles.find(x => x.id === key);
-    if (!f) return;
+    if (!f) return Promise.resolve(true);
     this.answeredKeys.add(key);
     this.emit({ vaultFiles: this.s.vaultFiles.filter(x => x.id !== key) });
     const [engine, id] = splitRequestKey(key);
     const name = f.path.split('/').pop() || f.path;
-    void (async () => {
+    return (async () => {
       try {
         await ok(this.agent.POST('/api/vault/files/{engine}/{id}', { params: { path: { engine, id } }, body: { action } }));
         this.note(`${action === 'keep' ? 'Kept' : action === 'redact' ? 'Redacting' : 'Deleting'} ${name}`);
+        return true;
       } catch (e) {
-        if (e instanceof ApiError && e.status === 404 && e.code === 'not-found') { this.note(`${name}: decided already`); return; }
+        if (e instanceof ApiError && e.status === 404 && e.code === 'not-found') { this.note(`${name}: decided already`); return true; }
         this.note(errText(e));
         this.answeredKeys.delete(key);
         await this.loadRequests();
+        return false;
       }
     })();
   }

@@ -336,6 +336,24 @@ test('files that still hold a secret are answered in the vault card: Delete asks
   await expect(page.getByRole('button', { name: 'Control panel' })).toBeVisible();
 });
 
+test('a file answer that fails brings the file back to the lone card, which stays open for another try', async ({ page }) => {
+  await page.addInitScript(() => {
+    const sent: unknown[] = [];
+    (window as unknown as { __sent: unknown[] }).__sent = sent;
+    (window as unknown as { chrome: unknown }).chrome = { webview: { postMessage: (m: unknown) => { sent.push(m); } } };
+  });
+  await open(page, 'alone', 'file-fails', 'dark');
+  const closes = () => page.evaluate(() => (window as unknown as { __sent: { type: string }[] }).__sent.filter(m => m.type === 'close').length);
+  const card = page.getByRole('alertdialog', { name: 'Secrets in files on atlas' });
+  await card.getByRole('button', { name: 'Redact', exact: true }).click();
+  // The fake engine refuses this first answer after 50 ms.
+  await page.waitForTimeout(300);
+  await expect(card.getByRole('group', { name: '/root/.secrets/forge.json' })).toHaveCount(1);
+  expect(await closes()).toBe(0);
+  await card.getByRole('button', { name: 'Redact', exact: true }).click();
+  await expect.poll(closes).toBe(1);
+});
+
 test('the lone vault card of a VM\'s files stays until each file is answered, then closes the surface', async ({ page }) => {
   await page.addInitScript(() => {
     const sent: unknown[] = [];

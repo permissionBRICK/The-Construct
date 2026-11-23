@@ -74,9 +74,9 @@ export function EverythingBlock({ e }: { e: Everything }) {
 /** Files on one VM that a scrub found still holding secrets after their lease ended, in the vault's yellow card: one
     line per file with the secrets in it. Redact is the usual answer (with several files, Redact all); Delete asks in
     place. */
-export function FilesCard({ files, onDone }: { files: VaultFile[]; onDone?: (id: string) => void }) {
+export function FilesCard({ files, onDone }: { files: VaultFile[]; onDone?: (id: string, landed: Promise<boolean>) => void }) {
   const { be } = useApp();
-  const answer = (f: VaultFile, action: FileAction) => { be.answerFile(f.id, action); onDone?.(f.id); };
+  const answer = (f: VaultFile, action: FileAction) => { const landed = be.answerFile(f.id, action); onDone?.(f.id, landed); };
   const one = files.length === 1;
   const vm = files[0];
   return (

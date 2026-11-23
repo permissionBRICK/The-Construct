@@ -555,8 +555,9 @@ export interface Backend {
   answerLease(requestId: string, allow: boolean, ttlSeconds?: number): void;
   /** `value` null declines the request. */
   enterSecret(requestId: string, value: string | null): void;
-  /** Keep leaves the file as it is; redact replaces the secrets in it, delete removes it, on the VM's next scrub. */
-  answerFile(fileId: string, action: FileAction): void;
+  /** Keep leaves the file as it is; redact replaces the secrets in it, delete removes it, on the VM's next scrub.
+      Resolves true once the engine has the answer (or had one already), false when it failed and the file is back. */
+  answerFile(fileId: string, action: FileAction): Promise<boolean>;
   addSecret(name: string, note: string, value: string): void;
   /** A new value for an existing secret. */
   replaceSecret(name: string, value: string): void;
