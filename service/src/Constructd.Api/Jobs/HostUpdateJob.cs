@@ -256,7 +256,7 @@ public sealed class HostUpdateJob(IHostUpdateStore store, IReleaseSource source,
     }
     private UpdateHandoff Handoff(string id,string commit,StagedUpdate staged,string? thumbprint,UpdatesConfig settings)=>
         new(id,commit,staged.StagedPath,AppContext.BaseDirectory,options.ScriptsDir,DataDir,"constructd",release.Installed.Commit,
-            "https://127.0.0.1:"+(new Uri(options.ListenUrl ?? "https://0.0.0.0:7462").Port)+"/api/v1/health",thumbprint ?? "",
+            $"https://127.0.0.1:{options.ApiPort()}/api/v1/health",thumbprint ?? "",
             Path.Combine(AppContext.BaseDirectory,OperatingSystem.IsWindows() ? "Constructd.Api.exe" : "Constructd.Api"),Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(32)),clock.UtcNow,release.SchemaVersion,settings.HealthTimeoutSeconds);
     /// <summary>The certificate thumbprint the updater's health check pins.</summary>
     private string? HealthPin()

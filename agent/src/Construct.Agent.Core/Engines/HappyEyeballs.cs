@@ -6,9 +6,8 @@ namespace Construct.Agent.Engines;
 /// <summary>
 /// Connects to an engine by name the way RFC 8305 ("Happy Eyeballs") does: the addresses of the family the resolver
 /// lists first are tried at once, the other family's after <see cref="Stagger"/> (or as soon as the first family has
-/// failed), and whichever connects first is used; the other attempt is cancelled and its socket disposed. An engine
-/// listens on IPv4 only (its <c>ListenUrl</c>), so a host name that also has an AAAA record otherwise waits for the
-/// refused IPv6 connect (on Windows about 2 s of SYN retries) before .NET tries IPv4.
+/// failed), and whichever connects first is used; the other attempt is cancelled and its socket disposed. This keeps
+/// connections fast even when one address family is unreachable, filtered, or served by an older IPv4-only engine.
 /// </summary>
 public static class HappyEyeballs
 {

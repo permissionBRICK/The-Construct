@@ -16,7 +16,8 @@ public sealed class UpdateHandoffAuthenticationHandler(IOptionsMonitor<Authentic
     protected override async Task<AuthenticateResult> HandleAuthenticateAsync()
     {
         if(Request.Path!="/api/v1/health" || !HttpMethods.IsGet(Request.Method) ||
-            Context.Connection.RemoteIpAddress is not {} ip || !IPAddress.IsLoopback(ip) || gate.State!=MaintenanceState.Maintenance)
+            Context.Connection.RemoteIpAddress is not {} ip || !IPAddress.IsLoopback(ip.IsIPv4MappedToIPv6 ? ip.MapToIPv4() : ip) ||
+            gate.State!=MaintenanceState.Maintenance)
             return AuthenticateResult.NoResult();
         var header=Request.Headers.Authorization.ToString();
         if(!header.StartsWith(SchemeName+" ",StringComparison.OrdinalIgnoreCase)) return AuthenticateResult.NoResult();

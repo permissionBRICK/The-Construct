@@ -97,9 +97,7 @@ public sealed class HttpsGateway : IHttpsForwardHost, IHostedService, IAsyncDisp
         _services = services;
         _logger = logger;
         _addresses = addresses ?? new DnsHostAddressResolver();
-        _listenAddress = IPAddress.TryParse(options.ListenAddress, out var listen) && listen.AddressFamily == AddressFamily.InterNetwork
-            ? listen
-            : throw new InvalidOperationException("Constructd:ListenAddress must be an IPv4 address.");
+        _listenAddress = DualStackListener.ParseListenAddress(options.ListenAddress);
     }
 
     /// <summary>The loopback port the shared listener relays the vault pages to; zero while there is none.</summary>
@@ -719,8 +717,7 @@ public sealed class HttpsGateway : IHttpsForwardHost, IHostedService, IAsyncDisp
 
         public void Start(IPAddress address)
         {
-            _listener = new TcpListener(address, Port);
-            _listener.Start();
+            _listener = DualStackListener.Start(address, Port);
             _accepting = Task.Run(AcceptLoopAsync);
         }
 

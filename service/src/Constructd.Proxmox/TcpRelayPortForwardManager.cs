@@ -73,7 +73,7 @@ public sealed class TcpRelayPortForwardManager : IPortForwardManager, IAsyncDisp
                 "allocated independently, so an overlap hands the same public port to two VMs.");
         }
 
-        _listenAddress = IPAddress.Parse(ArgumentGuard.IPv4(options.ListenAddress, "Constructd:ListenAddress"));
+        _listenAddress = DualStackListener.ParseListenAddress(options.ListenAddress);
         _sshPorts = new PortAllocator(ssh.Start, ssh.End);
         _appPorts = new PortAllocator(app.Start, app.End);
     }
@@ -455,19 +455,7 @@ public sealed class TcpRelayPortForwardManager : IPortForwardManager, IAsyncDisp
         return false;
     }
 
-    private bool CanBind(int port)
-    {
-        using var socket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
-        try
-        {
-            socket.Bind(new IPEndPoint(_listenAddress, port));
-            return true;
-        }
-        catch (SocketException)
-        {
-            return false;
-        }
-    }
+    private bool CanBind(int port) => DualStackListener.CanBind(_listenAddress, port);
 
     private static string SshKey(string vmName) => $"ssh:{vmName}";
 
@@ -482,7 +470,7 @@ public sealed class TcpRelayPortForwardManager : IPortForwardManager, IAsyncDisp
         Action onConnectFailure,
         ILogger logger) : IAsyncDisposable
     {
-        private readonly TcpListener _listener = new(listenAddress, port);
+        private TcpListener? _listener;
         private readonly CancellationTokenSource _stop = new();
         private Task? _accepting;
         private int _active;
@@ -495,7 +483,7 @@ public sealed class TcpRelayPortForwardManager : IPortForwardManager, IAsyncDisp
 
         public void Start()
         {
-            _listener.Start();
+            _listener = DualStackListener.Start(listenAddress, Port);
             _accepting = Task.Run(AcceptLoopAsync);
         }
 
@@ -507,7 +495,7 @@ public sealed class TcpRelayPortForwardManager : IPortForwardManager, IAsyncDisp
                 TcpClient client;
                 try
                 {
-                    client = await _listener.AcceptTcpClientAsync(token).ConfigureAwait(false);
+                    client = await _listener!.AcceptTcpClientAsync(token).ConfigureAwait(false);
                 }
                 catch (OperationCanceledException)
                 {
@@ -597,7 +585,7 @@ public sealed class TcpRelayPortForwardManager : IPortForwardManager, IAsyncDisp
         public async ValueTask DisposeAsync()
         {
             await _stop.CancelAsync().ConfigureAwait(false);
-            _listener.Stop();
+            _listener?.Stop();
             if (_accepting is not null)
             {
                 try
