@@ -181,10 +181,13 @@ public sealed class UpgradeTests
         }
 
         Assert.Equal("running", row!["state"]!.GetValue<string>());
+        // The action and the VM, short enough to leave room for the job's step beside it.
+        Assert.Equal("Reprovision agent-vm", row["label"]!.GetValue<string>());
         Assert.False(string.IsNullOrEmpty(row["message"]?.GetValue<string>()));
         Assert.InRange(row["percent"]!.GetValue<int>(), 0, 100);
         Assert.NotNull(progress);
         Assert.InRange(progress!["percent"]!.GetValue<int>(), 20, 99);
+        Assert.Equal("Reprovision agent-vm", progress["label"]!.GetValue<string>());
 
         hold.SetResult();
         await rig.Agent.Host.Upgrade.Work;
@@ -802,7 +805,9 @@ public sealed class UpgradeTests
         Assert.Equal("Old Construct; moves next", Message("host:"));
         // Enrolled where the host can enrol this device; a second engine cannot while the store is this PC's (E12): signed in.
         Assert.Contains(Message("host-update:"), new[] { "Moved, enrolled", "Moved, signed in" });
-        Assert.Equal("None of yours", Message("host-reprovision:"));
+        // None of the host's VMs is the user's: no row to show, and the host is done.
+        Assert.DoesNotContain(view["items"]!.AsArray(), i => i!["id"]!.GetValue<string>().StartsWith("host-reprovision:", StringComparison.Ordinal));
+        Assert.Contains("host-reprovision:" + LegacyState.Slug(remote.Url), rig.Agent.Host.Upgrade.Bridge.Read().Done);
         Assert.Empty(view["oldHosts"]!.AsArray());
         var added = (await rig.Agent.GetAsync("api/state"))["engines"]!.AsArray().Single(e => e!["url"]!.GetValue<string>() == remote.Url)!;
         Assert.True(added["enrolled"]!.GetValue<bool>() || added["signedIn"]!.GetValue<bool>());
@@ -812,7 +817,7 @@ public sealed class UpgradeTests
         // A second run moves nothing again and starts no reprovision there.
         var again = await rig.ConvertAsync();
         Assert.DoesNotContain(again["items"]!.AsArray(), i => i!["id"]!.GetValue<string>().StartsWith("host-update:", StringComparison.Ordinal));
-        Assert.Equal("skipped", again["items"]!.AsArray().Single(i => i!["id"]!.GetValue<string>().StartsWith("host-reprovision:", StringComparison.Ordinal))!["state"]!.GetValue<string>());
+        Assert.DoesNotContain(again["items"]!.AsArray(), i => i!["id"]!.GetValue<string>().StartsWith("host-reprovision:", StringComparison.Ordinal));
         Assert.Equal(1, old.Stages);
     }
 
@@ -942,10 +947,12 @@ public sealed class UpgradeTests
         var converted = await rig.ConvertAsync();
         Assert.Equal("converted", converted["stage"]!.GetValue<string>());
         Assert.Equal(0, old.StoreCalls);
-        // The converter does not move it again; its moved-host rows run.
+        // The converter does not move it again; its moved-host step runs: none of its VMs is the user's, so no row, and the
+        // host is done.
         Assert.DoesNotContain(converted["items"]!.AsArray(), i => i!["id"]!.GetValue<string>().StartsWith("host-update:", StringComparison.Ordinal));
         Assert.Equal(1, old.Stages);
-        Assert.Equal(("done", "None of yours"), Row(converted, "host-reprovision:" + slug));
+        Assert.DoesNotContain(converted["items"]!.AsArray(), i => i!["id"]!.GetValue<string>().StartsWith("host-reprovision:", StringComparison.Ordinal));
+        Assert.Contains("host-reprovision:" + slug, rig.Agent.Host.Upgrade.Bridge.Read().Done);
     }
 
     [Fact]
@@ -1021,7 +1028,7 @@ public sealed class UpgradeTests
     /// client's key (the old provisioning removed the bootstrap key from the seed user), and the PC's old install pointing at it.
     /// </summary>
     private static async Task<(UpgradeRig Rig, EngineHost Remote, OldUntilStaged Old, OldHostGuest Guest)> OldHostWithVmAsync(VmState state = VmState.Running,
-        bool movedByItsAdmin = false)
+        bool movedByItsAdmin = false, string[]? more = null)
     {
         var old = new OldUntilStaged();
         var guest = new OldHostGuest();
@@ -1033,25 +1040,29 @@ public sealed class UpgradeTests
         });
         remote = movedByItsAdmin ? remote.WithSource() : remote.AddSource(OldUntilStaged.NewCommit);
         var remoteToken = await remote.AddUserAsync("alice", Role.Admin);
-        await remote.Services.GetRequiredService<IVmRepository>().AddAsync(new Vm("far", "alice", 2, 4, 50, DateTimeOffset.UtcNow.AddDays(-30),
-            state, null, null, IdlePolicy.Disabled, Vm.NoForwards, TokenKind: VmTokenKind.Primary), 10, CancellationToken.None);
-        remote.Services.GetRequiredService<FakeHypervisorDriver>().SetState("far", state);
+        string[] names = ["far", .. more ?? []];
+        foreach (var name in names)
+        {
+            await remote.Services.GetRequiredService<IVmRepository>().AddAsync(new Vm(name, "alice", 2, 4, 50, DateTimeOffset.UtcNow.AddDays(-30),
+                state, null, null, IdlePolicy.Disabled, Vm.NoForwards, TokenKind: VmTokenKind.Primary), 10, CancellationToken.None);
+            remote.Services.GetRequiredService<FakeHypervisorDriver>().SetState(name, state);
+        }
+
         var rig = await UpgradeRig.CreateAsync(f =>
         {
             SingleVm(f);
-            f.SshKey("construct_far_ed25519");
-            f.Instances(new JsonObject
+            var instances = new JsonObject();
+            foreach (var name in names)
             {
-                ["version"] = 1, ["defaultInstance"] = "agent-vm",
-                ["instances"] = new JsonObject
+                f.SshKey($"construct_{name}_ed25519");
+                instances[name] = new JsonObject
                 {
-                    ["far"] = new JsonObject
-                    {
-                        ["backend"] = "hyperv-remote", ["sshHost"] = "127.0.0.1", ["sshPort"] = 2201,
-                        ["service"] = new JsonObject { ["url"] = remote.Url, ["auth"] = "token" },
-                    },
-                },
-            });
+                    ["backend"] = "hyperv-remote", ["sshHost"] = "127.0.0.1", ["sshPort"] = 2201,
+                    ["service"] = new JsonObject { ["url"] = remote.Url, ["auth"] = "token" },
+                };
+            }
+
+            f.Instances(new JsonObject { ["version"] = 1, ["defaultInstance"] = "agent-vm", ["instances"] = instances });
             // The old client provisioned "far" from this PC with these choices.
             f.Write(Path.Combine("The-Construct", "instances", "far.json"), """{"version":1,"instance":"far","projects":["api"],"t3code":true}""");
             f.RemoteHost(remote.Url, remote.Pin, remoteToken);
@@ -1076,10 +1087,13 @@ public sealed class UpgradeTests
 
         var view = await rig.ConvertAsync();
 
-        Assert.Equal(("done", "On the new version"), Row(view, "host-reprovision:" + slug));
+        Assert.Equal(("done", "On the new version"), Row(view, $"host-reprovision:{slug}/far"));
         Assert.Equal(1, guest.Inner.Provisions);
         Assert.True(File.Exists(Constructd.Api.Jobs.ProvisionTargets.AdoptedKeyPath(remote.Services.GetRequiredService<ConstructdOptions>(), "far")));
         Assert.Equal("converted", view["stage"]!.GetValue<string>());
+        // The account key after the VM's rows: this device is not enrolled at that host (it keeps no store there), so the
+        // old client's way enrols it, once the VM's rows are through.
+        Assert.Equal(("done", "Enrolled"), Row(view, "recipient:far"));
     }
 
     [Fact]
@@ -1102,8 +1116,12 @@ public sealed class UpgradeTests
         {
             Assert.True(DateTime.UtcNow < until, "the row never showed the running reprovision: " + row?.ToJsonString());
             await Task.Delay(50);
-            row = (await rig.Agent.GetAsync("api/upgrade"))["items"]!.AsArray().SingleOrDefault(i => i!["id"]!.GetValue<string>() == "host-reprovision:" + slug);
+            row = (await rig.Agent.GetAsync("api/upgrade"))["items"]!.AsArray().SingleOrDefault(i => i!["id"]!.GetValue<string>() == $"host-reprovision:{slug}/far");
         }
+
+        // The action and the VM, not the host: the job's step shows beside it as it is.
+        Assert.Equal("Reprovision far", row["label"]!.GetValue<string>());
+        Assert.DoesNotContain("far:", row["message"]?.GetValue<string>() ?? "", StringComparison.Ordinal);
 
         Assert.False(rig.Agent.Host.Upgrade.Work.IsCompleted);
         hold.SetResult();
@@ -1112,7 +1130,7 @@ public sealed class UpgradeTests
 
         Assert.True(old.Staged);
         Assert.Equal("converted", view["stage"]!.GetValue<string>());
-        Assert.Equal(("done", "On the new version"), Row(view, "host-reprovision:" + slug));
+        Assert.Equal(("done", "On the new version"), Row(view, $"host-reprovision:{slug}/far"));
         Assert.Equal(1, guest.Inner.Provisions);
         // The key reached the engine (and the VM as root) before the job: the job dialled root with it, never the seed user.
         var options = remote.Services.GetRequiredService<ConstructdOptions>();
@@ -1129,9 +1147,10 @@ public sealed class UpgradeTests
         rig.AssertNoSecretInAgentFiles();
         Assert.DoesNotContain("PRIVATE KEY", File.ReadAllText(rig.Agent.Host.Upgrade.Bridge.Path), StringComparison.Ordinal);
 
-        // A second run starts no job there.
+        // A second run starts no job there: the host's VMs are all done.
+        Assert.Contains("host-reprovision:" + slug, rig.Agent.Host.Upgrade.Bridge.Read().Done);
         var again = await rig.ConvertAsync();
-        Assert.Equal("skipped", Row(again, "host-reprovision:" + slug).State);
+        Assert.DoesNotContain(again["items"]!.AsArray(), i => i!["id"]!.GetValue<string>().StartsWith("host-reprovision:", StringComparison.Ordinal));
         Assert.Equal(1, guest.Inner.Provisions);
     }
 
@@ -1145,7 +1164,7 @@ public sealed class UpgradeTests
 
         var view = await rig.ConvertAsync();
 
-        Assert.Equal(("done", "On the new version"), Row(view, "host-reprovision:" + slug));
+        Assert.Equal(("done", "On the new version"), Row(view, $"host-reprovision:{slug}/far"));
         Assert.Equal(VmState.Running, remote.Services.GetRequiredService<FakeHypervisorDriver>().StateOf("far"));
         Assert.Contains("start:far", remote.Services.GetRequiredService<FakeHypervisorDriver>().Calls);
         Assert.Equal(1, guest.Inner.Provisions);
@@ -1163,14 +1182,14 @@ public sealed class UpgradeTests
         var slug = LegacyState.Slug(remote.Url);
 
         var first = await rig.ConvertAsync();
-        var (state, message) = Row(first, "host-reprovision:" + slug);
+        var (state, message) = Row(first, $"host-reprovision:{slug}/far");
         Assert.Equal("failed", state);
-        Assert.StartsWith("far: Reprovision failed", message);
+        Assert.StartsWith("Reprovision failed", message);
         Assert.NotEqual("converted", first["stage"]!.GetValue<string>());
-        Assert.Equal(["host-reprovision:" + slug], first["items"]!.AsArray().Where(i => i!["state"]!.GetValue<string>() == "failed").Select(i => i!["id"]!.GetValue<string>()));
+        Assert.Equal([$"host-reprovision:{slug}/far"], first["items"]!.AsArray().Where(i => i!["state"]!.GetValue<string>() == "failed").Select(i => i!["id"]!.GetValue<string>()));
 
         var second = await rig.ConvertAsync();
-        Assert.Equal(("done", "On the new version"), Row(second, "host-reprovision:" + slug));
+        Assert.Equal(("done", "On the new version"), Row(second, $"host-reprovision:{slug}/far"));
         Assert.Equal("converted", second["stage"]!.GetValue<string>());
         Assert.Equal(2, guest.Inner.Provisions);
     }
@@ -1197,7 +1216,7 @@ public sealed class UpgradeTests
 
         var view = await rig.ConvertAsync();
 
-        Assert.Equal(("done", "On the new version"), Row(view, "host-reprovision:" + slug));
+        Assert.Equal(("done", "On the new version"), Row(view, $"host-reprovision:{slug}/far"));
         Assert.Equal(2, guest.Inner.Provisions);
         Assert.True(File.Exists(Constructd.Api.Jobs.ProvisionTargets.AdoptedKeyPath(options, "far")));
         Assert.DoesNotContain(bridge.Read().Done, d => d.StartsWith("host-vms:", StringComparison.Ordinal));
@@ -1226,10 +1245,64 @@ public sealed class UpgradeTests
         Assert.Equal("converting", open["stage"]!.GetValue<string>());
 
         var view = await rig.ConvertAsync();
-        Assert.Equal(("done", "On the new version"), Row(view, "host-reprovision:" + slug));
+        Assert.Equal(("done", "On the new version"), Row(view, $"host-reprovision:{slug}/far"));
         Assert.Equal(2, guest.Inner.Provisions);
         Assert.Equal("converted", view["stage"]!.GetValue<string>());
         Assert.Equal("converted", (await rig.Agent.GetAsync("api/upgrade"))["stage"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public async Task Each_VM_of_a_moved_host_has_its_own_row_and_Move_over_again_redoes_only_the_failed_one()
+    {
+        var (rig, remote, _, guest) = await OldHostWithVmAsync(more: ["near"]);
+        using var _ = remote;
+        await using var __ = rig;
+        guest.Inner.FailProvisions = 1;
+        var slug = LegacyState.Slug(remote.Url);
+
+        // One after the other, by name: "far" fails, "near" still runs and is done.
+        var first = await rig.ConvertAsync();
+        Assert.Equal("failed", Row(first, $"host-reprovision:{slug}/far").State);
+        Assert.Equal(("done", "On the new version"), Row(first, $"host-reprovision:{slug}/near"));
+        var rows = first["items"]!.AsArray().Where(i => i!["id"]!.GetValue<string>().StartsWith("host-reprovision:", StringComparison.Ordinal)).ToArray();
+        Assert.Equal(["Reprovision far", "Reprovision near"], rows.Select(i => i!["label"]!.GetValue<string>()));
+        Assert.Equal([$"host-reprovision:{slug}/far"], first["items"]!.AsArray().Where(i => i!["state"]!.GetValue<string>() == "failed").Select(i => i!["id"]!.GetValue<string>()));
+        Assert.NotEqual("converted", first["stage"]!.GetValue<string>());
+        Assert.DoesNotContain("host-reprovision:" + slug, rig.Agent.Host.Upgrade.Bridge.Read().Done);
+        Assert.Equal(2, guest.Inner.Provisions);
+
+        var second = await rig.ConvertAsync();
+        Assert.Equal(("done", "On the new version"), Row(second, $"host-reprovision:{slug}/far"));
+        Assert.Equal(("skipped", "Done earlier"), Row(second, $"host-reprovision:{slug}/near"));
+        Assert.Equal(3, guest.Inner.Provisions);
+        Assert.Equal("converted", second["stage"]!.GetValue<string>());
+        Assert.Contains("host-reprovision:" + slug, rig.Agent.Host.Upgrade.Bridge.Read().Done);
+    }
+
+    [Fact]
+    public async Task A_host_saved_as_done_by_the_converter_with_one_row_per_host_is_not_redone()
+    {
+        // The converter before this one had one row per host ("host-reprovision:<host>"); a PC that saved it as done keeps
+        // it: none of that host's VMs is reprovisioned again.
+        var (rig, remote, _, guest) = await OldHostWithVmAsync();
+        using var _ = remote;
+        await using var __ = rig;
+        var slug = LegacyState.Slug(remote.Url);
+        await rig.ConvertAsync();
+        var bridge = rig.Agent.Host.Upgrade.Bridge;
+        bridge.Update(b => b with
+        {
+            Stage = "converting",
+            Done = [.. b.Done.Where(d => !d.StartsWith($"host-reprovision:{slug}/", StringComparison.Ordinal))],
+        });
+        Assert.Contains("host-reprovision:" + slug, bridge.Read().Done);
+        Assert.Equal(1, guest.Inner.Provisions);
+
+        var view = await rig.ConvertAsync();
+
+        Assert.DoesNotContain(view["items"]!.AsArray(), i => i!["id"]!.GetValue<string>().StartsWith("host-reprovision:", StringComparison.Ordinal));
+        Assert.Equal(1, guest.Inner.Provisions);
+        Assert.Equal("converted", view["stage"]!.GetValue<string>());
     }
 
     /// <summary>

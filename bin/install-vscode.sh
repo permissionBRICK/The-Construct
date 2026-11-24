@@ -54,7 +54,10 @@ VSCODE_STATUS_FILE="${VSCODE_STATUS_FILE:-/etc/construct/vscode-status}"
 # loaded below (env > saved config).
 _external_host_override="${CONSTRUCT_EXTERNAL_HOST:-}"
 
-if [[ "${EUID}" -ne 0 ]]; then
+# Sourced with CONSTRUCT_VSCODE_FUNCS_ONLY=true (unit tests) it defines its helpers and stops before Main.
+_FUNCS_ONLY="${CONSTRUCT_VSCODE_FUNCS_ONLY:-false}"
+
+if [[ "${EUID}" -ne 0 && "${_FUNCS_ONLY}" != "true" ]]; then
   err "Run with sudo: sudo ${REPO_DIR}/bin/install-vscode.sh"
   exit 1
 fi
@@ -92,7 +95,7 @@ VSCODE_EXTENSIONS="${VSCODE_EXTENSIONS:-}"
 CLAUDE_PARTIAL_STREAMING="${CLAUDE_PARTIAL_STREAMING:-true}"
 # Apply the mic-passthrough VM patch (recorder shim + chat-mic gate) to the same
 # extension when the saved preference is on, so the chat mic button survives a
-# reprovision (the --force reinstall below wipes any on-demand patch). Off by default.
+# reprovision (an extension update below brings a stock build). Off by default.
 MIC_PASSTHROUGH="${MIC_PASSTHROUGH:-false}"
 # Commit of the *desktop* VS Code client that will Remote-SSH into this VM
 # (full 40-char sha, detected on the host by Provision-AgentVM.ps1). The
@@ -217,6 +220,13 @@ vscode_server_arch() {
   esac
 }
 
+# The home of the connection user, whose ~/.vscode-server Remote-SSH uses.
+connection_home() {
+  local home
+  home="$(getent passwd "${CLAUDE_USER:-root}" | cut -d: -f6)"
+  printf '%s' "${home:-/root}"
+}
+
 # ----------------------------------------------------------------------------
 # Pre-seed the Remote-SSH server so the FIRST connect from the desktop client is
 # as fast as the second. On a fresh VM, Remote-SSH's bootstrap downloads and
@@ -239,8 +249,7 @@ vscode_server_arch() {
 preinstall_remote_ssh_server() {
   local user home data_dir cli_commit commit arch tmp srv_dir lru
   user="${CLAUDE_USER:-root}"
-  home="$(getent passwd "${user}" | cut -d: -f6)"
-  [[ -n "${home}" ]] || home="/root"
+  home="$(connection_home)"
   data_dir="${home}/.vscode-server"
 
   cli_commit="$(/usr/local/bin/code --version 2>/dev/null | sed -n 's/.*commit \([0-9a-f]\{8,\}\).*/\1/p')"
@@ -315,20 +324,31 @@ preinstall_remote_ssh_server() {
   return 0
 }
 
+# The version of the server build a `code-server` binary belongs to (its
+# product.json), or nothing when unknown.
+code_server_version() {
+  python3 -I -c 'import json, sys; print(json.load(open(sys.argv[1], encoding="utf-8")).get("version", ""))' \
+    "$(dirname "$1")/../product.json" 2>/dev/null || true
+}
+
 # Resolve a usable `code-server` binary into the CODE_SERVER_BIN global (return
 # 0), or return 1 if none is available. Reuses one already on disk (any mode's
-# server -- they share the same install format), else downloads the REH server
-# matching this CLI's commit. Sets globals rather than printing so the caller can
-# invoke it WITHOUT command substitution: a subshell would discard PREINSTALL_TMP
-# and leak the downloaded tree. On download, PREINSTALL_TMP is the dir to rm -rf.
+# server -- they share the same install format), the newest build, since the CLI
+# installs only extension versions its own build supports; else downloads the REH
+# server matching this CLI's commit. Sets globals rather than printing so the
+# caller can invoke it WITHOUT command substitution: a subshell would discard
+# PREINSTALL_TMP and leak the downloaded tree. On download, PREINSTALL_TMP is the
+# dir to rm -rf.
 CODE_SERVER_BIN=""
 PREINSTALL_TMP=""
 find_or_fetch_code_server() {
   local user_data_dir="$1" bin commit arch url fallback_url tmp
   CODE_SERVER_BIN=""; PREINSTALL_TMP=""
-  # 1. Reuse any server binary already present (Remote-SSH / serve-web / tunnel).
+  # 1. Reuse the newest server binary already present (Remote-SSH / serve-web / tunnel).
   bin="$(find "${user_data_dir}/cli/servers" /var/lib/vscode-serve-web /var/lib/vscode-tunnel \
-           -type f -name code-server 2>/dev/null | head -n1)"
+           -type f -name code-server 2>/dev/null \
+         | while IFS= read -r found; do printf '%s\t%s\n' "$(code_server_version "${found}")" "${found}"; done \
+         | sort -t $'\t' -k1,1V | tail -n1 | cut -f2-)"
   if [[ -n "${bin}" && -x "${bin}" ]]; then
     CODE_SERVER_BIN="${bin}"; return 0
   fi
@@ -351,6 +371,161 @@ find_or_fetch_code_server() {
   return 1
 }
 
+# VS Code's own record of the extensions in an extensions dir: extensions.json names
+# the folder each installed extension uses, .obsolete the folders an update or an
+# uninstall left behind.
+#   state <dir> <id> [<server version>]
+#     "<version> <folder> <pre-release 0|1> <fits 0|1>" for the installed copy of <id>,
+#     nothing when there is none. fits=0: that version needs a newer VS Code than the
+#     server build, whose CLI would put an older version in its place.
+#   prune <dir> <id>
+#     Removes the folders of <id> that extensions.json no longer lists (older versions:
+#     VS Code only marks them in .obsolete and deletes them on a later server start, so
+#     they pile up) and their .obsolete entries. Never the listed one, nothing while
+#     none is listed, and not a folder a running process still uses (a CLI or language
+#     server started from it).
+extensions_record() {
+  python3 -I - "$@" <<'PY'
+import json, os, re, shutil, sys
+
+command, ext_dir, wanted = sys.argv[1], sys.argv[2], sys.argv[3].lower()
+
+
+def read_json(path):
+    try:
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return None
+
+
+def listed():
+    """The folder extensions.json names for the wanted id (with its package.json) and its entry."""
+    entries = read_json(os.path.join(ext_dir, "extensions.json"))
+    for entry in entries if isinstance(entries, list) else []:
+        if not isinstance(entry, dict) or str((entry.get("identifier") or {}).get("id", "")).lower() != wanted:
+            continue
+        location = entry.get("location") if isinstance(entry.get("location"), dict) else {}
+        folder = entry.get("relativeLocation") or os.path.basename(str(location.get("path", "")).rstrip("/"))
+        if folder and os.path.isfile(os.path.join(ext_dir, folder, "package.json")):
+            return folder, entry
+    return None, None
+
+
+def version(text):
+    found = re.search(r"(\d+)\.(\d+|x)\.(\d+|x)", text or "")
+    return tuple(int(p) if p.isdigit() else 0 for p in found.groups()) if found else None
+
+
+def in_use():
+    """Every file a running process has as its program, its working directory or mapped."""
+    used = set()
+    for pid in os.listdir("/proc"):
+        if not pid.isdigit():
+            continue
+        for link in ("exe", "cwd"):
+            try:
+                used.add(os.readlink(f"/proc/{pid}/{link}").removesuffix(" (deleted)"))
+            except OSError:
+                pass
+        try:
+            with open(f"/proc/{pid}/maps", encoding="utf-8", errors="replace") as f:
+                for line in f:
+                    fields = line.split(None, 5)
+                    if len(fields) == 6 and fields[5].startswith("/"):
+                        used.add(fields[5].rstrip("\n").removesuffix(" (deleted)"))
+        except OSError:
+            pass
+    return used
+
+
+folder, entry = listed()
+if folder is None:
+    sys.exit(0)
+
+if command == "state":
+    manifest = read_json(os.path.join(ext_dir, folder, "package.json"))
+    if not isinstance(manifest, dict):
+        sys.exit(0)
+    need = str((manifest.get("engines") or {}).get("vscode", "*")).strip()
+    server = version(sys.argv[4] if len(sys.argv) > 4 else "")
+    fits = 0 if server and version(need) and version(need) > server else 1
+    pre = 1 if (entry.get("metadata") or {}).get("preRelease") else 0
+    print(manifest.get("version") or entry.get("version") or "unknown", folder, pre, fits)
+    sys.exit(0)
+
+# prune
+prefix = wanted + "-"
+stale = []
+for name in sorted(os.listdir(ext_dir)):
+    path = os.path.join(ext_dir, name)
+    low = name.lower()
+    if name == folder or not low.startswith(prefix) or not low[len(prefix):][:1].isdigit():
+        continue
+    if os.path.islink(path) or not os.path.isdir(path):
+        continue
+    manifest = read_json(os.path.join(path, "package.json"))
+    if isinstance(manifest, dict) and f'{manifest.get("publisher", "")}.{manifest.get("name", "")}'.lower() != wanted:
+        continue  # another extension whose name starts with this one's
+    stale.append(name)
+# A folder another extensions.json names (a named profile's, under the data directory) stays.
+data_dir = os.path.dirname(os.path.normpath(ext_dir))
+for root, dirs, files in os.walk(data_dir):
+    dirs[:] = [d for d in dirs if d not in ("extensions", "cli", "node_modules")]
+    if "extensions.json" in files:
+        listing = read_json(os.path.join(root, "extensions.json"))
+        for item in listing if isinstance(listing, list) else []:
+            if not isinstance(item, dict):
+                continue
+            where = item.get("location") if isinstance(item.get("location"), dict) else {}
+            named = item.get("relativeLocation") or os.path.basename(str(where.get("path", "")).rstrip("/"))
+            if named in stale:
+                print(f"  kept {named}: a profile uses it")
+                stale.remove(named)
+if not stale:
+    sys.exit(0)
+
+# A connected VS Code window keeps extensions loaded that no file handle shows: old versions wait for a later
+# provision while an extension host runs.
+for pid in os.listdir("/proc"):
+    if not pid.isdigit():
+        continue
+    try:
+        with open(f"/proc/{pid}/cmdline", "rb") as f:
+            args = f.read().split(b"\0")
+    except OSError:
+        continue
+    if b"--type=extensionHost" in args:
+        print("  kept the older versions: a VS Code window is connected; a later provision removes them")
+        sys.exit(0)
+
+used = in_use()
+removed = []
+for name in stale:
+    path = os.path.realpath(os.path.join(ext_dir, name))
+    if any(u == path or u.startswith(path + "/") for u in used):
+        print(f"  kept {name}: a running process uses it")
+        continue
+    shutil.rmtree(path, ignore_errors=True)
+    if os.path.exists(path):
+        print(f"  could not remove {name}")
+        continue
+    removed.append(name)
+    print(f"  removed the older version {name}")
+
+obsolete = os.path.join(ext_dir, ".obsolete")
+marks = read_json(obsolete)
+if removed and isinstance(marks, dict) and any(name in marks for name in removed):
+    left = {k: v for k, v in marks.items() if k not in removed}
+    if left:
+        with open(obsolete + ".construct-tmp", "w", encoding="utf-8") as f:
+            json.dump(left, f)
+        os.replace(obsolete + ".construct-tmp", obsolete)
+    else:
+        os.remove(obsolete)
+PY
+}
+
 # ----------------------------------------------------------------------------
 # Pre-install the agents' VS Code extensions into the Remote-SSH server so a
 # freshly (re)provisioned VM already has them when the user connects -- no
@@ -362,15 +537,20 @@ find_or_fetch_code_server() {
 # --server-data-dir rather than `code ext install`: the latter only works when
 # SSH_CONNECTION is set (it isn't under sudo) and ignores --extensions-dir.
 #
+# A reprovision reuses what is installed: a missing extension is installed, an
+# installed one is replaced only when the marketplace has another version on its
+# channel (each is 0.4-1.1 GB unpacked), and the older versions an update leaves
+# behind are removed. An entry may pin a version (id@1.2.3).
+#
 # Best-effort: a download/marketplace failure warns but never aborts provisioning.
 # ----------------------------------------------------------------------------
 preinstall_extensions() {
-  local user home data_dir ext_dir exts srv ext out rc=0
-  local -a derived=() arr=()
+  local user home data_dir ext_dir exts srv="" server_version="" spec id pin out rc=0
+  local before after cur folder pre fits new new_folder failed claude=0 claude_folder=""
+  local -a derived=() arr=() args=()
 
   user="${CLAUDE_USER:-root}"
-  home="$(getent passwd "${user}" | cut -d: -f6)"
-  [[ -n "${home}" ]] || home="/root"
+  home="$(connection_home)"
   data_dir="${home}/.vscode-server"
   ext_dir="${data_dir}/extensions"
 
@@ -390,67 +570,106 @@ preinstall_extensions() {
 
   # Call WITHOUT command substitution so the helper's globals (CODE_SERVER_BIN,
   # PREINSTALL_TMP) survive into this scope and the temp dir gets cleaned up.
-  if ! find_or_fetch_code_server "${data_dir}"; then
-    warn "  WARNING: no code-server binary available (download failed?); skipping extension pre-install"
-    return 0
+  if find_or_fetch_code_server "${data_dir}"; then
+    srv="${CODE_SERVER_BIN}"
+    server_version="$(code_server_version "${srv}")"
+  else
+    warn "  WARNING: no code-server binary available (download failed?); nothing installed, the installed extensions are patched"
+    rc=1
   fi
-  srv="${CODE_SERVER_BIN}"
 
   install -d -m 0755 "${ext_dir}"
   IFS=',' read -ra arr <<<"${exts}"
-  for ext in "${arr[@]}"; do
-    ext="${ext// /}"; [[ -n "${ext}" ]] || continue
-    if out="$("${srv}" --install-extension "${ext}" --force \
-                --extensions-dir "${ext_dir}" --server-data-dir "${data_dir}" 2>&1)"; then
-      ok "  installed ${ext}"
+  for spec in "${arr[@]}"; do
+    spec="${spec// /}"; [[ -n "${spec}" ]] || continue
+    id="${spec%%@*}"; pin=""
+    if [[ "${spec}" == *@* ]]; then pin="${spec#*@}"; fi
+    if [[ "${id,,}" == "anthropic.claude-code" ]]; then claude=1; fi
+    before="$(extensions_record state "${ext_dir}" "${id}" "${server_version}")"
+    read -r cur folder pre fits <<<"${before}"
+
+    # Missing: install it (the newest version this server build supports, or the
+    # pinned one). Pinned: install the pinned version when another one is there.
+    # Otherwise --force asks the marketplace and replaces the copy only when it has
+    # another version on the copy's channel (release, or pre-release when the user
+    # chose that); a current copy stays as it is. Left alone when it needs a newer
+    # VS Code than this build, whose CLI would put an older version in its place.
+    args=(); failed=0
+    if [[ -z "${srv}" ]]; then
+      :
+    elif [[ -z "${cur}" ]]; then
+      args=(--install-extension "${spec}")
+    elif [[ -n "${pin}" ]]; then
+      if [[ "${cur}" == "${pin}" ]]; then
+        note "  ${id} ${cur} (pinned) is installed"
+      else
+        args=(--install-extension "${spec}" --force)
+      fi
+    elif [[ "${fits}" == "1" ]]; then
+      args=(--install-extension "${id}" --force)
+      if [[ "${pre}" == "1" ]]; then args+=(--pre-release); fi
     else
-      warn "  WARNING: failed to install ${ext}"
-      printf '%s\n' "${out}" | tail -n3 >&2
-      rc=1
+      note "  ${id} ${cur} needs a newer VS Code than this server (${server_version:-unknown}); VS Code updates it itself"
     fi
+    if [[ "${#args[@]}" -gt 0 ]] \
+       && ! out="$("${srv}" "${args[@]}" --extensions-dir "${ext_dir}" --server-data-dir "${data_dir}" 2>&1)"; then
+      warn "  WARNING: failed to install ${spec}"
+      printf '%s\n' "${out}" | tail -n3 >&2
+      failed=1; rc=1
+    fi
+
+    after="$(extensions_record state "${ext_dir}" "${id}" "${server_version}")"
+    read -r new new_folder _ <<<"${after}"
+    if [[ -n "${new}" && "${new} ${new_folder}" != "${cur} ${folder}" ]]; then
+      if [[ -n "${cur}" ]]; then ok "  updated ${id} ${cur} -> ${new}"; else ok "  installed ${id} ${new}"; fi
+      if [[ "${id,,}" == "anthropic.claude-code" ]]; then claude_folder="${new_folder}"; fi
+    elif [[ -n "${cur}" && "${#args[@]}" -gt 0 && "${failed}" -eq 0 ]]; then
+      note "  ${id} ${cur} is current"
+    fi
+    extensions_record prune "${ext_dir}" "${id}" || warn "  WARNING: could not remove the older versions of ${id}"
   done
 
-  # The extension was just (re)installed with --force, which replaces extension.js and
-  # invalidates any patch backups from a prior provision. Drop them so the enable steps
-  # below back up THIS build, never stale bytes a later revert could wrongly restore.
-  rm -f "${ext_dir}"/anthropic.claude-code-*/extension.js.construct-*.bak \
-        "${ext_dir}"/anthropic.claude-code-*/dist/extension.js.construct-*.bak 2>/dev/null || true
+  # Drop the patch backups of every Claude Code build before the patch steps, as before: each backup holds the bytes
+  # of the moment its patch went on, possibly with the other patch on already, so restoring one could bring the other
+  # back. Without them each disable step reverts its own transform in place, independently of the other, and each
+  # enable step skips a copy that is already patched (or backs up a freshly installed build).
+  rm -f "${ext_dir:?}"/anthropic.claude-code-*/extension.js.construct-*.bak \
+        "${ext_dir:?}"/anthropic.claude-code-*/dist/extension.js.construct-*.bak 2>/dev/null || true
 
-  # Apply Construct's Remote-SSH extension patches to the freshly-installed
+  # Apply Construct's Remote-SSH extension patches to the installed
   # anthropic.claude-code build. Each is reversible + idempotent; run with the
   # connection user's HOME so they target the right extensions dir, and before the
   # chown so any rewritten files (and .bak backups) get re-homed to the user.
-  case ",${exts}," in
-    *",anthropic.claude-code,"*)
-      # 1) Partial-message streaming. The stock build gates it on !remoteName, so over
-      #    Remote-SSH the chat panel shows nothing until each assistant turn is fully
-      #    generated ("stuck before the thinking block"). On by default.
-      if [[ "${CLAUDE_PARTIAL_STREAMING}" == "true" ]]; then
-        step "  Enabling Claude Code partial-message streaming over Remote-SSH"
-        HOME="${home}" bash "${REPO_DIR}/extension/vm/construct-partial-streaming-enable.sh" \
-          || warn "  WARNING: partial-streaming enable patch failed; continuing"
-      else
-        note "  Reverting Claude Code partial-message streaming to stock (CLAUDE_PARTIAL_STREAMING=false)"
-        HOME="${home}" bash "${REPO_DIR}/extension/vm/construct-partial-streaming-disable.sh" \
-          || warn "  WARNING: partial-streaming disable patch failed; continuing"
-      fi
-      # 2) Microphone passthrough (recorder shim + chat-mic speech gate). The --force
-      #    reinstall above wipes any on-demand mic patch, so re-apply it here when the
-      #    saved preference is on — otherwise the chat mic button is gone on the first
-      #    start after a reprovision. Off by default (opt-in); false reverts to stock.
-      #    The recorder shim is embedded from the repo (base64, as the host does).
-      if [[ "${MIC_PASSTHROUGH}" == "true" ]]; then
-        step "  Enabling Claude Code microphone passthrough (recorder shim + chat-mic gate)"
-        CONSTRUCT_SHIM_B64="$(base64 -w0 "${REPO_DIR}/extension/vm/construct-rec-shim.sh" 2>/dev/null)" \
-          HOME="${home}" bash "${REPO_DIR}/extension/vm/construct-audio-enable.sh" \
-          || warn "  WARNING: mic passthrough enable failed; continuing"
-      else
-        note "  Microphone passthrough off (MIC_PASSTHROUGH=false) — reverting any prior patch"
-        HOME="${home}" bash "${REPO_DIR}/extension/vm/construct-audio-disable.sh" \
-          || warn "  WARNING: mic passthrough disable failed; continuing"
-      fi
-      ;;
-  esac
+  if [[ "${claude}" -eq 1 ]]; then
+    # 1) Partial-message streaming. The stock build gates it on !remoteName, so over
+    #    Remote-SSH the chat panel shows nothing until each assistant turn is fully
+    #    generated ("stuck before the thinking block"). On by default.
+    if [[ "${CLAUDE_PARTIAL_STREAMING}" == "true" ]]; then
+      step "  Enabling Claude Code partial-message streaming over Remote-SSH"
+      HOME="${home}" bash "${REPO_DIR}/extension/vm/construct-partial-streaming-enable.sh" \
+        || warn "  WARNING: partial-streaming enable patch failed; continuing"
+    else
+      note "  Reverting Claude Code partial-message streaming to stock (CLAUDE_PARTIAL_STREAMING=false)"
+      HOME="${home}" bash "${REPO_DIR}/extension/vm/construct-partial-streaming-disable.sh" \
+        || warn "  WARNING: partial-streaming disable patch failed; continuing"
+    fi
+    # 2) Microphone passthrough (recorder shim + chat-mic speech gate). An update
+    #    above brings a stock build without any on-demand mic patch, so re-apply it
+    #    here when the saved preference is on — otherwise the chat mic button is gone
+    #    on the first start after a reprovision. Off by default (opt-in); false
+    #    reverts to stock. The recorder shim is embedded from the repo (base64, as the
+    #    host does).
+    if [[ "${MIC_PASSTHROUGH}" == "true" ]]; then
+      step "  Enabling Claude Code microphone passthrough (recorder shim + chat-mic gate)"
+      CONSTRUCT_SHIM_B64="$(base64 -w0 "${REPO_DIR}/extension/vm/construct-rec-shim.sh" 2>/dev/null)" \
+        HOME="${home}" bash "${REPO_DIR}/extension/vm/construct-audio-enable.sh" \
+        || warn "  WARNING: mic passthrough enable failed; continuing"
+    else
+      note "  Microphone passthrough off (MIC_PASSTHROUGH=false) — reverting any prior patch"
+      HOME="${home}" bash "${REPO_DIR}/extension/vm/construct-audio-disable.sh" \
+        || warn "  WARNING: mic passthrough disable failed; continuing"
+    fi
+  fi
 
   # We ran as root; hand the tree back to the connection user.
   chown -R "${user}:${user}" "${data_dir}" 2>/dev/null || true
@@ -662,6 +881,10 @@ setup_tunnel() {
 # ============================================================================
 # Main
 # ============================================================================
+if [[ "${_FUNCS_ONLY}" == "true" ]]; then
+  return 0 2>/dev/null || exit 0
+fi
+
 if [[ "${VSCODE_SERVER}" != "true" ]]; then
   note "VSCODE_SERVER=false; skipping VS Code CLI install"
   write_status

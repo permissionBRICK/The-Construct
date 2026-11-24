@@ -92,6 +92,7 @@ if [[ "$group" == service || "$group" == all ]]; then
   bash test/patch-status.test.sh
   bash test/opencode-install.test.sh
   bash test/vscode-download.test.sh
+  bash test/vscode-extensions.test.sh
   bash test/systemprompt-install.test.sh
   bash test/repair-agent.test.sh
   bash test/agent-sign-in.test.sh

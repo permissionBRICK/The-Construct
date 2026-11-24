@@ -207,7 +207,7 @@ export class FakeBackend implements Backend {
       case 'upgrade-close': d.upgrade = upgrade('close', { writers: ['VS Code'] }); break;
       case 'upgrade-convert': d.upgrade = upgrade('convert', { running: true, items: UPGRADE_ITEMS(8), progress: { pct: 9, label: 'Secret staging-db' } }); break;
       // The whole list as a PC with a shared host of the old stack sees it, the reprovision at the end running (R6, R7).
-      case 'upgrade-host': d.upgrade = upgrade('convert', { running: true, items: UPGRADE_ITEMS(CONVERT.length - 1), progress: { pct: 34, label: 'VM atlas on the new version' } }); break;
+      case 'upgrade-host': d.upgrade = upgrade('convert', { running: true, items: UPGRADE_ITEMS(CONVERT.length - 1), progress: { pct: 34, label: 'Reprovision atlas' } }); break;
       case 'upgrade-restart': d.upgrade = upgrade('engine', { restart: 'Windows has to restart to turn on Hyper-V.' }); break;
       case 'first-run': d.firstRun = firstRun(); break;
       case 'first-run-restart': d.firstRun = firstRun({ restart: 'Windows has to restart to turn on Hyper-V.' }); break;
@@ -1039,7 +1039,7 @@ const CONVERT: [string, string, string][] = [
   ...['forge-token', 'staging-db', 'deploy-key', 'npm-publish', 'mail-api'].map((x): [string, string, string] => ['secret:' + x, 'Secret ' + x, '']),
   ['backup-key:pc-key.dpapi', 'Old backup key', 'Kept for old backups'], ['recipient:atlas', 'Account backup key on atlas', 'Enrolled'],
   ['recipient:quarry', 'Account backup key on quarry', 'Old Construct, unchanged'], ['vm:atlas', 'VM atlas', 'Switched over'],
-  ['reprovision:atlas', 'VM atlas on the new version', 'On the new version'],
+  ['reprovision:atlas', 'Reprovision atlas', 'On the new version'],
 ];
 
 /** The items with the first `progress` done and the next one running; a running reprovision shows its job's step. */

@@ -1183,17 +1183,28 @@ describe('ApiBackend device, connections and vault', () => {
     on('GET', `/api/engines/${E1}/api/v1/me/updates`, { json: { autoReprovision: true } });
     on('PUT', '/api/device/settings', b => ({ json: { channel: 'stable', autoUpdate: true, startWithOs: false, ...(b as object) } }));
     on('PUT', `/api/engines/${E1}/api/v1/me/updates`, { json: { autoReprovision: false } });
+    // The host this user administers updates itself too; the one switch covers it (owner, 2026-11-24).
+    on('GET', `/api/engines/${E1}/api/v1/host/updates/status`, { json: { supportsAutoApply: true, installed: { commit: 'c'.repeat(40), packageVersion: '3.1.0', installedAt: null, source: 'x' }, current: null, history: [], recoveryRecord: null, latestKnown: null, version: '3.1.0', channel: 'main', auto: true, available: null, availableError: null, databaseCopy: null } });
+    on('GET', `/api/engines/${E1}/api/v1/host/config`, { json: { updates: { repository: 'o/r', channel: 'main', auto: true, drainTimeoutMinutes: 60, healthTimeoutSeconds: 120, source: 'stored', updatedAt: null } } });
+    on('PUT', `/api/engines/${E1}/api/v1/host/config`, { json: {} });
     await be.start();
     const s = be.snapshot();
     expect(s.release).toBe('3.3.0');
+    // An old host's "main" is the stable channel.
+    expect(s.hosts.find(h => h.id === E1)?.channel).toBe('stable');
     expect(s.prefs).toMatchObject({ channel: 'nightly', autoUpdate: true, startWithOs: true });
     be.setPrefs({ channel: 'stable' });
     be.setPrefs({ startWithOs: false });
     be.setPrefs({ autoUpdate: false });
+    // Flipped back before the host is read again: the host gets the latest position too.
+    be.setPrefs({ autoUpdate: true });
     await settle();
-    expect(posts(calls).map(c => [c.path, c.body])).toEqual([
+    const hostWrites = posts(calls).filter(c => c.path.endsWith('/host/config')).map(c => (c.body as { updates: { auto: boolean } }).updates.auto);
+    expect(hostWrites).toEqual([false, true]);
+    expect(posts(calls).slice(0, 5).map(c => [c.path, c.body])).toEqual([
       ['/api/device/settings', { channel: 'stable' }], ['/api/device/settings', { startWithOs: false }],
       ['/api/device/settings', { autoUpdate: false }], [`/api/engines/${E1}/api/v1/me/updates`, { autoReprovision: false }],
+      [`/api/engines/${E1}/api/v1/host/config`, { updates: { repository: 'o/r', channel: 'main', auto: false, drainTimeoutMinutes: 60, healthTimeoutSeconds: 120 } }],
     ]);
   });
 
@@ -1774,13 +1785,13 @@ describe('ApiBackend one-time upgrade', () => {
     expect(be.snapshot().upgrade?.progress).toEqual({ pct: 60, label: 'Installing' });
 
     const items = [{ id: 'vm:atlas', label: 'VM atlas', state: 'done', message: 'Switched over' },
-      { id: 'reprovision:atlas', label: 'VM atlas on the new version', state: 'running', message: 'Installing packages', percent: 15 }];
+      { id: 'reprovision:atlas', label: 'Reprovision atlas', state: 'running', message: 'Installing packages', percent: 15 }];
     on('GET', '/api/upgrade', { json: view({ engine: 'done', recovery: 'done', close: 'done', convert: 'running' },
-      { running: true, stage: 'converting', items, progress: { percent: 33, label: 'VM atlas on the new version' } }) });
+      { running: true, stage: 'converting', items, progress: { percent: 33, label: 'Reprovision atlas' } }) });
     be.onEvent('upgrade', null);
     await settle();
     const u = be.snapshot().upgrade!;
-    expect(u.progress).toEqual({ pct: 33, label: 'VM atlas on the new version' });
+    expect(u.progress).toEqual({ pct: 33, label: 'Reprovision atlas' });
     expect(u.items.find(i => i.id === 'reprovision:atlas')).toMatchObject({ state: 'running', count: 'Installing packages', pct: 15 });
   });
 
