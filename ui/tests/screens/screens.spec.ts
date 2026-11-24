@@ -262,6 +262,117 @@ test('the pop-out tells the desktop shell how tall its content is, an open menu 
   await expect.poll(async () => (await sizes()).at(-1)).toBeGreaterThanOrEqual(Math.ceil(menu.y + menu.height));
 });
 
+test('the pop-out disables text selection on chrome while keeping inputs, logs and vault file paths selectable', async ({ page }) => {
+  await open(page, 'pop', 'calm', 'dark');
+  const header = page.locator('.hd');
+  await expect(page.locator('.app.s-pop')).toHaveCSS('user-select', 'none');
+  await expect(page.locator('details.who summary')).toHaveCSS('user-select', 'none');
+  const box = (await header.boundingBox())!;
+  await page.mouse.move(box.x + 4, box.y + box.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width - 4, box.y + box.height / 2);
+  await page.mouse.up();
+  expect(await page.evaluate(() => getSelection()?.toString() ?? '')).toBe('');
+
+  await open(page, 'pop', 'enter', 'dark');
+  await expect(page.locator('input')).toHaveCSS('user-select', 'text');
+
+  await open(page, 'pop', 'failed-reinstall', 'dark');
+  await expect(page.locator('.logbox pre.code')).toHaveCSS('user-select', 'text');
+
+  await open(page, 'pop', 'files', 'dark');
+  await expect(page.locator('code.vfp').first()).toHaveCSS('user-select', 'all');
+});
+
+test('floating surfaces close open dropdown menus when blurred, hidden, escaped, or clicked outside and restore fitted height', async ({ page }) => {
+  await page.addInitScript(() => {
+    const sent: unknown[] = [];
+    const listeners = new Set<(e: { data?: unknown }) => void>();
+    (window as unknown as { __sent: unknown[]; __emitHost: (data: unknown) => void }).__sent = sent;
+    (window as unknown as { __emitHost: (data: unknown) => void }).__emitHost = data => {
+      for (const fn of listeners) fn({ data });
+    };
+    (window as unknown as { chrome: unknown }).chrome = {
+      webview: {
+        postMessage: (m: unknown) => { sent.push(m); },
+        addEventListener: (type: string, fn: (e: { data?: unknown }) => void) => { if (type === 'message') listeners.add(fn); },
+        removeEventListener: (type: string, fn: (e: { data?: unknown }) => void) => { if (type === 'message') listeners.delete(fn); },
+      },
+    };
+  });
+  await open(page, 'pop', 'calm', 'dark');
+  const sizes = () => page.evaluate(() => (window as unknown as { __sent: { type: string; height: number }[] }).__sent.filter(m => m.type === 'size').map(m => m.height));
+
+  const vmMenu = page.locator('details.who');
+  const openMenu = async () => {
+    await vmMenu.locator('summary').click();
+    await expect(vmMenu).toHaveAttribute('open', '');
+  };
+
+  // Losing focus (clicking off the pop-out) closes the VM switcher menu.
+  await openMenu();
+  await page.evaluate(() => window.dispatchEvent(new Event('blur')));
+  await expect(vmMenu).not.toHaveAttribute('open', '');
+
+  // Desktop shell hide notification closes the VM switcher menu.
+  await openMenu();
+  await page.evaluate(() => (window as unknown as { __emitHost: (d: unknown) => void }).__emitHost({ type: 'hide' }));
+  await expect(vmMenu).not.toHaveAttribute('open', '');
+
+  // Page becoming hidden (visibilitychange) closes the menu.
+  await openMenu();
+  await page.evaluate(() => {
+    Object.defineProperty(document, 'hidden', { configurable: true, get: () => true });
+    document.dispatchEvent(new Event('visibilitychange'));
+    delete (document as unknown as { hidden?: boolean }).hidden;
+  });
+  await expect(vmMenu).not.toHaveAttribute('open', '');
+
+  // Pressing Escape closes the menu.
+  await openMenu();
+  await page.keyboard.press('Escape');
+  await expect(vmMenu).not.toHaveAttribute('open', '');
+
+  // Clicking outside the menu inside the pop-out closes it.
+  await openMenu();
+  await page.locator('.host').click();
+  await expect(vmMenu).not.toHaveAttribute('open', '');
+
+  // Clicking a disabled control outside the menu also closes it.
+  await open(page, 'pop', 'off', 'dark');
+  await page.locator('details.who summary').click();
+  await expect(page.locator('details.who')).toHaveAttribute('open', '');
+  await page.getByRole('button', { name: 'Reinstall' }).click({ force: true });
+  await expect(page.locator('details.who')).not.toHaveAttribute('open', '');
+
+  // Secondary update menu also closes on blur.
+  await open(page, 'pop', 'update', 'dark');
+  const moreMenu = page.locator('details.more');
+  await moreMenu.locator('summary').click();
+  await expect(moreMenu).toHaveAttribute('open', '');
+  await page.evaluate(() => window.dispatchEvent(new Event('blur')));
+  await expect(moreMenu).not.toHaveAttribute('open', '');
+
+  // A menu that extends past the surface grows the fitted height and restores it on blur/hide.
+  await open(page, 'alone', 'lease', 'dark');
+  const baseHeight = Math.ceil((await page.locator('.alone').boundingBox())!.height);
+  await expect.poll(async () => (await sizes()).at(-1)).toBe(baseHeight);
+  const spanMenu = page.locator('details.more');
+  await spanMenu.locator('summary').click();
+  await expect(spanMenu).toHaveAttribute('open', '');
+  await expect.poll(async () => (await sizes()).at(-1)).toBeGreaterThan(baseHeight);
+  await page.evaluate(() => window.dispatchEvent(new Event('blur')));
+  await expect(spanMenu).not.toHaveAttribute('open', '');
+  await expect.poll(async () => (await sizes()).at(-1)).toBe(baseHeight);
+
+  await spanMenu.locator('summary').click();
+  await expect(spanMenu).toHaveAttribute('open', '');
+  await expect.poll(async () => (await sizes()).at(-1)).toBeGreaterThan(baseHeight);
+  await page.evaluate(() => (window as unknown as { __emitHost: (d: unknown) => void }).__emitHost({ type: 'hide' }));
+  await expect(spanMenu).not.toHaveAttribute('open', '');
+  await expect.poll(async () => (await sizes()).at(-1)).toBe(baseHeight);
+});
+
 test('the overview updates or signs in a coding agent in one click', async ({ page }) => {
   await open(page, 'win', 'calm', 'light');
   const codex = page.locator('tr', { hasText: 'Codex' });

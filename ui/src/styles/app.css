@@ -296,8 +296,11 @@ html[data-surf="alone"] body { background: transparent; }
 .app .vfs { flex: 1 1 110px; min-width: 0; color: var(--dim); overflow-wrap: anywhere; }
 .app .vfs .nw { white-space: nowrap; }
 .app .vfs .tg { margin-left: 8px; vertical-align: 1px; }
-/* the pop-out never scrolls sideways (finding 18); the shell sizes it to its content (finding 7) */
-.app.s-pop { overflow-x: hidden; }
+/* the pop-out never scrolls sideways (finding 18); the shell sizes it to its content (finding 7);
+   chrome text is not selectable so accidental clicks or drags do not highlight labels */
+.app.s-pop { overflow-x: hidden; user-select: none; -webkit-user-select: none; }
+.app.s-pop input, .app.s-pop textarea, .app.s-pop .code, .app.s-pop .term { user-select: text; -webkit-user-select: text; }
+.app.s-pop .sel { user-select: all; -webkit-user-select: all; }
 .app .blk > .confirm { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .app.s-alone { background: transparent; }
 

@@ -84,7 +84,7 @@ export function FilesCard({ files, onDone }: { files: VaultFile[]; onDone?: (id:
       <div class="bh"><Icon n="key" /><b>Secrets in files</b><span>{vm.vmName} · {vm.hostName}</span></div>
       {files.map(f => (
         <div key={f.id} class="vf" role="group" aria-label={f.path}>
-          <code class="vfp" title={f.size ? `${f.path} · ${sizeText(f.size)}` : f.path}>{f.path}</code>
+          <code class="vfp sel" title={f.size ? `${f.path} · ${sizeText(f.size)}` : f.path}>{f.path}</code>
           <div class="vfa">
             <span class="vfs">{f.secrets.map((n, i) => <span>{i ? ', ' : ''}<span class="nw">{n}</span></span>)}{f.type !== 'text' && <em class="tg">{f.type === 'sqlite' ? 'database' : 'binary'}</em>}</span>
             <Btn sm onClick={() => answer(f, 'keep')}>Keep</Btn>

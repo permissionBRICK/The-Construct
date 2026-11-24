@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using System.Text.Json;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.WinForms;
@@ -136,7 +137,16 @@ internal sealed class AgentWindow : Form
 
     public new void Hide()
     {
-        if (Floating && Visible) FocusLost?.Invoke();
+        if (Floating && Visible)
+        {
+            FocusLost?.Invoke();
+            if (!Broken && !_web.IsDisposed)
+            {
+                try { _web.CoreWebView2?.PostWebMessageAsJson("{\"type\":\"hide\"}"); }
+                catch (Exception ex) when (ex is ObjectDisposedException or InvalidOperationException or COMException) { _log(ex); }
+            }
+        }
+
         base.Hide();
     }
 

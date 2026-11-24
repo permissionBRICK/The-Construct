@@ -2,7 +2,11 @@ import { formatRoute, type Route } from '../model/route';
 import type { Shell } from './ctx';
 
 /** The WebView2 host object the Windows shell provides; absent in a browser. */
-interface WebViewHost { postMessage(message: unknown): void }
+interface WebViewHost {
+  postMessage(message: unknown): void;
+  addEventListener?(type: string, listener: (e: { data?: unknown }) => void): void;
+  removeEventListener?(type: string, listener: (e: { data?: unknown }) => void): void;
+}
 
 type Win = Pick<Window, 'location'> & { chrome?: { webview?: WebViewHost }; parent?: unknown };
 
@@ -36,6 +40,15 @@ export function makeShell(w: Win): Shell {
     fit(height: number) {
       // Only the desktop shell sizes its window; a framing document has no use for it.
       w.chrome?.webview?.postMessage({ type: 'size', height });
+    },
+    onHide(fn: () => void) {
+      const h = w.chrome?.webview;
+      if (!h || typeof h.addEventListener !== 'function' || typeof h.removeEventListener !== 'function') return () => {};
+      const onMessage = (e: { data?: unknown }) => {
+        if (e.data && typeof e.data === 'object' && (e.data as { type?: unknown }).type === 'hide') fn();
+      };
+      h.addEventListener('message', onMessage);
+      return () => h.removeEventListener!('message', onMessage);
     },
   };
 }
