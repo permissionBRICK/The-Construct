@@ -16002,6 +16002,10 @@
               "null",
               "string"
             ]
+          },
+          "ifUnset": {
+            "type": "boolean",
+            "default": false
           }
         }
       },

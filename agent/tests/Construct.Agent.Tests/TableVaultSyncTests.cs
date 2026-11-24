@@ -163,6 +163,76 @@ public sealed class TableVaultSyncTests
         Assert.Equal(revision, (await vault.GetEntriesAsync("alice", CancellationToken.None)).Revision);
     }
 
+    [Fact]
+    public async Task A_tombstone_from_one_host_is_kept_so_a_stale_copy_on_another_host_cannot_resurrect_it()
+    {
+        using var pc = new EngineHost();
+        using var hostA = new EngineHost();
+        using var hostB = new EngineHost();
+        var key = RandomNumberGenerator.GetBytes(32);
+        var (laptop, _) = await SetUpAsync(pc, key, OnlyAsked);
+        await using var __ = laptop;
+        var vaultA = hostA.Services.GetRequiredService<VaultHostService>();
+        var vaultB = hostB.Services.GetRequiredService<VaultHostService>();
+        await vaultA.PutSettingsAsync("alice", "locked", null, VaultCrypto.KeyCheck(key), CancellationToken.None);
+        await vaultB.PutSettingsAsync("alice", "locked", null, VaultCrypto.KeyCheck(key), CancellationToken.None);
+
+        var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        await vaultA.PutEntriesAsync("alice", [new VaultEntry("gone", "", false, null, now, "vm:dev", true)], CancellationToken.None);
+        await vaultB.PutEntriesAsync("alice", [Entry(key, "gone", "stale-value", now - 60_000) with { UpdatedBy = "pc:old" }], CancellationToken.None);
+
+        var idA = await laptop.AddEngineAsync(hostA, await hostA.AddUserAsync("alice"));
+        var idB = await laptop.AddEngineAsync(hostB, await hostB.AddUserAsync("alice"));
+        await laptop.PostAsync($"api/engines/{idA}/connect", new { vaultMode = "locked" });
+        await laptop.PostAsync($"api/engines/{idB}/connect", new { vaultMode = "locked" });
+
+        var outcomes = await laptop.Host.Agent.SyncTableVaultsAsync(CancellationToken.None);
+        Assert.Null(outcomes[idA]);
+        Assert.Null(outcomes[idB]);
+        Assert.Empty((await laptop.GetAsync("api/vault/secrets")).AsArray());
+        Assert.True((await vaultB.GetEntriesAsync("alice", CancellationToken.None)).Entries.Single(e => e.Name == "gone").Deleted);
+    }
+
+    [Fact]
+    public async Task Oversized_secret_does_not_block_other_secrets_and_available_host_advances_stamp_without_ending_leases()
+    {
+        using var pc = new EngineHost();
+        using var shared = new EngineHost();
+        var key = RandomNumberGenerator.GetBytes(32);
+        var (laptop, _) = await SetUpAsync(pc, key, OnlyAsked);
+        await using var __ = laptop;
+        var vault = shared.Services.GetRequiredService<VaultHostService>();
+        await vault.PutSettingsAsync("alice", "available", Convert.ToBase64String(key), VaultCrypto.KeyCheck(key), CancellationToken.None);
+        var sharedId = await laptop.AddEngineAsync(shared, await shared.AddUserAsync("alice"));
+        await laptop.PostAsync($"api/engines/{sharedId}/connect", new { vaultMode = "locked" });
+        var vm = await CreateVmAsync(laptop, shared, sharedId);
+
+        // Conditional initialization (ifUnset: true) never overwrites an existing available mode.
+        await vault.PutSettingsAsync("alice", "locked", null, VaultCrypto.KeyCheck(key), CancellationToken.None, ifUnset: true);
+        Assert.Equal("available", (await vault.GetEntriesAsync("alice", CancellationToken.None)).Mode);
+
+        // An available host compares decrypted values itself: advancing the stamp keeps an active lease alive.
+        var old = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - 60_000;
+        await vault.PutEntriesAsync("alice", [new VaultEntry("keep", "Keep", false, VaultCrypto.SealEntry(key, "keep", old, "", "same-secret"), old, "pc:old", false)],
+            CancellationToken.None);
+        var req = await SubmitAsync(shared, vm, new { v = 1, op = "request", names = new[] { "keep" }, ttl = 600 });
+        await laptop.PostAsync($"api/vault/approvals/{sharedId}/{req.PendingId}", new { decision = "allow" }, HttpStatusCode.NoContent);
+        Assert.Single(await vault.LeasesAsync("alice", CancellationToken.None));
+
+        await laptop.PostAsync("api/vault/secrets", new { name = "keep", description = "Keep", value = "same-secret" });
+        // 16,000 '<' characters stay under 32 KiB UTF-8, but JSON-escape (\u003c) + base64 exceed 90,000 chars.
+        await laptop.PostAsync("api/vault/secrets", new { name = "huge", description = "Huge", value = new string('<', 16_000) });
+        await laptop.PostAsync("api/vault/secrets", new { name = "small", description = "Small", value = "small-secret" });
+
+        var outcomes = await laptop.Host.Agent.SyncTableVaultsAsync(CancellationToken.None);
+        Assert.Contains("huge", outcomes[sharedId]!);
+        var entries = (await vault.GetEntriesAsync("alice", CancellationToken.None)).Entries;
+        Assert.NotNull(Live(entries, "small"));
+        Assert.Null(Live(entries, "huge"));
+        Assert.True(Live(entries, "keep")!.UpdatedAt > old);
+        Assert.Single(await vault.LeasesAsync("alice", CancellationToken.None));
+    }
+
     // Passes run only when a test asks for one.
     private static void OnlyAsked(DeviceAgent agent) => agent.TableVaultDelay = agent.TableVaultInterval = TimeSpan.FromHours(1);
 

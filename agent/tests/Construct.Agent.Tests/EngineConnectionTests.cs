@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
 using Construct.Agent.Engines;
@@ -44,6 +43,7 @@ public sealed class EngineConnectionTests
         listener.Start();
         var port = ((IPEndPoint)listener.LocalEndpoint).Port;
         var abandoned = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
 
         async Task<Socket> ConnectAsync(IPEndPoint endpoint, CancellationToken ct)
         {
@@ -60,11 +60,45 @@ public sealed class EngineConnectionTests
             return socket;
         }
 
-        var clock = Stopwatch.StartNew();
         await using var stream = await HappyEyeballs.ConnectAsync(new DnsEndPoint("engine.example", port),
-            (_, _) => Task.FromResult(new[] { IPAddress.Parse("2001:db8::7"), IPAddress.Loopback }), ConnectAsync, HappyEyeballs.Stagger, CancellationToken.None);
-        Assert.True(clock.Elapsed < TimeSpan.FromSeconds(1), $"Connecting took {clock.Elapsed}.");
-        using var accepted = await listener.AcceptTcpClientAsync();
-        await abandoned.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            (_, _) => Task.FromResult(new[] { IPAddress.Parse("2001:db8::7"), IPAddress.Loopback }), ConnectAsync, TimeSpan.FromMilliseconds(25), timeout.Token);
+        using var accepted = await listener.AcceptTcpClientAsync(timeout.Token);
+        await abandoned.Task.WaitAsync(timeout.Token);
+    }
+
+    [Fact]
+    public async Task Stalled_first_addresses_in_both_families_still_reach_a_later_address()
+    {
+        using var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        var port = ((IPEndPoint)listener.LocalEndpoint).Port;
+        var stalled = new[]
+        {
+            new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously),
+            new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously),
+        };
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var badV6 = IPAddress.Parse("2001:db8::7");
+        var badV4 = IPAddress.Parse("198.51.100.7");
+
+        async Task<Socket> ConnectAsync(IPEndPoint endpoint, CancellationToken ct)
+        {
+            if (endpoint.Address.Equals(badV6) || endpoint.Address.Equals(badV4))
+            {
+                var slot = endpoint.Address.Equals(badV6) ? stalled[0] : stalled[1];
+                try { await Task.Delay(Timeout.Infinite, ct); }
+                finally { slot.TrySetResult(); }
+                throw new SocketException((int)SocketError.TimedOut);
+            }
+
+            var socket = new Socket(endpoint.AddressFamily, SocketType.Stream, ProtocolType.Tcp);
+            await socket.ConnectAsync(endpoint, ct);
+            return socket;
+        }
+
+        await using var stream = await HappyEyeballs.ConnectAsync(new DnsEndPoint("engine.example", port),
+            (_, _) => Task.FromResult(new[] { badV6, badV4, IPAddress.Loopback }), ConnectAsync, TimeSpan.FromMilliseconds(20), timeout.Token);
+        using var accepted = await listener.AcceptTcpClientAsync(timeout.Token);
+        await Task.WhenAll(stalled.Select(s => s.Task)).WaitAsync(timeout.Token);
     }
 }

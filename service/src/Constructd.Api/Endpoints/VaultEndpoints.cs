@@ -63,7 +63,7 @@ public static class VaultEndpoints
 
     public sealed record EntryDto(string? Name, string? Description, bool? HasUsername, [property: ConstructSecret] string? Payload, long? UpdatedAt, string? UpdatedBy, bool? Deleted, bool? AutoApprove = null);
     public sealed record EntriesRequest(List<EntryDto?>? Entries);
-    public sealed record SettingsRequest(string? Mode, [property: ConstructSecret] string? Key, string? KeyCheck);
+    public sealed record SettingsRequest(string? Mode, [property: ConstructSecret] string? Key, string? KeyCheck, bool IfUnset = false);
     /// <param name="Key">The Companion's vault: <c>K</c> in base64.</param>
     /// <param name="Grant">A vault kept as records: <c>K</c> sealed by a device to this engine's host key.</param>
     public sealed record UnlockRequest([property: ConstructSecret] string? Key, KeyGrantDto? Grant = null);
@@ -120,7 +120,7 @@ public static class VaultEndpoints
         http.SetAuditTarget(Owner(http));
         if (request is null) return CodedProblems.Validation("mode", "Expected {mode, key?, keyCheck?}.");
         http.SetAuditDetail($"mode={request.Mode ?? "-"}, key={(request.Key is null ? "absent" : "present")}");
-        await vault.PutSettingsAsync(Owner(http), request.Mode, request.Key, request.KeyCheck, ct).ConfigureAwait(false);
+        await vault.PutSettingsAsync(Owner(http), request.Mode, request.Key, request.KeyCheck, ct, request.IfUnset).ConfigureAwait(false);
         return Results.NoContent();
     });
 

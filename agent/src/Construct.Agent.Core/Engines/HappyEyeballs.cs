@@ -26,19 +26,44 @@ public static class HappyEyeballs
     {
         var addresses = IPAddress.TryParse(endpoint.Host, out var literal) ? [literal] : await resolve(endpoint.Host, ct).ConfigureAwait(false);
         if (addresses.Length == 0) throw new SocketException((int)SocketError.HostNotFound);
-        var family = addresses[0].AddressFamily;
-        var first = addresses.Where(a => a.AddressFamily == family).ToArray();
-        var other = addresses.Where(a => a.AddressFamily != family).ToArray();
+        var ordered = Interleave(addresses);
 
         using var race = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        var attempts = new List<Task<Socket>> { TryInTurnAsync(first, endpoint.Port, connect, race.Token) };
-        if (other.Length > 0)
+        var attempts = new List<Task<Socket>>(ordered.Count);
+        Exception? failure = null;
+        var next = 0;
+
+        while (next < ordered.Count)
         {
-            await Task.WhenAny(attempts[0], Task.Delay(stagger, race.Token)).ConfigureAwait(false);
-            if (!attempts[0].IsCompletedSuccessfully) attempts.Add(TryInTurnAsync(other, endpoint.Port, connect, race.Token));
+            var started = ConnectOneAsync(ordered[next++], endpoint.Port, connect, race.Token);
+            attempts.Add(started);
+            if (next >= ordered.Count) break;
+
+            using var staggerStop = CancellationTokenSource.CreateLinkedTokenSource(race.Token);
+            var delay = Task.Delay(stagger, staggerStop.Token);
+            while (true)
+            {
+                var done = await Task.WhenAny(attempts.Append<Task>(delay)).ConfigureAwait(false);
+                if (done == delay) break;
+
+                var attempt = (Task<Socket>)done;
+                attempts.Remove(attempt);
+                if (attempt.IsCompletedSuccessfully)
+                {
+                    await race.CancelAsync().ConfigureAwait(false);
+                    foreach (var loser in attempts) _ = DisposeWhenDoneAsync(loser);
+                    return new NetworkStream(attempt.Result, ownsSocket: true);
+                }
+
+                failure ??= attempt.Exception?.InnerException;
+                if (attempt == started || attempts.Count == 0)
+                {
+                    await staggerStop.CancelAsync().ConfigureAwait(false);
+                    break;
+                }
+            }
         }
 
-        Exception? failure = null;
         while (attempts.Count > 0)
         {
             var done = await Task.WhenAny(attempts).ConfigureAwait(false);
@@ -57,18 +82,26 @@ public static class HappyEyeballs
         throw failure ?? new SocketException((int)SocketError.HostUnreachable);
     }
 
-    // One family's addresses, one after the other.
-    private static async Task<Socket> TryInTurnAsync(IPAddress[] addresses, int port, Func<IPEndPoint, CancellationToken, Task<Socket>> connect, CancellationToken ct)
+    // RFC 8305 address interleaving: alternate the resolver's first family with the other so stalled addresses in either
+    // family do not prevent trying later addresses.
+    private static List<IPAddress> Interleave(IPAddress[] addresses)
     {
-        SocketException? last = null;
-        foreach (var address in addresses)
+        var family = addresses[0].AddressFamily;
+        var first = addresses.Where(a => a.AddressFamily == family).ToArray();
+        var other = addresses.Where(a => a.AddressFamily != family).ToArray();
+        var ordered = new List<IPAddress>(addresses.Length);
+        var max = Math.Max(first.Length, other.Length);
+        for (var i = 0; i < max; i++)
         {
-            try { return await connect(new IPEndPoint(address, port), ct).ConfigureAwait(false); }
-            catch (SocketException ex) when (!ct.IsCancellationRequested) { last = ex; }
+            if (i < first.Length) ordered.Add(first[i]);
+            if (i < other.Length) ordered.Add(other[i]);
         }
 
-        throw last ?? new SocketException((int)SocketError.HostUnreachable);
+        return ordered;
     }
+
+    private static Task<Socket> ConnectOneAsync(IPAddress address, int port, Func<IPEndPoint, CancellationToken, Task<Socket>> connect, CancellationToken ct) =>
+        connect(new IPEndPoint(address, port), ct);
 
     // The attempt that lost the race: its socket, should it still connect, is closed; its failure is observed.
     private static async Task DisposeWhenDoneAsync(Task<Socket> attempt)

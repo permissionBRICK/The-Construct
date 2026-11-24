@@ -74,10 +74,13 @@ table, that is, a host outside the account's store (E12) or one of the old relea
 tombstones and the payloads passed on as sealed (records and table seal with `K` alike). It syncs
 after every vault change on the device, when another device or an engine writes a secret record,
 when such a host connects, and every minute, so what a VM adds there reaches the records. A host
-whose table has no key check yet is set up `locked` with the check of `K`; one set up with another
-key gets nothing. The host's own winners become records whose provenance names the VM
-(`updatedBy` `device:<id>` for the agent's own writes). A host that keeps failing shows it on its
-row of the vault page.
+whose table has no key check yet is set up `locked` with the check of `K` (`ifUnset: true`, so a
+concurrent setup as `available` is kept and the resulting key check is verified before exchanging
+entries); one set up with another key gets nothing. The host's own winners become records whose
+provenance names the VM (`updatedBy` `device:<id>` for the agent's own writes). Because table-mode
+tombstones carry no `K`-sealed payload (matching the Companion protocol), a table-mode host is still
+trusted for deletions; hosts participating in the account's record store write authenticated records
+instead. A host that keeps failing shows it on its row of the vault page.
 
 ## Host service API (all under `/api/v1`)
 

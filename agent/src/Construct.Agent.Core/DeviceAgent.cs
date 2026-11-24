@@ -640,6 +640,7 @@ public sealed partial class DeviceAgent : IDisposable
     {
         if (_clients.TryRemove(id, out var client)) client.Dispose();
         _handlers.Drop(id);
+        _tableFailures.TryRemove(id, out _);
     }
 
     /// <summary>Adds this device's credential at <paramref name="entry"/>: its token and a fresh proof, else the user's sign-in.</summary>
