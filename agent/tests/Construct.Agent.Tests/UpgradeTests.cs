@@ -9,6 +9,7 @@ using Constructd.Fakes;
 using Constructd.Store.Records;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
+using static Construct.Agent.Tests.UpgradeTests;
 
 namespace Construct.Agent.Tests;
 
@@ -19,7 +20,7 @@ namespace Construct.Agent.Tests;
 /// </summary>
 public sealed class UpgradeTests
 {
-    private static readonly Dictionary<string, string> MainProfiles = new()
+    internal static readonly Dictionary<string, string> MainProfiles = new()
     {
         ["projects/web.json"] = """{"name":"web","repos":[{"url":"https://example.test/web.git"}],"provisionCommands":["npm install"]}""",
         ["projects/api.json"] = """{"name":"api","repos":[{"url":"https://example.test/api.git"}]}""",
@@ -30,7 +31,7 @@ public sealed class UpgradeTests
     };
 
     /// <summary>The default VM's install: one local VM, no registry, a VM branch with an unmerged edit, a vault, a backup key.</summary>
-    private static void SingleVm(LegacyFixture f)
+    internal static void SingleVm(LegacyFixture f)
     {
         f.Settings(new JsonObject
         {
@@ -47,10 +48,124 @@ public sealed class UpgradeTests
     }
 
     /// <summary>A row of the dialog: its state and message.</summary>
-    private static (string State, string? Message) Row(JsonNode view, string id)
+    internal static (string State, string? Message) Row(JsonNode view, string id)
     {
         var row = view["items"]!.AsArray().SingleOrDefault(i => i!["id"]!.GetValue<string>() == id) ?? throw new Xunit.Sdk.XunitException($"No row {id}: {view["items"]!.ToJsonString()}");
         return (row["state"]!.GetValue<string>(), row["message"]?.GetValue<string>());
+    }
+
+    internal static byte[] PemSpki(string pem)
+    {
+        using var rsa = System.Security.Cryptography.RSA.Create();
+        rsa.ImportFromPem(pem);
+        return rsa.ExportSubjectPublicKeyInfo();
+    }
+
+    /// <summary>
+    /// A host of the old stack (no <c>/engine</c>, no <c>/device/backup-key</c>) whose own update API offers the new version;
+    /// staging it with auto-apply turns it into the new stack (the real engine behind).
+    /// </summary>
+    internal sealed class OldUntilStaged : Microsoft.AspNetCore.Hosting.IStartupFilter
+    {
+        public const string NewCommit = "b62124e768e638e339c21fa7c93fb88e5d522843";
+
+        public bool Staged => Stages > 0;
+
+        public int Stages { get; private set; }
+
+        /// <summary>How many stage requests it refuses first (409).</summary>
+        public int Refusals { get; set; }
+
+        /// <summary>False: the user is not its admin, and its update API refuses them (403).</summary>
+        public bool Admin { get; init; } = true;
+
+        /// <summary>Its admin updated it meanwhile: it answers as the new stack.</summary>
+        public bool UpdatedElsewhere { get; set; }
+
+        /// <summary>Requests to the store it answered 404 to: the old stack has none.</summary>
+        public int StoreCalls { get; private set; }
+
+        /// <summary>Holds a stage request until set.</summary>
+        public TaskCompletionSource? HoldStage { get; set; }
+
+        public Action<Microsoft.AspNetCore.Builder.IApplicationBuilder> Configure(Action<Microsoft.AspNetCore.Builder.IApplicationBuilder> next) => app =>
+        {
+            app.Use(call => context =>
+            {
+                if (Staged || UpdatedElsewhere) return call(context);
+                var path = context.Request.Path;
+                if (path.StartsWithSegments("/api/v1/engine") || path.StartsWithSegments("/api/v1/device/backup-key"))
+                {
+                    context.Response.StatusCode = 404;
+                    return Task.CompletedTask;
+                }
+
+                if (path.StartsWithSegments("/api/v1/store"))
+                {
+                    StoreCalls++;
+                    context.Response.StatusCode = 404;
+                    return Task.CompletedTask;
+                }
+
+                if (!Admin && path.StartsWithSegments("/api/v1/host/updates"))
+                {
+                    context.Response.StatusCode = 403;
+                    return Task.CompletedTask;
+                }
+
+                if (path == "/api/v1/host/updates/status")
+                    return context.Response.WriteAsync("""{"supportsAutoApply":true,"current":null}""");
+                if (path == "/api/v1/host/updates/check")
+                    return context.Response.WriteAsync(new JsonObject
+                    {
+                        ["installed"] = new JsonObject { ["commit"] = new string('a', 40) },
+                        ["latest"] = new JsonObject { ["commit"] = NewCommit, ["releaseTag"] = "host-" + NewCommit, ["compatible"] = true },
+                    }.ToJsonString());
+                if (path == "/api/v1/host/updates/stage")
+                {
+                    if (Refusals > 0)
+                    {
+                        Refusals--;
+                        context.Response.StatusCode = 409;
+                        return context.Response.WriteAsync("""{"code":"update-busy"}""");
+                    }
+
+                    return HoldStage is { } hold ? hold.Task.ContinueWith(_ => Stage(context), TaskScheduler.Default).Unwrap() : Stage(context);
+                }
+
+                return call(context);
+            });
+            next(app);
+        };
+
+        private Task Stage(HttpContext context)
+        {
+            Stages++;
+            // The update installs the offered release: the host answers healthy with its commit.
+            ((FakeReleaseInfo)context.RequestServices.GetRequiredService<IReleaseInfo>()).Installed = new InstalledRelease(NewCommit, "1.0.0-test", null, "test");
+            context.Response.StatusCode = 202;
+            return context.Response.WriteAsync("""{"updateId":"u1","state":"staged"}""");
+        }
+    }
+
+    /// <summary>An engine without the new stack's identity route, as a host of the old stack answers.</summary>
+    internal sealed class NoEngineRoute : Microsoft.AspNetCore.Hosting.IStartupFilter
+    {
+        public Action<Microsoft.AspNetCore.Builder.IApplicationBuilder> Configure(Action<Microsoft.AspNetCore.Builder.IApplicationBuilder> next) => app =>
+        {
+            app.Use(call => context =>
+            {
+                // The old stack has no /engine and no /device/backup-key (checked against a real one, 2026-11-21).
+                if (context.Request.Path.StartsWithSegments("/api/v1/engine") || context.Request.Path.StartsWithSegments("/api/v1/device/backup-key"))
+                {
+                    context.Response.StatusCode = 404;
+                    return Task.CompletedTask;
+                }
+
+                return call(context);
+            });
+            next(app);
+        };
     }
 
     [Fact]
@@ -238,6 +353,11 @@ public sealed class UpgradeTests
         Assert.Contains("did not answer over SSH", message);
     }
 
+}
+
+/// <summary>The old install folder after the move: its scripts and its install images. Split from <see cref="UpgradeTests"/> so the groups run in parallel.</summary>
+public sealed class UpgradeOldInstallTests
+{
     [Fact]
     public async Task After_the_move_the_old_install_folders_scripts_act_only_through_the_agent()
     {
@@ -402,6 +522,11 @@ public sealed class UpgradeTests
         Assert.True(File.Exists(image));
     }
 
+}
+
+/// <summary>Runs of the dialog and the conversion: several instances, a cut run, another vault key, configuration edges. Split from <see cref="UpgradeTests"/> so the groups run in parallel.</summary>
+public sealed class UpgradeRunTests
+{
     [Fact]
     public async Task The_dialog_reads_the_old_config_repository_once_per_run_and_the_conversion_reads_it_afresh()
     {
@@ -580,6 +705,11 @@ public sealed class UpgradeTests
         Assert.Equal(before, rig.Fixture.Digests());
     }
 
+}
+
+/// <summary>The old PC key's backups, the recovery step and the notes. Split from <see cref="UpgradeTests"/> so the groups run in parallel.</summary>
+public sealed class UpgradeKeyAndNoteTests
+{
     [Fact]
     public async Task A_backup_made_for_the_old_PC_key_restores_with_the_key_the_converter_kept()
     {
@@ -615,13 +745,6 @@ public sealed class UpgradeTests
         Assert.Equal("restore", job["kind"]!.GetValue<string>());
         Assert.DoesNotContain(identity, job.ToJsonString());
         Assert.DoesNotContain(identity, rig.Agent.StateFileText());
-    }
-
-    private static byte[] PemSpki(string pem)
-    {
-        using var rsa = System.Security.Cryptography.RSA.Create();
-        rsa.ImportFromPem(pem);
-        return rsa.ExportSubjectPublicKeyInfo();
     }
 
     [Fact]
@@ -714,6 +837,11 @@ public sealed class UpgradeTests
         await rig.Agent.PostAsync("api/upgrade/notes/read", null, HttpStatusCode.Conflict);
     }
 
+}
+
+/// <summary>Hosts on the old stack: shared ones, and the one that keeps the store when there is no local VM. Split from <see cref="UpgradeTests"/> so the groups run in parallel.</summary>
+public sealed class UpgradeOldHostTests
+{
     [Fact]
     public async Task A_shared_host_on_the_old_stack_is_named_before_the_conversion()
     {
@@ -1023,6 +1151,11 @@ public sealed class UpgradeTests
         Assert.Equal((0, 1), (old.StoreCalls, old.Stages));
     }
 
+}
+
+/// <summary>The VMs of old hosts that move with the PC or moved earlier, and the old hosts' plain addresses. Split from <see cref="UpgradeTests"/> so the groups run in parallel.</summary>
+public sealed class UpgradeMovedHostTests
+{
     /// <summary>
     /// An old host the user administers with one VM of theirs ("far"), which the engine there reaches only as root with the old
     /// client's key (the old provisioning removed the bootstrap key from the seed user), and the PC's old install pointing at it.
@@ -1386,113 +1519,6 @@ public sealed class UpgradeTests
             listener.Stop();
             await serve;
         }
-    }
-
-    /// <summary>
-    /// A host of the old stack (no <c>/engine</c>, no <c>/device/backup-key</c>) whose own update API offers the new version;
-    /// staging it with auto-apply turns it into the new stack (the real engine behind).
-    /// </summary>
-    private sealed class OldUntilStaged : Microsoft.AspNetCore.Hosting.IStartupFilter
-    {
-        public const string NewCommit = "b62124e768e638e339c21fa7c93fb88e5d522843";
-
-        public bool Staged => Stages > 0;
-
-        public int Stages { get; private set; }
-
-        /// <summary>How many stage requests it refuses first (409).</summary>
-        public int Refusals { get; set; }
-
-        /// <summary>False: the user is not its admin, and its update API refuses them (403).</summary>
-        public bool Admin { get; init; } = true;
-
-        /// <summary>Its admin updated it meanwhile: it answers as the new stack.</summary>
-        public bool UpdatedElsewhere { get; set; }
-
-        /// <summary>Requests to the store it answered 404 to: the old stack has none.</summary>
-        public int StoreCalls { get; private set; }
-
-        /// <summary>Holds a stage request until set.</summary>
-        public TaskCompletionSource? HoldStage { get; set; }
-
-        public Action<Microsoft.AspNetCore.Builder.IApplicationBuilder> Configure(Action<Microsoft.AspNetCore.Builder.IApplicationBuilder> next) => app =>
-        {
-            app.Use(call => context =>
-            {
-                if (Staged || UpdatedElsewhere) return call(context);
-                var path = context.Request.Path;
-                if (path.StartsWithSegments("/api/v1/engine") || path.StartsWithSegments("/api/v1/device/backup-key"))
-                {
-                    context.Response.StatusCode = 404;
-                    return Task.CompletedTask;
-                }
-
-                if (path.StartsWithSegments("/api/v1/store"))
-                {
-                    StoreCalls++;
-                    context.Response.StatusCode = 404;
-                    return Task.CompletedTask;
-                }
-
-                if (!Admin && path.StartsWithSegments("/api/v1/host/updates"))
-                {
-                    context.Response.StatusCode = 403;
-                    return Task.CompletedTask;
-                }
-
-                if (path == "/api/v1/host/updates/status")
-                    return context.Response.WriteAsync("""{"supportsAutoApply":true,"current":null}""");
-                if (path == "/api/v1/host/updates/check")
-                    return context.Response.WriteAsync(new JsonObject
-                    {
-                        ["installed"] = new JsonObject { ["commit"] = new string('a', 40) },
-                        ["latest"] = new JsonObject { ["commit"] = NewCommit, ["releaseTag"] = "host-" + NewCommit, ["compatible"] = true },
-                    }.ToJsonString());
-                if (path == "/api/v1/host/updates/stage")
-                {
-                    if (Refusals > 0)
-                    {
-                        Refusals--;
-                        context.Response.StatusCode = 409;
-                        return context.Response.WriteAsync("""{"code":"update-busy"}""");
-                    }
-
-                    return HoldStage is { } hold ? hold.Task.ContinueWith(_ => Stage(context), TaskScheduler.Default).Unwrap() : Stage(context);
-                }
-
-                return call(context);
-            });
-            next(app);
-        };
-
-        private Task Stage(HttpContext context)
-        {
-            Stages++;
-            // The update installs the offered release: the host answers healthy with its commit.
-            ((FakeReleaseInfo)context.RequestServices.GetRequiredService<IReleaseInfo>()).Installed = new InstalledRelease(NewCommit, "1.0.0-test", null, "test");
-            context.Response.StatusCode = 202;
-            return context.Response.WriteAsync("""{"updateId":"u1","state":"staged"}""");
-        }
-    }
-
-    /// <summary>An engine without the new stack's identity route, as a host of the old stack answers.</summary>
-    private sealed class NoEngineRoute : Microsoft.AspNetCore.Hosting.IStartupFilter
-    {
-        public Action<Microsoft.AspNetCore.Builder.IApplicationBuilder> Configure(Action<Microsoft.AspNetCore.Builder.IApplicationBuilder> next) => app =>
-        {
-            app.Use(call => context =>
-            {
-                // The old stack has no /engine and no /device/backup-key (checked against a real one, 2026-11-21).
-                if (context.Request.Path.StartsWithSegments("/api/v1/engine") || context.Request.Path.StartsWithSegments("/api/v1/device/backup-key"))
-                {
-                    context.Response.StatusCode = 404;
-                    return Task.CompletedTask;
-                }
-
-                return call(context);
-            });
-            next(app);
-        };
     }
 
     [Fact]
