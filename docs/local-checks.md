@@ -169,6 +169,31 @@ bridge, Remote-SSH, the register-workspace offer), the profile validator the VM'
 `construct project set` loads from `extension/src/projects.js`, and the VM's
 `project-set.js` helper.
 
+## Keeping the suites fast
+
+- An engine started in a test (`TestApp`, the agent tests' `EngineHost`) costs about a fifth of a second of
+  CPU because `Constructd.Api`, `Constructd.Store` and `Construct.Agent.Core` generate their minimal-API
+  request delegates at build time (`EnableRequestDelegateGenerator`). Without it every start compiled
+  expression trees for the engine's 220-odd endpoints and the engine suite took five times as long. An
+  endpoint the generator cannot handle is a build warning (RDG…), which the agent group's `-warnaserror`
+  turns into an error.
+- xUnit runs the classes of a suite in parallel and the tests of one class one after another. A class
+  whose tests add up to more than half a minute holds up the whole run: split it, as `UpgradeTests`.
+- A test class that cleans up asynchronously implements `IAsyncLifetime`. xUnit 2 never calls
+  `DisposeAsync` on a class that is only `IAsyncDisposable`: its engines and agents keep running and its
+  files stay behind. `TestClassDisposalTests` fails on such a class.
+- Wait for the event, not for time: a `TaskCompletionSource` a fake completes, the job's event stream, or a
+  poll whose generous bound only ends a broken run. A fake keeps its own delays short (the fake driver's
+  state reads settle in half a second, not the fifteen a Proxmox host's cache needs).
+- Make an expensive key once per class or per run (an RSA-3072 key takes most of a second); use P-256 where
+  the key type does not matter.
+- Write temporary files under `Path.GetTempPath()`. Each .NET test process points it (`TMPDIR`) at a
+  directory of its own, on `/dev/shm` where there is one, so SQLite does not wait for the disk, and removes
+  it at the end (`test/dotnet/TestTemp.cs`). Give every engine a database path of its own: the engine keeps
+  adopted VMs' keys, its source cache and backups next to it, also in memory mode.
+- A test that takes long by design because it runs real processes end to end gets
+  `[Trait("Category", "E2E")]` and runs in the `e2e` group.
+
 Windows PowerShell 5.1 behavior and the pinned Windows ISO executable need an
 actual Windows environment. Use a local disposable Windows VM with Node.js,
 Windows PowerShell 5.1 and network access for downloading the pinned executable:
