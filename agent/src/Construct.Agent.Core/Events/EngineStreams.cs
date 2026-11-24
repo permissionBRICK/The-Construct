@@ -28,6 +28,9 @@ public sealed class EngineStreams(AgentEvents events, Func<string, HttpClient?> 
     /// <summary>A connection silent this long is given up (the engine sends a keepalive every 15 s).</summary>
     public TimeSpan Silence { get; init; } = TimeSpan.FromSeconds(60);
 
+    /// <summary>Told the engine's id each time its stream connects, the first time and after every drop.</summary>
+    public Action<string>? Connected { get; init; }
+
     /// <summary>Follows every engine not followed yet, and wakes the ones waiting to retry (a credential may have arrived).</summary>
     public void Sync()
     {
@@ -89,6 +92,7 @@ public sealed class EngineStreams(AgentEvents events, Func<string, HttpClient?> 
         using var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, silence.Token).ConfigureAwait(false);
         if (response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden) return true;
         response.EnsureSuccessStatusCode();
+        Connected?.Invoke(engine);
         using var reader = new StreamReader(await response.Content.ReadAsStreamAsync(silence.Token).ConfigureAwait(false));
         string? name = null;
         var data = new System.Text.StringBuilder();

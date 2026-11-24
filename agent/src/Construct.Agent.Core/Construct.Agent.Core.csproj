@@ -30,6 +30,11 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- The tests read a few internals (the shared engine handlers, the connect race) instead of widening the API for them. -->
+    <InternalsVisibleTo Include="Construct.Agent.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <!-- The rework's entry scripts, which replace the old install folder's after the move (OldInstallScripts, R14). -->
     <EmbeddedResource Include="../../../install.ps1;../../../Update-Construct.ps1;../../../Update-T3Code.ps1;../../../Get-ConstructT3PairingLink.ps1"
                       Link="Shims/%(Filename)%(Extension)" LogicalName="Shims.%(Filename)%(Extension)" />

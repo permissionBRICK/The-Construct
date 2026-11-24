@@ -226,7 +226,7 @@ public sealed class RecordStore : IDisposable
             {
                 if (currents[i] is { } current && current.Kind != writes[i].Kind)
                     return new BatchOutcome.Refused(409, "kind-mismatch", $"Record '{writes[i].Id}' is a {current.Kind} record.");
-                if (currents[i] is null && writes[i].Deleted)
+                if (currents[i] is null && writes[i].Deleted && !(writes[i].Kind == RecordKinds.Secret && writes[i].Ciphertext is { Length: > 0 }))
                     return new BatchOutcome.Refused(404, "not-found", $"Record '{writes[i].Id}' does not exist.");
             }
 

@@ -125,7 +125,7 @@ public sealed partial class VaultHostService(IVaultStore store, IVmRepository vm
     /// wraps and stores the key, <c>locked</c> deletes the wrapped key. A key that does not open the key
     /// check is refused.
     /// </summary>
-    public async Task PutSettingsAsync(string owner, string? mode, string? keyBase64, string? keyCheck, CancellationToken ct)
+    public async Task PutSettingsAsync(string owner, string? mode, string? keyBase64, string? keyCheck, CancellationToken ct, bool ifUnset = false)
     {
         if (mode is not (null or VaultModes.Available or VaultModes.Locked)) throw Validation("mode", "Expected available or locked.");
         if (keyCheck is not null && !IsSealed(keyCheck, 1)) throw Validation("keyCheck", "The key check must be base64(nonce||tag||ciphertext).");
@@ -138,6 +138,7 @@ public sealed partial class VaultHostService(IVaultStore store, IVmRepository vm
             {
                 if (records?.Hosts(owner) == true) throw new VaultProblemException(409, "vault-records", RecordsMessage);
                 var state = await store.GetOwnerAsync(owner, ct).ConfigureAwait(false);
+                if (ifUnset && state is { Configured: true }) return;
                 // The first call sets the key check; later ones keep it (a re-sealed check of the same key
                 // differs in its nonce), and every key given is verified against it.
                 var check = state is { Configured: true } ? state.KeyCheck!

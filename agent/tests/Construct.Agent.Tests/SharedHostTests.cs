@@ -125,20 +125,20 @@ public sealed class SharedHostTests
         }
     }
 
-    private static VaultEntry Entry(byte[] key, string name, string secret, long at) =>
+    internal static VaultEntry Entry(byte[] key, string name, string secret, long at) =>
         new(name, name + " entry", false, VaultCrypto.SealEntry(key, name, at, "", secret), at, "pc:old", false);
 
-    private static async Task<(TestAgent Laptop, string EngineId)> SetUpAsync(EngineHost engine, byte[] vaultKey)
+    internal static async Task<(TestAgent Laptop, string EngineId)> SetUpAsync(EngineHost engine, byte[] vaultKey, Action<DeviceAgent>? configure = null)
     {
         var signIn = await engine.AddUserAsync("alice");
-        var laptop = await TestAgent.StartAsync();
+        var laptop = await TestAgent.StartAsync(configure: configure);
         laptop.Host.Agent.SetupVaultKey = () => vaultKey.ToArray();
         var engineId = await laptop.AddEngineAsync(engine, signIn);
         await laptop.PostAsync("api/device/setup", new { engine = engineId, deviceName = "laptop", vaultMode = "locked" });
         return (laptop, engineId);
     }
 
-    private static async Task<Vm> CreateVmAsync(TestAgent laptop, EngineHost engine, string engineId)
+    internal static async Task<Vm> CreateVmAsync(TestAgent laptop, EngineHost engine, string engineId)
     {
         using var created = await laptop.Api.PostAsJsonAsync($"api/engines/{engineId}/api/v1/vms", new { name = "dev", cpu = 2, ramGb = 4, diskGb = 40 });
         Assert.True(created.StatusCode == HttpStatusCode.Accepted, await created.Content.ReadAsStringAsync());
@@ -153,6 +153,6 @@ public sealed class SharedHostTests
         return (await engine.Services.GetRequiredService<IVmRepository>().GetAsync("dev", CancellationToken.None))!;
     }
 
-    private static Task<VaultSubmission> SubmitAsync(EngineHost engine, Vm vm, object request) =>
+    internal static Task<VaultSubmission> SubmitAsync(EngineHost engine, Vm vm, object request) =>
         engine.Services.GetRequiredService<VaultHostService>().SubmitAsync(vm, JsonNode.Parse(System.Text.Json.JsonSerializer.Serialize(request))!.AsObject(), CancellationToken.None);
 }

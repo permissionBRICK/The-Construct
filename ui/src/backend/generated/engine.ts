@@ -5948,6 +5948,8 @@ export interface components {
             mode: null | string;
             key: null | string;
             keyCheck: null | string;
+            /** @default false */
+            ifUnset: boolean;
         };
         VaultEndpointsUnlockRequest: {
             key: null | string;

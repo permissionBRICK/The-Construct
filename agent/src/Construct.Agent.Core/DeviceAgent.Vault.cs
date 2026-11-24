@@ -47,7 +47,10 @@ public sealed partial class DeviceAgent
         return views;
     }
 
-    /// <summary>Adds a secret under a free name.</summary>
+    /// <summary>
+    /// Adds a secret under a free name. The view comes from the record just written: a new secret has no leases, so no
+    /// engine is asked (the move's copy of the old vault adds one secret after the other).
+    /// </summary>
     public async Task<SecretView> AddSecretAsync(SecretInput input, CancellationToken ct)
     {
         ValidateName(input.Name, "name");
@@ -55,28 +58,35 @@ public sealed partial class DeviceAgent
         if (Encoding.UTF8.GetByteCount(input.Value) > MaxSecretBytes) throw new AgentFailure(400, "invalid-value", "A secret is at most 32 KiB.");
         var description = Clean(input.Description);
         if (description.Length == 0) throw new AgentFailure(400, "invalid-description", "Say what the secret is for.");
-        await ChangeSecretAsync(input.Name, current =>
+        var written = await ChangeSecretAsync(input.Name, current =>
         {
             if (current is { Deleted: false }) throw new AgentFailure(409, "exists", $"A secret named {input.Name} exists already.");
             return (Clean(input.Username), input.Value, input.AutoApprove, description, false);
         }, ct).ConfigureAwait(false);
-        return (await ListSecretsAsync(ct).ConfigureAwait(false)).First(s => s.Name == input.Name);
+        return Written(written);
     }
 
-    /// <summary>Changes a secret's description, username or value; a field left null keeps what it was.</summary>
+    /// <summary>
+    /// Changes a secret's description, username or value; a field left null keeps what it was. The view comes from the
+    /// record just written, without leases: the list (<see cref="ListSecretsAsync"/>) asks every engine for those.
+    /// </summary>
     public async Task<SecretView> ChangeSecretAsync(string name, SecretChange change, CancellationToken ct)
     {
         ValidateName(name, "name");
         if (change.Value is { } value && (value.Length == 0 || Encoding.UTF8.GetByteCount(value) > MaxSecretBytes))
             throw new AgentFailure(400, "invalid-value", "A secret's value is 1 byte to 32 KiB.");
-        await ChangeSecretAsync(name, current =>
+        var written = await ChangeSecretAsync(name, current =>
         {
             var (username, secret, auto) = Opened(current, name);
             var description = change.Description is null ? current!.Value.Description : Clean(change.Description);
             return (change.Username is null ? username : Clean(change.Username), change.Value ?? secret, auto, description, false);
         }, ct).ConfigureAwait(false);
-        return (await ListSecretsAsync(ct).ConfigureAwait(false)).First(s => s.Name == name);
+        return Written(written);
     }
+
+    // A live record this device just wrote: its flag is the one it sealed.
+    private static SecretView Written(SecretRecordValue v) =>
+        new(v.Name, v.Description, v.HasUsername, v.AutoApprove, true, v.UpdatedAt, v.UpdatedBy, Provenance(v.Provenance), []);
 
     public async Task SetAutoApproveAsync(string name, bool on, CancellationToken ct)
     {
@@ -143,8 +153,11 @@ public sealed partial class DeviceAgent
         return items.OrderByDescending(i => i.Revision).ToArray();
     }
 
-    /// <summary>Re-reads and applies one change until the store takes it on the base it read (9.6).</summary>
-    private async Task ChangeSecretAsync(string name, Func<SecretRecord?, (string Username, string Secret, bool Auto, string Description, bool Delete)> change, CancellationToken ct)
+    /// <summary>
+    /// Re-reads and applies one change until the store takes it on the base it read (9.6); the value written. Engines that
+    /// keep the vault in their table get it at the next pass (<see cref="RequestTableSync"/>).
+    /// </summary>
+    private async Task<SecretRecordValue> ChangeSecretAsync(string name, Func<SecretRecord?, (string Username, string Secret, bool Auto, string Description, bool Delete)> change, CancellationToken ct)
     {
         var keys = await OpenKeysAsync(ct).ConfigureAwait(false);
         using var http = StoreHttp();
@@ -163,7 +176,8 @@ public sealed partial class DeviceAgent
             switch (await store.WriteAsync(write, ct).ConfigureAwait(false))
             {
                 case WriteOutcome.Accepted:
-                    return;
+                    RequestTableSync();
+                    return value;
                 case WriteOutcome.Refused refused:
                     throw new AgentFailure(502, refused.Code, "The store refused the secret.");
             }
@@ -321,7 +335,7 @@ public sealed partial class DeviceAgent
     // The engine's vault mode; null for a host of the old release, which has no /vault/mode (and keeps the vault in its table).
     private async Task<VaultModeView?> ModeOrNullAsync(string engineId, CancellationToken ct)
     {
-        try { return await VaultModeAsync(engineId, ct).ConfigureAwait(false); }
+        try { return await ReadVaultModeAsync(engineId, ct).ConfigureAwait(false); }
         catch (AgentFailure e) when (e.Status == 404) { return null; }
     }
 
@@ -382,8 +396,18 @@ public sealed partial class DeviceAgent
         Answered("vault.entry-request.ended", engineId, id);
     }
 
-    /// <summary>The engine's vault mode and whether it holds <c>K</c> now.</summary>
+    /// <summary>
+    /// The engine's vault mode and whether it holds <c>K</c> now. A vault in the engine's table whose sync with this
+    /// device's secrets keeps failing answers why instead (<c>vault-sync-failed</c>): the vault page shows it on that
+    /// engine's row.
+    /// </summary>
     public async Task<VaultModeView> VaultModeAsync(string engineId, CancellationToken ct)
+    {
+        if (TableVaultProblem(engineId) is { } problem) throw new AgentFailure(502, "vault-sync-failed", problem);
+        return await ReadVaultModeAsync(engineId, ct).ConfigureAwait(false);
+    }
+
+    private async Task<VaultModeView> ReadVaultModeAsync(string engineId, CancellationToken ct)
     {
         var entry = Find(engineId) ?? throw NoEngine();
         var body = await EngineSendAsync(entry, HttpMethod.Get, "api/v1/vault/mode", null, ct).ConfigureAwait(false);
@@ -411,6 +435,8 @@ public sealed partial class DeviceAgent
             var keys = await OpenKeysAsync(ct).ConfigureAwait(false);
             await EngineSendAsync(entry, HttpMethod.Put, "api/v1/vault/settings",
                 new { mode, key = mode == "available" ? Convert.ToBase64String(keys.Vault) : null, keyCheck = VaultSeal.KeyCheck(keys.Vault) }, ct).ConfigureAwait(false);
+            // A table set up only now gets the secrets.
+            RequestTableSync();
         }
 
         return await ModeOrNullAsync(engineId, ct).ConfigureAwait(false) ?? new VaultModeView(engineId, mode, mode == "available", false, []);
