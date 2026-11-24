@@ -172,6 +172,22 @@ bridge, Remote-SSH, the register-workspace offer), the profile validator the VM'
 
 ## Keeping the suites fast
 
+Typical times on the 8-core development VM, with other work running beside it:
+
+| Group | Time |
+|---|---|
+| `panel` | a few seconds |
+| `t3` | about half a minute |
+| `service` | 3 to 4 minutes (its script tests run four at a time) |
+| `engine` | about 2 minutes, plus a minute when it builds from scratch |
+| `release` | about 1.5 minutes (the updater's suites) |
+| `ui` | under a minute |
+| `agent` | about 2 minutes |
+| `e2e` | about 2.5 minutes |
+| `all` | about 10 minutes |
+
+Before these changes `all` took about an hour: the engine suite alone 18 to 26 minutes.
+
 - An engine started in a test (`TestApp`, the agent tests' `EngineHost`) costs about a fifth of a second of
   CPU because `Constructd.Api`, `Constructd.Store` and `Construct.Agent.Core` generate their minimal-API
   request delegates at build time (`EnableRequestDelegateGenerator`). Without it every start compiled
