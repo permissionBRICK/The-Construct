@@ -52,6 +52,29 @@ describe('makeShell', () => {
     makeShell(w).openWindow({ page: 'vault' });
     expect(w.location.href).toBe('http://127.0.0.1:5000/?surf=win#/vault');
   });
+
+  it('forwards desktop shell hide messages and unsubscribes cleanly', () => {
+    const listeners = new Set<(e: { data?: unknown }) => void>();
+    const webview = {
+      postMessage() {},
+      addEventListener(type: string, fn: (e: { data?: unknown }) => void) { if (type === 'message') listeners.add(fn); },
+      removeEventListener(type: string, fn: (e: { data?: unknown }) => void) { if (type === 'message') listeners.delete(fn); },
+    };
+    const w = { location: { href: 'http://127.0.0.1:5000/?surf=pop#/' }, chrome: { webview } } as unknown as Window;
+    let hidden = 0;
+    const off = makeShell(w).onHide!(() => { hidden++; });
+    for (const fn of listeners) {
+      fn({ data: { type: 'other' } });
+      fn({ data: 'hide' });
+      fn({ data: null });
+      fn({ data: { type: 'hide' } });
+    }
+    expect(hidden).toBe(1);
+    off();
+    expect(listeners.size).toBe(0);
+    // Safe no-op without WebView2 event methods.
+    expect(() => makeShell(win('http://127.0.0.1:5000/?surf=pop#/')).onHide!(() => {})()).not.toThrow();
+  });
 });
 
 describe('openExternal', () => {

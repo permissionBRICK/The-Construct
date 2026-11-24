@@ -12,6 +12,8 @@ export interface Shell {
   close(): void;
   /** The pop-out's or the lone card's content is this tall (CSS pixels): the desktop shell sizes its window to it. */
   fit?(height: number): void;
+  /** Runs when the desktop shell hides the floating surface; returns an unsubscribe function. */
+  onHide?(fn: () => void): () => void;
 }
 
 export interface Ctx {

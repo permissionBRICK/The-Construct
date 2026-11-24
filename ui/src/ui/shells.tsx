@@ -92,17 +92,28 @@ function NoVm() {
   );
 }
 
+function closeOpenMenus(root: ParentNode, keep?: Node | null): boolean {
+  let closed = false;
+  for (const m of root.querySelectorAll('details[open] > .vml')) {
+    const d = m.parentElement as HTMLDetailsElement;
+    if (!keep || !d.contains(keep)) { d.open = false; closed = true; }
+  }
+  return closed;
+}
+
 /** The pop-out and the lone card tell the desktop shell how tall their content is, as it changes; the shell sizes the
-    window to it instead of a fixed height (finding 7). A menu open below its button counts too. */
+    window to it instead of a fixed height (finding 7). A menu open below its button counts too, and open menus close
+    whenever the surface hides, loses focus, or gets a click outside them. */
 function useFit() {
   const { shell } = useApp();
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const el = ref.current;
-    if (!el || !shell.fit || typeof ResizeObserver === 'undefined') return;
+    if (!el) return;
     let last = 0;
     let ro: ResizeObserver | null = null;
     const measure = () => {
+      if (!shell.fit) return;
       const top = el.getBoundingClientRect().top;
       let h = el.getBoundingClientRect().height;
       for (const m of el.querySelectorAll('details[open] > .vml')) {
@@ -111,13 +122,38 @@ function useFit() {
         h = Math.max(h, m.getBoundingClientRect().bottom - top + 12);
       }
       h = Math.ceil(h);
-      if (h !== last) { last = h; shell.fit!(h); }
+      if (h > 0 && h !== last) { last = h; shell.fit(h); }
     };
-    ro = new ResizeObserver(measure);
-    ro.observe(el);
-    el.addEventListener('toggle', measure, true);
-    measure();
-    return () => { ro?.disconnect(); el.removeEventListener('toggle', measure, true); };
+    if (shell.fit && typeof ResizeObserver !== 'undefined') {
+      ro = new ResizeObserver(measure);
+      ro.observe(el);
+      el.addEventListener('toggle', measure, true);
+      measure();
+    }
+    const closeMenus = () => { if (closeOpenMenus(el)) measure(); };
+    const onVisibility = () => { if (document.hidden) closeMenus(); };
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') closeMenus(); };
+    // Capture-phase pointerup also dismisses when clicking disabled controls (which suppress click);
+    // the toggle event updates the fitted height afterwards so click delivery is unaffected.
+    const onOutside = (e: Event) => { closeOpenMenus(el, e.target as Node | null); };
+    addEventListener('blur', closeMenus);
+    addEventListener('pagehide', closeMenus);
+    addEventListener('keydown', onKey);
+    document.addEventListener('visibilitychange', onVisibility);
+    document.addEventListener('pointerup', onOutside, true);
+    document.addEventListener('click', onOutside);
+    const offHide = shell.onHide?.(closeMenus);
+    return () => {
+      ro?.disconnect();
+      el.removeEventListener('toggle', measure, true);
+      removeEventListener('blur', closeMenus);
+      removeEventListener('pagehide', closeMenus);
+      removeEventListener('keydown', onKey);
+      document.removeEventListener('visibilitychange', onVisibility);
+      document.removeEventListener('pointerup', onOutside, true);
+      document.removeEventListener('click', onOutside);
+      offHide?.();
+    };
   }, [shell]);
   return ref;
 }
