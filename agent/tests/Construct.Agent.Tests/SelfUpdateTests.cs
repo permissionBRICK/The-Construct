@@ -133,6 +133,49 @@ public sealed class SelfUpdateTests : IAsyncLifetime
         await Task.Delay(200);
 
         Assert.Equal(1, Reads());
+        Assert.Equal(TimeSpan.FromHours(1), device.Updater.CheckEvery);
+    }
+
+    [Fact]
+    public async Task Check_if_stale_installs_automatically_when_auto_update_is_on()
+    {
+        var device = Device();
+        device.Settings.Update(s => s with { AutoUpdate = true });
+
+        device.Updater.CheckIfStale();
+        await FakeDevice.WaitAsync(() => device.Platform.Launched.Count == 1, "automatic install after stale check");
+        await device.Updater.Work.WaitAsync(TimeSpan.FromSeconds(10));
+
+        Assert.Equal([device.Install.ExecutableOf(New)], device.Platform.Launched);
+        Assert.Equal(1, device.Stopped);
+    }
+
+    [Fact]
+    public async Task A_failed_automatic_install_is_not_retried_automatically_until_requested_manually()
+    {
+        var device = Device();
+        device.Settings.Update(s => s with { AutoUpdate = true });
+        var goodHash = _published;
+        _published = new string('f', 64);
+
+        device.Updater.CheckIfStale();
+        await FakeDevice.WaitAsync(() => device.Updater.View().State == "failed", "failed auto-install");
+        await device.Updater.Work.WaitAsync(TimeSpan.FromSeconds(10));
+        int Downloads() { lock (_channel!.Requests) return _channel.Requests.Count(r => r.AbsoluteUri.EndsWith(".zip", StringComparison.Ordinal)); }
+        Assert.Equal(1, Downloads());
+
+        // Subsequent stale checks and TryAutoInstall do not hammer the same failed version.
+        Assert.False(device.Updater.TryAutoInstall());
+        device.Updater.CheckIfStale();
+        await Task.Delay(150);
+        Assert.Equal(1, Downloads());
+
+        // An explicit manual install clears the failure guard and succeeds once fixed.
+        _published = goodHash;
+        await device.Updater.CheckAsync(CancellationToken.None);
+        device.Updater.StartInstall();
+        await device.Updater.Work.WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.Equal([device.Install.ExecutableOf(New)], device.Platform.Launched);
     }
 
     [Fact]

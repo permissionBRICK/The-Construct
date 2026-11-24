@@ -169,7 +169,9 @@ public sealed class AgentUpdateJobs(IVmRepository vms, IJobStore jobs, IPersiste
     public async Task<(Job Job, IReadOnlyList<string> Agents)> StartAsync(Vm authorized, string actor, IReadOnlyList<string>? tools, CancellationToken ct)
     {
         var id = Guid.NewGuid().ToString("n");
-        var operation = await gates.TryAcquireAsync(authorized.Name, id, ct);
+        var operation = authorized.Kind == VmKind.Primary
+            ? await Endpoints.PrimaryOperationGate.AcquireAsync(gates, authorized.Name, id, ct)
+            : await gates.TryAcquireAsync(authorized.Name, id, ct);
         if (operation is null)
         {
             gates.IsHeld(authorized.Name, out var holder);

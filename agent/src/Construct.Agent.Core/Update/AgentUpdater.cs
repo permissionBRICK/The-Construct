@@ -53,6 +53,7 @@ public sealed class AgentUpdater : IAsyncDisposable
     private string? _error;
     private DateTimeOffset? _checkedAt;
     private string? _waiting;
+    private string? _autoFailedVersion;
     private Task _work = Task.CompletedTask;
     private Task _loop = Task.CompletedTask;
 
@@ -83,6 +84,12 @@ public sealed class AgentUpdater : IAsyncDisposable
     /// <summary>How often the install asks again whether the agent is idle.</summary>
     public TimeSpan IdlePoll { get; init; } = TimeSpan.FromSeconds(5);
 
+    /// <summary>Delay before the first automatic channel check after start.</summary>
+    public TimeSpan FirstCheck { get; init; } = TimeSpan.FromMinutes(1);
+
+    /// <summary>How often the background loop checks the channel, matching the engine's hourly check.</summary>
+    public TimeSpan CheckEvery { get; init; } = TimeSpan.FromHours(1);
+
     /// <summary>How long a check counts as fresh for <see cref="CheckIfStale"/>.</summary>
     public TimeSpan FreshFor { get; init; } = TimeSpan.FromMinutes(15);
 
@@ -99,22 +106,22 @@ public sealed class AgentUpdater : IAsyncDisposable
         get { lock (_gate) return _offer is not null; }
     }
 
-    /// <summary>Checks the channel a minute after start and then every six hours; with automatic updates on, installs what it finds.</summary>
+    /// <summary>Checks the channel a minute after start and then every hour; with automatic updates on, installs what it finds.</summary>
     public void Start() => _loop = LoopAsync();
 
     private async Task LoopAsync()
     {
         // The first check a minute after start, so a start (and a test) is not held up by the network.
-        var wait = TimeSpan.FromMinutes(1);
+        var wait = FirstCheck;
         while (!_lifetime.IsCancellationRequested)
         {
             try { await Task.Delay(wait, _options.Time, _lifetime.Token).ConfigureAwait(false); }
             catch (OperationCanceledException) { return; }
-            wait = TimeSpan.FromHours(6);
+            wait = CheckEvery;
             try
             {
                 await CheckAsync(_lifetime.Token).ConfigureAwait(false);
-                if (_settings.Read().AutoUpdate && Available && Running is not null) StartInstall();
+                TryAutoInstall();
             }
             catch (OperationCanceledException) when (_lifetime.IsCancellationRequested) { return; }
             catch (AgentFailure) { }
@@ -123,22 +130,50 @@ public sealed class AgentUpdater : IAsyncDisposable
 
     /// <summary>
     /// A check in the background unless one ran in the last <see cref="FreshFor"/> or one is under way: the pop-out
-    /// asks for it when it opens, so a new release shows without waiting for the six-hourly check (finding 16).
+    /// asks for it when it opens, so a new release shows without waiting for the hourly check (finding 16). With
+    /// automatic updates on, starts the install when a newer version is found (or already cached) and has not
+    /// already failed automatically.
     /// </summary>
     public void CheckIfStale()
     {
+        bool fresh;
         lock (_gate)
         {
             if (_state is "checking" or "waiting" or "downloading" or "installing") return;
-            if (_checkedAt is { } at && _options.Time.GetUtcNow() - at < FreshFor) return;
+            fresh = _checkedAt is { } at && _options.Time.GetUtcNow() - at < FreshFor;
+        }
+
+        if (fresh)
+        {
+            TryAutoInstall();
+            return;
         }
 
         _ = Task.Run(async () =>
         {
-            try { await CheckAsync(_lifetime.Token).ConfigureAwait(false); }
+            try
+            {
+                await CheckAsync(_lifetime.Token).ConfigureAwait(false);
+                TryAutoInstall();
+            }
             catch (AgentFailure) { /* shown as the check's error */ }
             catch (OperationCanceledException) { }
         });
+    }
+
+    /// <summary>Drops any cached offer from the previous channel so the next stale check reads the new channel.</summary>
+    public void ChannelChanged()
+    {
+        lock (_gate)
+        {
+            if (_state is "waiting" or "downloading" or "installing") return;
+            _offer = null;
+            _checkedAt = null;
+            _autoFailedVersion = null;
+            if (_state == "failed") { _state = "idle"; _error = null; }
+        }
+
+        _changed();
     }
 
     /// <summary>Reads the channel's manifest; a different version than this one is on offer.</summary>
@@ -189,6 +224,7 @@ public sealed class AgentUpdater : IAsyncDisposable
             if (Running is null) throw new AgentFailure(409, "not-installed", "This agent does not run from an installed package and cannot update itself.");
             if (_offer is null) throw new AgentFailure(409, "no-update", "No update is on offer; check first.");
             if (!_work.IsCompleted) return View();
+            _autoFailedVersion = null;
             _state = "waiting";
             _error = null;
             _work = InstallAsync(_offer, _lifetime.Token);
@@ -196,6 +232,23 @@ public sealed class AgentUpdater : IAsyncDisposable
 
         _changed();
         return View();
+    }
+
+    /// <summary>Starts the install when automatic updates are on, an update is on offer, and that version has not already failed automatically.</summary>
+    public bool TryAutoInstall()
+    {
+        if (Running is null || !_settings.Read().AutoUpdate) return false;
+        lock (_gate)
+        {
+            if (_offer is null || !_work.IsCompleted) return false;
+            if (string.Equals(_autoFailedVersion, _offer.Version, StringComparison.Ordinal)) return false;
+            _state = "waiting";
+            _error = null;
+            _work = InstallAsync(_offer, _lifetime.Token);
+        }
+
+        _changed();
+        return true;
     }
 
     /// <summary>The install itself; awaitable by tests.</summary>
@@ -250,6 +303,7 @@ public sealed class AgentUpdater : IAsyncDisposable
             {
                 _state = "failed";
                 _error = ex is AgentFailure failure ? failure.Message : "The update could not be installed.";
+                _autoFailedVersion = package.Version;
             }
 
             // The switch did not happen: the running version stays current.

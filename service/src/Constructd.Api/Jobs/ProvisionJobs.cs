@@ -241,7 +241,9 @@ public sealed class ProvisionJobs(IJobStore jobs, IJobQueryStore history, IPersi
             ?? throw new ProvisionRequestException(409, "vm-endpoint-unknown", "The VM has no SSH endpoint the engine can dial.");
 
         var id = Guid.NewGuid().ToString("n");
-        var operation = await gates.TryAcquireAsync(vm.Name, id, ct);
+        var operation = vm.Kind == VmKind.Primary
+            ? await Endpoints.PrimaryOperationGate.AcquireAsync(gates, vm.Name, id, ct)
+            : await gates.TryAcquireAsync(vm.Name, id, ct);
         if (operation is null)
         {
             gates.IsHeld(vm.Name, out var holder);
@@ -304,7 +306,9 @@ public sealed class ProvisionJobs(IJobStore jobs, IJobQueryStore history, IPersi
             ?? throw new ProvisionRequestException(409, "vm-endpoint-unknown", "The VM has no SSH endpoint the engine can dial.");
 
         var id = Guid.NewGuid().ToString("n");
-        var operation = await gates.TryAcquireAsync(vm.Name, id, ct);
+        var operation = vm.Kind == VmKind.Primary
+            ? await Endpoints.PrimaryOperationGate.AcquireAsync(gates, vm.Name, id, ct)
+            : await gates.TryAcquireAsync(vm.Name, id, ct);
         if (operation is null)
         {
             gates.IsHeld(vm.Name, out var holder);
