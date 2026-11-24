@@ -27,20 +27,22 @@ public static class DualStackListener
         ArgumentNullException.ThrowIfNull(address);
         if ((address.Equals(IPAddress.Any) || address.Equals(IPAddress.IPv6Any)) && Socket.OSSupportsIPv6)
         {
-            var dual = TcpListener.Create(port);
+            TcpListener? dual = null;
             try
             {
+                dual = TcpListener.Create(port);
                 if (backlog is int b) dual.Start(b); else dual.Start();
                 return dual;
             }
             catch (SocketException ex) when (address.Equals(IPAddress.Any) &&
-                ex.SocketErrorCode is SocketError.AddressFamilyNotSupported or SocketError.ProtocolNotSupported)
+                ex.SocketErrorCode is SocketError.AddressFamilyNotSupported or SocketError.ProtocolNotSupported or SocketError.AddressAlreadyInUse)
             {
-                dual.Stop();
+                dual?.Stop();
+                // Fall back to IPv4-only when IPv6 is unavailable or an existing IPv6-only service owns the port.
             }
             catch
             {
-                dual.Stop();
+                dual?.Stop();
                 throw;
             }
         }
@@ -82,10 +84,10 @@ public static class DualStackListener
             }
         }
 
-        using var fallback = new Socket(address.AddressFamily, SocketType.Stream, ProtocolType.Tcp);
-        if (exclusiveAddressUse) fallback.ExclusiveAddressUse = true;
         try
         {
+            using var fallback = new Socket(address.AddressFamily, SocketType.Stream, ProtocolType.Tcp);
+            if (exclusiveAddressUse) fallback.ExclusiveAddressUse = true;
             fallback.Bind(new IPEndPoint(address, port));
             return true;
         }

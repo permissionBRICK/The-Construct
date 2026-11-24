@@ -522,11 +522,10 @@ function Get-ListenPort {
     <# The port the API listens on, taken from -ListenUrl (including wildcard +/*/[::]). #>
     param([Parameter(Mandatory = $true)][string]$Url)
 
-    $first = ($Url -split ';' | ForEach-Object { $_.Trim() } | Where-Object { $_ } | Select-Object -First 1)
-    if (-not $first) {
-        throw "-ListenUrl must be an absolute URL like https://0.0.0.0:7462; got '$Url'."
+    if ($Url.Contains(';')) {
+        throw "-ListenUrl must be a single absolute URL like https://0.0.0.0:7462; got '$Url'."
     }
-    $normalized = $first.Replace('://*', '://localhost').Replace('://+', '://localhost')
+    $normalized = $Url.Trim().Replace('://*', '://localhost').Replace('://+', '://localhost')
     $uri = $null
     if (-not [System.Uri]::TryCreate($normalized, [System.UriKind]::Absolute, [ref]$uri)) {
         throw "-ListenUrl must be an absolute URL like https://0.0.0.0:7462; got '$Url'."

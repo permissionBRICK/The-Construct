@@ -25,6 +25,7 @@ public static class ListenUrls
         if (!Uri.TryCreate(url, UriKind.Absolute, out var uri)) return url;
         if (!string.Equals(uri.Host, "0.0.0.0", StringComparison.Ordinal)) return url;
         if (uri.Scheme is not ("http" or "https")) return url;
+        if (uri.AbsolutePath != "/" || uri.Query.Length > 0 || uri.Fragment.Length > 0) return url;
         return $"{uri.Scheme}://+:{uri.Port}";
     }
 }

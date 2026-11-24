@@ -27,6 +27,7 @@ public sealed class DualStackListenTests
     [InlineData("https://0.0.0.0:7462", "https://+:7462")]
     [InlineData("http://0.0.0.0:0", "http://+:0")]
     [InlineData("https://0.0.0.0:7462/", "https://+:7462")]
+    [InlineData("https://0.0.0.0:7462/api", "https://0.0.0.0:7462/api")]
     [InlineData("https://0.0.0.0:7462;http://127.0.0.1:7463", "https://+:7462;http://127.0.0.1:7463")]
     [InlineData("https://127.0.0.1:7462", "https://127.0.0.1:7462")]
     [InlineData("https://192.168.1.10:7462", "https://192.168.1.10:7462")]
@@ -70,6 +71,32 @@ public sealed class DualStackListenTests
         finally
         {
             listener.Stop();
+        }
+    }
+
+    [Fact]
+    public async Task DualStackListener_on_wildcard_falls_back_to_ipv4_when_ipv6_only_listener_holds_port()
+    {
+        if (!Socket.OSSupportsIPv6) return;
+
+        var ipv6Only = new TcpListener(IPAddress.IPv6Any, 0);
+        ipv6Only.Server.DualMode = false;
+        ipv6Only.Start();
+        TcpListener? fallback = null;
+        try
+        {
+            var port = ((IPEndPoint)ipv6Only.LocalEndpoint).Port;
+            fallback = DualStackListener.Start(IPAddress.Any, port);
+            var acceptV4 = fallback.AcceptTcpClientAsync();
+            using var v4 = new TcpClient(AddressFamily.InterNetwork);
+            await v4.ConnectAsync(IPAddress.Loopback, port);
+            using var serverV4 = await acceptV4.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.True(serverV4.Connected);
+        }
+        finally
+        {
+            fallback?.Stop();
+            ipv6Only.Stop();
         }
     }
 
