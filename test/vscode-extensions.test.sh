@@ -149,18 +149,20 @@ stock="$(cat "${dir}/${claude1}/extension.js.construct-partial.bak")"
 claude_inode="$(inode "${dir}/${claude1}/package.json")"
 chatgpt_inode="$(inode "${dir}/${chatgpt}/package.json")"
 
-# ── a current one is not reinstalled; its patch and backup hold ───────────────
+# ── a current one is not reinstalled; its patch holds, its backups go ────────
 run "${home}"
 ok "current: the marketplace is asked (--force)" logged "--install-extension anthropic.claude-code --force"
 ok "current: claude-code folder untouched" test "$(inode "${dir}/${claude1}/package.json")" = "${claude_inode}"
 ok "current: chatgpt folder untouched" test "$(inode "${dir}/${chatgpt}/package.json")" = "${chatgpt_inode}"
 ok "current: says it is current" said "anthropic.claude-code 2.0.1 is current"
-ok "current: backup kept" test "$(cat "${dir}/${claude1}/extension.js.construct-partial.bak" 2>/dev/null)" = "${stock}"
+# A backup holds the bytes of the moment its patch went on (the other patch possibly on): restoring one could bring
+# the other back, so every backup goes and each disable step reverts its own transform in place.
+ok "current: backups dropped" test ! -e "${dir}/${claude1}/extension.js.construct-partial.bak"
 ok "current: patched once" once "${dir}/${claude1}/extension.js"
 
-# The kept backup is what a revert restores, byte for byte.
+# The revert in place gives the stock bytes back.
 run "${home}" CLAUDE_PARTIAL_STREAMING=false
-ok "current, streaming off: stock restored from the backup" test "$(cat "${dir}/${claude1}/extension.js")" = "${stock}"
+ok "current, streaming off: stock restored in place" test "$(cat "${dir}/${claude1}/extension.js")" = "${stock}"
 run "${home}"
 ok "current, streaming on again: patched once" once "${dir}/${claude1}/extension.js"
 

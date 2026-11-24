@@ -468,8 +468,36 @@ for name in sorted(os.listdir(ext_dir)):
     if isinstance(manifest, dict) and f'{manifest.get("publisher", "")}.{manifest.get("name", "")}'.lower() != wanted:
         continue  # another extension whose name starts with this one's
     stale.append(name)
+# A folder another extensions.json names (a named profile's, under the data directory) stays.
+data_dir = os.path.dirname(os.path.normpath(ext_dir))
+for root, dirs, files in os.walk(data_dir):
+    dirs[:] = [d for d in dirs if d not in ("extensions", "cli", "node_modules")]
+    if "extensions.json" in files:
+        listing = read_json(os.path.join(root, "extensions.json"))
+        for item in listing if isinstance(listing, list) else []:
+            if not isinstance(item, dict):
+                continue
+            where = item.get("location") if isinstance(item.get("location"), dict) else {}
+            named = item.get("relativeLocation") or os.path.basename(str(where.get("path", "")).rstrip("/"))
+            if named in stale:
+                print(f"  kept {named}: a profile uses it")
+                stale.remove(named)
 if not stale:
     sys.exit(0)
+
+# A connected VS Code window keeps extensions loaded that no file handle shows: old versions wait for a later
+# provision while an extension host runs.
+for pid in os.listdir("/proc"):
+    if not pid.isdigit():
+        continue
+    try:
+        with open(f"/proc/{pid}/cmdline", "rb") as f:
+            args = f.read().split(b"\0")
+    except OSError:
+        continue
+    if b"--type=extensionHost" in args:
+        print("  kept the older versions: a VS Code window is connected; a later provision removes them")
+        sys.exit(0)
 
 used = in_use()
 removed = []
@@ -601,14 +629,12 @@ preinstall_extensions() {
     extensions_record prune "${ext_dir}" "${id}" || warn "  WARNING: could not remove the older versions of ${id}"
   done
 
-  # A (re)installed build brings a stock extension.js; drop any patch backups in its
-  # folder so the enable steps below back up THIS build, never stale bytes a later
-  # revert could wrongly restore. A build left as it was keeps its backups (its stock
-  # bytes); the enable steps skip a copy that is already patched.
-  if [[ -n "${claude_folder}" ]]; then
-    rm -f "${ext_dir:?}/${claude_folder:?}"/extension.js.construct-*.bak \
-          "${ext_dir:?}/${claude_folder:?}"/dist/extension.js.construct-*.bak 2>/dev/null || true
-  fi
+  # Drop the patch backups of every Claude Code build before the patch steps, as before: each backup holds the bytes
+  # of the moment its patch went on, possibly with the other patch on already, so restoring one could bring the other
+  # back. Without them each disable step reverts its own transform in place, independently of the other, and each
+  # enable step skips a copy that is already patched (or backs up a freshly installed build).
+  rm -f "${ext_dir:?}"/anthropic.claude-code-*/extension.js.construct-*.bak \
+        "${ext_dir:?}"/anthropic.claude-code-*/dist/extension.js.construct-*.bak 2>/dev/null || true
 
   # Apply Construct's Remote-SSH extension patches to the installed
   # anthropic.claude-code build. Each is reversible + idempotent; run with the

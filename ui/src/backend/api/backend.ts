@@ -2170,7 +2170,11 @@ export class ApiBackend implements Backend {
       try { updates = JSON.parse(raw) as Record<string, unknown>; } catch { continue; }
       sl.admin.updates = { ...sl.admin.updates, auto: on };
       if (updates.auto === on) continue;
-      void this.run(() => ok(this.engine(id).PUT('/api/v1/host/config', { body: { updates: { ...updates, auto: on } } as never })), undefined, id);
+      // The cached section follows the write at once, so a switch flipped back before the host is read again sends
+      // its own position instead of comparing with the old one.
+      const next = { ...updates, auto: on };
+      sl.admin.config = sl.admin.config.map(c => c.name === 'updates' ? { ...c, json: JSON.stringify(next, null, 2) } : c);
+      void this.run(() => ok(this.engine(id).PUT('/api/v1/host/config', { body: { updates: next } as never })), undefined, id);
     }
     this.compose();
   }

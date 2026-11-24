@@ -1196,8 +1196,12 @@ describe('ApiBackend device, connections and vault', () => {
     be.setPrefs({ channel: 'stable' });
     be.setPrefs({ startWithOs: false });
     be.setPrefs({ autoUpdate: false });
+    // Flipped back before the host is read again: the host gets the latest position too.
+    be.setPrefs({ autoUpdate: true });
     await settle();
-    expect(posts(calls).map(c => [c.path, c.body])).toEqual([
+    const hostWrites = posts(calls).filter(c => c.path.endsWith('/host/config')).map(c => (c.body as { updates: { auto: boolean } }).updates.auto);
+    expect(hostWrites).toEqual([false, true]);
+    expect(posts(calls).slice(0, 5).map(c => [c.path, c.body])).toEqual([
       ['/api/device/settings', { channel: 'stable' }], ['/api/device/settings', { startWithOs: false }],
       ['/api/device/settings', { autoUpdate: false }], [`/api/engines/${E1}/api/v1/me/updates`, { autoReprovision: false }],
       [`/api/engines/${E1}/api/v1/host/config`, { updates: { repository: 'o/r', channel: 'main', auto: false, drainTimeoutMinutes: 60, healthTimeoutSeconds: 120 } }],
