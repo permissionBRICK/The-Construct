@@ -185,7 +185,10 @@ class ChangedGroupsTests(unittest.TestCase):
         self.assertEqual(self.groups('extension/vm/t3-pairing.sh'), ['agent', 'panel', 'service', 't3'])
         self.assertEqual(self.groups('extension/extension.js'), ['panel'])
         self.assertEqual(self.groups('install.ps1'), ['agent', 'ui'])
-        self.assertEqual(self.groups('service/src/Constructd.Core/Logic/ReleaseChannel.cs'), ['release', 'service'])
+        self.assertEqual(self.groups('service/src/Constructd.Core/Logic/ReleaseChannel.cs'), ['engine', 'release'])
+        self.assertEqual(self.groups('service/host/install-construct-host.sh'), ['engine', 'service'])
+        self.assertEqual(self.groups('bin/construct-expose.sh'), ['engine', 'service'])
+        self.assertEqual(self.groups('bin/provision.sh'), ['service'])
 
     def test_documentation_selects_nothing_and_an_unknown_path_selects_all(self):
         self.assertEqual(self.groups('docs/host-release.md', 'README.md'), [])

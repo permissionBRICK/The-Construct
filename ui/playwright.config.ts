@@ -5,7 +5,8 @@ export default defineConfig({
   testDir: 'tests/screens',
   snapshotPathTemplate: '{testDir}/__screenshots__/{arg}{ext}',
   fullyParallel: true,
-  workers: 2,
+  // Three quarters of the cores: the pictures are independent, and two workers left most of a loaded machine idle.
+  workers: '75%',
   reporter: 'list',
   expect: { toHaveScreenshot: { maxDiffPixelRatio: 0.01, animations: 'disabled' } },
   use: { baseURL: 'http://127.0.0.1:4799/', browserName: 'chromium', headless: true },

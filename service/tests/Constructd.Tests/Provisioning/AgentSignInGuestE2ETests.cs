@@ -17,6 +17,7 @@ namespace Constructd.Tests.Provisioning;
 /// sudo without a password. Runs only when a test guest is configured (<see cref="E2ESshFactAttribute"/>);
 /// <c>CONSTRUCT_E2E_SIGN_IN_AGENTS</c> names the agents to try (default all four).
 /// </summary>
+[Trait("Category", "E2E")]
 public sealed class AgentSignInGuestE2ETests
 {
     [E2ESshFact]

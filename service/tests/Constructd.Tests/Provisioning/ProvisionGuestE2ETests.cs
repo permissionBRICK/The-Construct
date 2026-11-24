@@ -29,6 +29,7 @@ public sealed class E2ESshFactAttribute : FactAttribute
 /// <c>CONSTRUCT_E2E_SUDO_PASSWORD</c> when the user needs one for sudo, <c>CONSTRUCT_E2E_SEED_USER</c>
 /// when the seed user is not the SSH user (default: the SSH user, or <c>agent</c> for root).
 /// </summary>
+[Trait("Category", "E2E")]
 public sealed class ProvisionGuestE2ETests
 {
     [E2ESshFact]

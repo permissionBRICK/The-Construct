@@ -24,6 +24,8 @@ using Xunit.Abstractions;
 
 namespace Constructd.Tests.EndToEnd;
 
+// The e2e group runs it (docs/local-checks.md): real clients against a real HTTPS engine on SQLite, about half a minute.
+[Trait("Category", "E2E")]
 public sealed class HostAdminEndToEndTests(ITestOutputHelper output)
 {
     [LinuxToolchainFact]
