@@ -224,6 +224,8 @@ if runs service; then
   step bash service/tests/host-installer-certificate.test.sh
   step bash test/backup-e2e.test.sh
   step bash test/external-host.test.sh
+  # Every changed shell script, once: no new shellcheck diagnostics against the branch's base.
+  scripted='' step bash test/shellcheck-changed.sh
 fi
 if runs release; then
   # Release tooling, channel resolution and the updater tests (docs/release-flow.md).

@@ -60,7 +60,7 @@ stays within one directory and `**` crosses directories. A row without a group s
 |---|---|
 | `extension/**` | `panel` |
 | `bin/*t3*`, `test/t3-*`, `extension/vm/*t3*` | `t3` |
-| `service/host/**`, `service/tests/*`, `service/tests/Constructd.Tests/**/*.ps1`, `service/src/Constructd.Windows/**/*.ps1`, `lib/**`, `bin/**`, `console-viewer/**`, `extension/src/projects.js`, `extension/vm/**`, `companion/**`, `test/isolate-env.test.sh`, `test/install-sdks.test.sh` | `service` |
+| `service/host/**`, `service/tests/*`, `service/tests/Constructd.Tests/**/*.ps1`, `service/src/Constructd.Windows/**/*.ps1`, `lib/**`, `bin/**`, `console-viewer/**`, `extension/src/projects.js`, `extension/vm/**`, `companion/**`, `test/isolate-env.test.sh`, `test/install-sdks.test.sh`, `test/shellcheck-changed.sh` | `service` |
 | `service/src/**`, `service/tests/Constructd.Tests/**`, `service/openapi/**`, `service/Constructd.sln`, `service/host/**`, `test/dotnet/**`, `test/fixtures/vault-patterns.json`, `docs/plans/host-administration-contracts.md`, `bin/adopt-host.py`, `bin/construct`, `bin/construct-vm.sh`, `bin/construct-expose.sh`, `bin/construct-secret.sh`, `bin/construct-config.sh`, `bin/construct-idle-report.sh`, `bin/construct-backup.sh` | `engine` |
 | `ui/**` | `ui` |
 | `agent/**`, `test/agent-install.test.sh`, `test/agent-bootstrap.test.ps1`, `install.ps1`, `Update-Construct.ps1`, `scripts/package-agent.py`, `service/src/Construct.Keys/**`, `service/src/Constructd.Store/**`, `service/src/Constructd.Sync/**`, `service/src/Constructd.Api/**`, `service/openapi/**` | `agent`, `ui` |
@@ -154,7 +154,8 @@ Before this group existed the `service` group ran these tests; it now runs the s
 
 The `service` group tests the guest's scripts and CLI, provisioning, the console viewer, the
 host installer, packaging and updater, and the Hyper-V driver's PowerShell, each with its own
-stubs; nothing in it talks to a real host.
+stubs; nothing in it talks to a real host. Its last step, `test/shellcheck-changed.sh`, checks
+every shell script changed since the branch's base once: no new shellcheck diagnostics.
 
 The `e2e` group runs what goes end to end on this machine: the engine's tests with real clients
 (`HostAdminEndToEndTests`: the guest CLI in bash, node, curl and python against a real HTTPS

@@ -872,23 +872,7 @@ ok "the CLI install step keeps its original title" \
 ok "the provisioning marker is removed when the run finishes" \
   sh -c "sed -n '/^_finish_provision()/,/^}\$/p' '${PROVISION}' | grep -q '_PROVISION_MARKER'"
 
-# ── shellcheck: touched scripts get no worse ─────────────────────────────────
-# Counting DIAGNOSTICS, not just the set of codes: 64 more instances of an
-# already-present code is still 64 new findings to read past.
-
-if command -v shellcheck >/dev/null 2>&1; then
-  for f in bin/construct bin/construct-expose.sh bin/construct-vm.sh bin/construct-secret.sh bin/construct-idle-report.sh bin/construct-backup.sh \
-           bin/provision.sh test/construct-expose.test.sh test/idle-report.test.sh; do
-    now_count="$(shellcheck -f gcc "${ROOT}/${f}" 2>/dev/null | wc -l)"
-    base_count=0
-    if git -C "${ROOT}" cat-file -e "HEAD:${f}" 2>/dev/null; then
-      git -C "${ROOT}" show "HEAD:${f}" >"${tmp}/base_shellcheck_input"
-      base_count="$(shellcheck -f gcc "${tmp}/base_shellcheck_input" 2>/dev/null | wc -l)"
-    fi
-    ok "shellcheck: ${f} has no new diagnostics (${now_count} now, ${base_count} at HEAD)" \
-      test "${now_count}" -le "${base_count}"
-  done
-fi
+# The scripts get no new shellcheck diagnostics: test/shellcheck-changed.sh, once for every changed script.
 
 printf '\n%d passed, %d failed\n' "${pass}" "${fail}"
 [[ "${fail}" -eq 0 ]]
