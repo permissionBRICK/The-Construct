@@ -43,11 +43,36 @@ public interface IDevicePlatform
     /// </summary>
     Task<bool> OpenT3DesktopAsync(string? link, CancellationToken ct) => Task.FromResult(false);
 
+    /// <summary>Install and update support for Construct's patched T3 Code Desktop app; null on platforms without it.</summary>
+    IT3DesktopPlatform? T3Desktop => null;
+
     /// <summary>Whether the agent starts with the user's session; null when this platform cannot say.</summary>
     bool? StartWithOs { get; }
 
     /// <summary>Starts the agent at <paramref name="executable"/> with the session, or stops doing so.</summary>
     void SetStartWithOs(bool on, string executable);
+}
+
+/// <summary>OS operations for managing Construct's patched T3 Code Desktop app on this device (Windows).</summary>
+public interface IT3DesktopPlatform
+{
+    /// <summary>Directory holding <c>installed.json</c> and cached <c>T3Code-Construct-Setup.exe</c>.</summary>
+    string ArtifactDirectory { get; }
+
+    /// <summary>True when T3 Code Desktop's executable is present on disk.</summary>
+    bool IsInstalled();
+
+    /// <summary>True when any process from the T3 Code Desktop install directory is currently running.</summary>
+    bool IsRunning();
+
+    /// <summary>
+    /// Runs the silent NSIS installer (<c>T3Code-Construct-Setup.exe</c>). When <paramref name="allowCloseRunning"/> is
+    /// true, passes <c>--updated /S</c> (which closes a running app); otherwise <c>/S</c>. Returns the process exit code.
+    /// </summary>
+    Task<int> RunInstallerAsync(string installerPath, bool allowCloseRunning, CancellationToken ct);
+
+    /// <summary>Starts the installed T3 Code Desktop detached.</summary>
+    Task<bool> LaunchAsync(CancellationToken ct);
 }
 
 /// <summary>The workspace share of a VM on a drive letter (Windows: <c>net use</c>).</summary>

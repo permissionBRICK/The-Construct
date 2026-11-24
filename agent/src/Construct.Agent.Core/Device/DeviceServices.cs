@@ -26,7 +26,7 @@ public interface IAgentShell
 public sealed class DeviceServices : IAsyncDisposable
 {
     public DeviceServices(IDevicePlatform platform, DeviceSettings settings, SshClientConfig ssh, VmLinks links, AgentUpdater updater, UpdateEverything everything,
-        IDeviceEngines engines, AgentEvents? events = null, TimeProvider? time = null)
+        IDeviceEngines engines, AgentEvents? events = null, TimeProvider? time = null, T3DesktopUpdater? t3Desktop = null)
     {
         Platform = platform;
         Settings = settings;
@@ -35,6 +35,7 @@ public sealed class DeviceServices : IAsyncDisposable
         Actions = new VmActions(links, platform);
         SignIns = new SignInForwards(links, engines, platform);
         Updater = updater;
+        T3Desktop = t3Desktop ?? new T3DesktopUpdater(platform.T3Desktop, engines, settings, new HttpClient { Timeout = TimeSpan.FromMinutes(10) }, () => events?.Publish("update"), time ?? TimeProvider.System, events);
         Everything = everything;
         Repairs = events is null ? null : new RepairOpener(events, engines, Actions, time ?? TimeProvider.System);
     }
@@ -53,6 +54,9 @@ public sealed class DeviceServices : IAsyncDisposable
     public SignInForwards SignIns { get; }
 
     public AgentUpdater Updater { get; }
+
+    /// <summary>Installs and updates Construct's patched T3 Code Desktop app on Windows.</summary>
+    public T3DesktopUpdater T3Desktop { get; }
 
     public UpdateEverything Everything { get; }
 
@@ -82,13 +86,15 @@ public sealed class DeviceServices : IAsyncDisposable
         var install = new AgentInstall(options.DataDirectory, OperatingSystem.IsWindows() ? "construct-agent.exe" : "construct-agent");
         var running = install.RunningVersion(Environment.ProcessPath);
         UpdateEverything? everything = null;
+        var t3Desktop = new T3DesktopUpdater(platform.T3Desktop, engines, settings, new HttpClient { Timeout = TimeSpan.FromMinutes(10) },
+            () => agent.Events.Publish("update"), options.Time, agent.Events);
         var updater = new AgentUpdater(options, install, settings, new HttpClient { Timeout = TimeSpan.FromMinutes(10) },
             OperatingSystem.IsWindows() ? "agentWindows" : "agentLinux",
-            () => everything?.Running == true ? "the update of hosts and VMs" : agent.Pairing() is not null ? "a device pairing" : null,
+            () => everything?.Running == true ? "the update of hosts and VMs" : t3Desktop.Installing ? "the T3 Code Desktop update" : agent.Pairing() is not null ? "a device pairing" : null,
             platform as IAgentLauncher ?? throw new InvalidOperationException("The platform cannot start an agent."), stop, () => agent.Events.Publish("update"))
         { Running = running };
-        everything = new UpdateEverything(engines, updater, () => agent.Events.Publish("update"), options.Time);
-        var services = new DeviceServices(platform, settings, ssh, links, updater, everything, engines, agent.Events, options.Time)
+        everything = new UpdateEverything(engines, updater, () => agent.Events.Publish("update"), options.Time, t3Desktop);
+        var services = new DeviceServices(platform, settings, ssh, links, updater, everything, engines, agent.Events, options.Time, t3Desktop)
         {
             StartExecutable = running is not null ? install.ExecutableOf(running) : Environment.ProcessPath,
         };
@@ -100,12 +106,14 @@ public sealed class DeviceServices : IAsyncDisposable
     {
         Links.Start();
         Updater.Start();
+        T3Desktop.Start();
         Repairs?.Start();
     }
 
     public async ValueTask DisposeAsync()
     {
         if (Repairs is not null) await Repairs.DisposeAsync().ConfigureAwait(false);
+        await T3Desktop.DisposeAsync().ConfigureAwait(false);
         await Updater.DisposeAsync().ConfigureAwait(false);
         await SignIns.DisposeAsync().ConfigureAwait(false);
         await Links.DisposeAsync().ConfigureAwait(false);

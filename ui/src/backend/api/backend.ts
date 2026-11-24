@@ -1774,7 +1774,7 @@ export class ApiBackend implements Backend {
         const d = await ok(c.GET('/api/v1/vm-defaults'));
         // The engine recommends nothing when no VM fits into the host's free memory.
         if (!(d.recommendedRamGb >= 1)) throw new Error(req.where === 'local' ? 'This PC has too little free memory for a VM' : 'The host has too little free memory for a VM');
-        const r = await ok(this.agent.POST('/api/engines/{engine}/vms', { params: { path: { engine } }, body: { name, ramGb: d.recommendedRamGb, diskGb: d.recommendedDiskGb, desired: { projects: [], settings: {}, codingAgents: req.agents ?? DEFAULT_AGENTS } } as never }));
+        const r = await ok(this.agent.POST('/api/engines/{engine}/vms', { params: { path: { engine } }, body: { name, ramGb: d.recommendedRamGb, diskGb: d.recommendedDiskGb, desired: { projects: [], settings: { t3Code: 'true', t3CodePatched: 'true' }, codingAgents: req.agents ?? DEFAULT_AGENTS } } as never }));
         await this.refreshEngine(engine);
         await this.track(engine, r.jobId, { kind: 'create' });
       } catch (e) {

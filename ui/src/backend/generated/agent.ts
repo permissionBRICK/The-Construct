@@ -870,8 +870,59 @@ export interface paths {
         };
         get: operations["GetUpdateEverything"];
         put?: never;
-        /** @description Each engine the user administers updates itself, each engine reprovisions the user's own VMs, then this device updates; the parts and their state, never stored. */
+        /** @description Each engine the user administers updates itself, each engine reprovisions the user's own VMs, patched T3 Code Desktop updates on Windows when used, then this device updates; the parts and their state, never stored. */
         post: operations["UpdateEverything"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/t3-desktop/update": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Construct's patched T3 Code Desktop app on this device: whether it is supported and installed, its channel and build, any newer release on offer, and whether an automatic update is staged waiting for T3 Code Desktop to close. */
+        get: operations["GetT3DesktopUpdate"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/t3-desktop/update/check": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Checks permissionBRICK/construct-t3-builds for a newer patched T3 Code Desktop build for this device's channel. */
+        post: operations["CheckT3DesktopUpdate"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/t3-desktop/update/install": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Downloads (or reuses the staged) patched T3 Code Desktop installer, runs it silently (--updated /S), updates installed.json, and relaunches T3 Code Desktop if it was running. 501 not-available where not supported. */
+        post: operations["InstallT3DesktopUpdate"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1503,6 +1554,20 @@ export interface components {
         };
         SwitchRequest: {
             on: boolean;
+        };
+        T3DesktopUpdateView: {
+            supported: boolean;
+            installed: boolean;
+            channel: null | string;
+            version: null | string;
+            buildHash: null | string;
+            available: null | string;
+            availableDesktopVersion: null | string;
+            state: string;
+            error: null | string;
+            /** Format: date-time */
+            checkedAt: null | string;
+            waitingForClose: boolean;
         };
         T3PairingLink: {
             pairUrl: string;
@@ -3561,6 +3626,93 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["EverythingView"];
+                };
+            };
+            /** @description An error. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["AgentProblem"];
+                };
+            };
+        };
+    };
+    GetT3DesktopUpdate: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["T3DesktopUpdateView"];
+                };
+            };
+            /** @description An error. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["AgentProblem"];
+                };
+            };
+        };
+    };
+    CheckT3DesktopUpdate: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["T3DesktopUpdateView"];
+                };
+            };
+            /** @description An error. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["AgentProblem"];
+                };
+            };
+        };
+    };
+    InstallT3DesktopUpdate: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Accepted */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["T3DesktopUpdateView"];
                 };
             };
             /** @description An error. */
