@@ -17,7 +17,7 @@ namespace Construct.Agent.Tests;
 /// the host package of the device's channel checked against its manifest, the installer run elevated and unattended
 /// (faked here: it writes what the real one writes), and its three outcomes: done, failed with a reason, restart.
 /// </summary>
-public sealed class EngineSetupTests : IAsyncDisposable
+public sealed class EngineSetupTests : IAsyncLifetime
 {
     private const string Manifest = "https://updates.example/construct/manifest.json";
     private readonly LegacyFixture _fixture = new();
@@ -298,7 +298,9 @@ public sealed class EngineSetupTests : IAsyncDisposable
         await _agent.PostAsync("api/engines/local/setup", null, HttpStatusCode.NotImplemented);
     }
 
-    public async ValueTask DisposeAsync()
+    public Task InitializeAsync() => Task.CompletedTask;
+
+    public async Task DisposeAsync()
     {
         if (_agent is not null) await _agent.DisposeAsync();
         _engine.Dispose();

@@ -22,7 +22,7 @@ namespace Constructd.Tests.Https;
 /// routes by server name to a VM's main forward and to the vault relay, a guest that does not answer gets a
 /// page that reloads itself, and a renewed certificate is served without a restart.
 /// </summary>
-public sealed class HttpsGatewayTests : IAsyncDisposable
+public sealed class HttpsGatewayTests : IAsyncLifetime
 {
     private const string Pattern = "{name}.vms.test";
     private readonly string _directory = TestCertificates.TempDirectory();
@@ -57,7 +57,9 @@ public sealed class HttpsGatewayTests : IAsyncDisposable
             NullLogger<TcpRelayPortForwardManager>.Instance, _gateway);
     }
 
-    public async ValueTask DisposeAsync()
+    public Task InitializeAsync() => Task.CompletedTask;
+
+    public async Task DisposeAsync()
     {
         await _manager.DisposeAsync();
         await _gateway.DisposeAsync();

@@ -174,15 +174,7 @@ ok "it adopts the instance name the host asked for" \
 ok "a name that cannot be used warns instead of failing the run" \
   grep -q 'warn "hostname is still \${SEED_PLACEHOLDER_HOSTNAME}' "${PROVISION}"
 
-# ── The default path renders the same script as before ────────────────────────
-if git -C "${ROOT}" show HEAD:bin/provision.sh >"${tmp}/base_provision.sh" 2>/dev/null; then
-  base_count="$(shellcheck -f gcc "${tmp}/base_provision.sh" 2>/dev/null | wc -l)"
-  now_count="$(shellcheck -f gcc "${PROVISION}" 2>/dev/null | wc -l)"
-  if command -v shellcheck >/dev/null 2>&1; then
-    ok "shellcheck: bin/provision.sh has no new diagnostics (${now_count} now, ${base_count} at HEAD)" \
-      test "${now_count}" -le "${base_count}"
-  fi
-fi
+# bin/provision.sh gets no new shellcheck diagnostics: test/shellcheck-changed.sh, once for every changed script.
 
 echo ""
 echo "=== ${pass} passed, ${fail} failed ==="

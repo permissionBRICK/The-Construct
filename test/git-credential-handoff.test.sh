@@ -18,14 +18,19 @@ cat > "$tmp/bin/git" <<'GIT'
 #!/usr/bin/env bash
 set -euo pipefail
 [[ "$GIT_TERMINAL_PROMPT" == 0 ]]
-[[ "$GIT_CONFIG_COUNT" == 2 && "$GIT_CONFIG_KEY_0" == credential.helper && -z "$GIT_CONFIG_VALUE_0" ]]
+[[ "$GIT_CONFIG_COUNT" == 3 && "$GIT_CONFIG_KEY_0" == credential.helper && -z "$GIT_CONFIG_VALUE_0" ]]
 [[ "$GIT_CONFIG_KEY_1" == credential.helper && "$GIT_CONFIG_VALUE_1" == store\ --file=* ]]
+# The VM's own store is asked after the seeded one, and only asked: never stored into or erased from.
+[[ "$GIT_CONFIG_KEY_2" == credential.helper && "$GIT_CONFIG_VALUE_2" == *'if [ "$1" = get ]; then git credential-store get; fi'* ]]
 [[ "$*" != *'fixture-pat'* && "$*" != *'skipped.example'* ]]
 printf 'protocol=https\nhost=verified.example\n\n' | "$REAL_GIT" credential fill > "$FIXTURE_ROOT/filled"
 printf '%s\n' "$*" >> "$FIXTURE_ROOT/argv"
 GIT
 chmod 700 "$tmp/bin/git"
 export PATH="$tmp/bin:$PATH" CONFIG_FILE="$tmp/config.env"
+# The checkout asks the VM's own ~/.git-credentials too: an empty home of the test's, never this machine's.
+mkdir -p "$tmp/home"
+export HOME="$tmp/home"
 export GIT_CLONE_SKIP_HOSTS_B64="$(printf '%s' 'https://skipped.example' | base64 -w0)"
 # Exactly the existing host encoding; decoded credentials only enter the seed file.
 GIT_CLONE_CREDENTIALS_B64="$(printf '%s' 'https://fixture-user:fixture-pat%3A%2F%40%20space@verified.example' | base64 -w0)"

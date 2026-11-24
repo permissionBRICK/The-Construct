@@ -830,6 +830,13 @@ run_write_config() { # <provision-script> <config-file-to-write>
       CONSTRUCT_EXTERNAL_HOST=""; CONSTRUCT_EXTERNAL_SSH_PORT=22; _external_ssh_port_saved=""
       CONSTRUCT_SERVICE_URL="${SERVICE_URL}"; CONSTRUCT_INSTANCE_NAME=work-vm
       CONSTRUCT_IDLE_REPORT_INTERVAL_SEC=60; _idle_interval_saved=""
+      # The defaults provision.sh resolves before write_configuration (set -u): without
+      # them the function stops at its first unset name and both files come out short.
+      DOCKER_REGISTRY_MIRRORS=""; T3CODE_BUILD_SOURCE=prebuilt
+      T3CODE_HTTPS=true; _t3code_https_saved=""; T3CODE_AUTO_APPROVE=false
+      SWAP_SIZE_GB=auto; _swap_size_saved=""
+      CONSTRUCT_USAGE_REPORT_INTERVAL_MIN=15; CONSTRUCT_USAGE_REPORT_ENABLED=true
+      _usage_interval_saved=""; _usage_enabled_saved=""
       eval "${BODY}"
       write_configuration
     ' >/dev/null 2>&1
@@ -865,23 +872,7 @@ ok "the CLI install step keeps its original title" \
 ok "the provisioning marker is removed when the run finishes" \
   sh -c "sed -n '/^_finish_provision()/,/^}\$/p' '${PROVISION}' | grep -q '_PROVISION_MARKER'"
 
-# ── shellcheck: touched scripts get no worse ─────────────────────────────────
-# Counting DIAGNOSTICS, not just the set of codes: 64 more instances of an
-# already-present code is still 64 new findings to read past.
-
-if command -v shellcheck >/dev/null 2>&1; then
-  for f in bin/construct bin/construct-expose.sh bin/construct-vm.sh bin/construct-secret.sh bin/construct-idle-report.sh bin/construct-backup.sh \
-           bin/provision.sh test/construct-expose.test.sh test/idle-report.test.sh; do
-    now_count="$(shellcheck -f gcc "${ROOT}/${f}" 2>/dev/null | wc -l)"
-    base_count=0
-    if git -C "${ROOT}" cat-file -e "HEAD:${f}" 2>/dev/null; then
-      git -C "${ROOT}" show "HEAD:${f}" >"${tmp}/base_shellcheck_input"
-      base_count="$(shellcheck -f gcc "${tmp}/base_shellcheck_input" 2>/dev/null | wc -l)"
-    fi
-    ok "shellcheck: ${f} has no new diagnostics (${now_count} now, ${base_count} at HEAD)" \
-      test "${now_count}" -le "${base_count}"
-  done
-fi
+# The scripts get no new shellcheck diagnostics: test/shellcheck-changed.sh, once for every changed script.
 
 printf '\n%d passed, %d failed\n' "${pass}" "${fail}"
 [[ "${fail}" -eq 0 ]]

@@ -5,6 +5,8 @@ using Constructd.Core.Domain;
 using Constructd.Api.Jobs;
 using Constructd.Fakes;
 using Constructd.Tests.Support;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace Constructd.Tests.Api;
 
@@ -120,7 +122,13 @@ public sealed class PrimarySettingsStartTests
     [InlineData("lifecycle")]
     public async Task PrimarySettingsAndStartWaitForAnIdleObservation(string resource)
     {
-        using var app = new TestApp();
+        WatchedGate? watched = null;
+        using var app = new TestApp(configureServices: services =>
+        {
+            var gate = services.Last(service => service.ServiceType == typeof(IVmOperationGate));
+            services.Replace(ServiceDescriptor.Singleton<IVmOperationGate>(sp => watched = new WatchedGate(gate.ImplementationFactory is { } factory
+                ? (IVmOperationGate)factory(sp) : (IVmOperationGate)ActivatorUtilities.CreateInstance(sp, gate.ImplementationType!))));
+        });
         var ledger = app.Service<InMemoryCapacityLedger>();
         ledger.Inventory = ledger.Inventory with { Complete = true, CpuLogical = 8, RamTotalBytes = 16L << 30, RamAvailableBytes = 12L << 30 };
         using var owner = await app.CreateUserClientAsync("alice");
@@ -134,11 +142,30 @@ public sealed class PrimarySettingsStartTests
                 ? owner.PostAsJsonAsync("/api/v1/vms/parent/lifecycle", new { action = "start" })
                 : owner.PutAsJsonAsync($"/api/v1/vms/parent/{resource}", resource == "cpu"
                     ? new Dictionary<string, int> { ["cpus"] = 2 } : new() { ["ramGb"] = 4 });
-            await Task.WhenAny(request, Task.Delay(100));
+            // The request reached the gate and waits there: nothing touched the VM while the observation held it.
+            // (The bounds only end a broken run; a loaded machine once took more than ten seconds for the request.)
+            await watched!.Waiting.Task.WaitAsync(TimeSpan.FromMinutes(2));
             Assert.False(request.IsCompleted);
+            Assert.DoesNotContain(app.Driver.Calls, call => call.StartsWith("start:", StringComparison.Ordinal) || call.StartsWith("cpu:", StringComparison.Ordinal) || call.StartsWith("memory:", StringComparison.Ordinal));
         }
-        using var response = await request.WaitAsync(TimeSpan.FromSeconds(10));
+        using var response = await request.WaitAsync(TimeSpan.FromMinutes(2));
         response.EnsureSuccessStatusCode();
+    }
+
+    /// <summary>The engine's gate, telling when an operation other than the idle observation waits for it.</summary>
+    private sealed class WatchedGate(IVmOperationGate inner) : IVmOperationGate
+    {
+        public TaskCompletionSource Waiting { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Task<IAsyncDisposable> AcquireAsync(string vmName, string operationId, CancellationToken ct)
+        {
+            if (operationId != "idle-evaluate") Waiting.TrySetResult();
+            return inner.AcquireAsync(vmName, operationId, ct);
+        }
+
+        public Task<IAsyncDisposable?> TryAcquireAsync(string vmName, string operationId, CancellationToken ct) => inner.TryAcquireAsync(vmName, operationId, ct);
+
+        public bool IsHeld(string vmName, out string? operationId) => inner.IsHeld(vmName, out operationId);
     }
 
     [Theory]

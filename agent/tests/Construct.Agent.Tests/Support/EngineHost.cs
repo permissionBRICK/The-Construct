@@ -27,8 +27,9 @@ public sealed class EngineHost : WebApplicationFactory<Program>
     {
         _services = services;
         Directory.CreateDirectory(_directory);
-        using var key = RSA.Create(2048);
-        var request = new CertificateRequest("CN=engine.test", key, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
+        // P-256 rather than RSA: the agent pins whatever key the engine shows, and an RSA key takes a third of a second to make.
+        using var key = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+        var request = new CertificateRequest("CN=engine.test", key, HashAlgorithmName.SHA256);
         using var certificate = request.CreateSelfSigned(DateTimeOffset.UtcNow.AddDays(-1), DateTimeOffset.UtcNow.AddDays(30));
         CertificatePath = Path.Combine(_directory, "engine.pfx");
         File.WriteAllBytes(CertificatePath, certificate.Export(X509ContentType.Pfx, "test"));
@@ -53,6 +54,9 @@ public sealed class EngineHost : WebApplicationFactory<Program>
         {
             ["Constructd:Fake"] = "true",
             ["Constructd:Persistence"] = "Memory",
+            // The engine keeps adopted VMs' SSH keys, its source cache and backups next to the database, also in memory mode:
+            // its own directory, not the test's working directory that every engine of the run would share.
+            ["Constructd:DatabasePath"] = Path.Combine(_directory, "constructd.db"),
             ["Constructd:ListenUrl"] = $"https://127.0.0.1:{_port}",
             ["Constructd:CertPath"] = Path.Combine(_directory, "engine.pfx"),
             ["Constructd:CertPassword"] = "test",

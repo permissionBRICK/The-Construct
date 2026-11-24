@@ -20,19 +20,36 @@ From the repository root, choose the checks relevant to the change:
 bash test/run-local-checks.sh panel
 bash test/run-local-checks.sh t3
 bash test/run-local-checks.sh service
+bash test/run-local-checks.sh engine
 bash test/run-local-checks.sh release
 bash test/run-local-checks.sh ui
 bash test/run-local-checks.sh agent
+bash test/run-local-checks.sh e2e
 bash test/run-local-checks.sh guest
-# Or run every group except guest:
+# Several at once:
+bash test/run-local-checks.sh engine agent
+# Only some test classes of the .NET suites (a class, a part of its name, or an engine test folder):
+bash test/run-local-checks.sh engine:Vault,BackupApiTests agent:Upgrade
+# Every group except guest, e2e included:
 bash test/run-local-checks.sh all
-# Or the groups of the paths changed since the base branch (origin/nightly, origin/rework or
+# The groups of the paths changed since the base branch (origin/nightly, origin/rework or
 # origin/main, whichever exists first; or name one):
 bash test/run-local-checks.sh --changed [<base>]
+# The quick tier: the same groups, but only the tests those paths reach (below):
+bash test/run-local-checks.sh --quick [<base>]
 ```
 
-Run only the checks for the features a change affects. Use `all` for integration
-merges and release preparation, not for ordinary changes.
+Run only the checks for the features a change affects, in three tiers:
+
+- **While working on a small fix:** `--quick`, or a group with test filters (`engine:Vault`).
+  Usually a few seconds to a minute or two.
+- **Before pushing or opening a pull request:** `--changed`, the whole groups the change touches.
+- **For integration merges and release preparation:** `all`. It is the only tier that runs the
+  `e2e` group; `scripts/release.py` runs it before a release.
+
+Every step is timed. A failing step does not stop the run: the summary at the end lists each step
+with its time and result, and the exit code is 1 when any step failed. A step two selected groups
+share (the engine build, the host updater's tests) runs once.
 
 `--changed` maps each touched path (committed since the merge base, uncommitted or untracked)
 to groups by the table below, which `test/helpers/changed-groups.py` reads. A path matching
@@ -43,14 +60,34 @@ stays within one directory and `**` crosses directories. A row without a group s
 |---|---|
 | `extension/**` | `panel` |
 | `bin/*t3*`, `test/t3-*`, `extension/vm/*t3*` | `t3` |
-| `service/**`, `lib/**`, `bin/**`, `console-viewer/**`, `extension/src/projects.js`, `extension/vm/**`, `companion/**`, `test/isolate-env.test.sh`, `test/install-sdks.test.sh` | `service` |
+| `service/host/**`, `service/tests/*`, `service/tests/Constructd.Tests/**/*.ps1`, `service/src/Constructd.Windows/**/*.ps1`, `service/src/Constructd.Windows/HyperV/**`, `lib/**`, `bin/**`, `console-viewer/**`, `extension/src/projects.js`, `extension/vm/**`, `companion/**`, `test/isolate-env.test.sh`, `test/install-sdks.test.sh`, `test/shellcheck-changed.sh` | `service` |
+| `service/src/**`, `service/tests/Constructd.Tests/**`, `service/openapi/**`, `service/Constructd.sln`, `service/host/**`, `test/dotnet/**`, `test/fixtures/vault-patterns.json`, `docs/plans/host-administration-contracts.md`, `bin/adopt-host.py`, `bin/construct`, `bin/construct-vm.sh`, `bin/construct-expose.sh`, `bin/construct-secret.sh`, `bin/construct-config.sh`, `bin/construct-idle-report.sh`, `bin/construct-backup.sh` | `engine` |
 | `ui/**` | `ui` |
 | `agent/**`, `test/agent-install.test.sh`, `test/agent-bootstrap.test.ps1`, `install.ps1`, `Update-Construct.ps1`, `scripts/package-agent.py`, `service/src/Construct.Keys/**`, `service/src/Constructd.Store/**`, `service/src/Constructd.Sync/**`, `service/src/Constructd.Api/**`, `service/openapi/**` | `agent`, `ui` |
-| `extension/vm/**`, `lib/**`, `Update-T3Code.ps1`, `Get-ConstructT3PairingLink.ps1`, `test/fixtures/legacy-updaters/**`, `test/source-release.test.ps1`, `test/lifecycle-run.test.ps1` | `agent` |
-| `scripts/**`, `.github/**`, `VERSION`, `test/release.test.py`, `test/construct-release.test.py`, `test/run-local-checks.sh`, `test/helpers/changed-groups.py`, `docs/local-checks.md`, `service/src/Constructd.Core/Logic/ReleaseChannel.cs`, `service/tests/Constructd.Tests/Updates/ReleaseChannelTests.cs` | `release` |
+| `extension/vm/**`, `lib/**`, `Update-T3Code.ps1`, `Get-ConstructT3PairingLink.ps1`, `test/fixtures/legacy-updaters/**`, `test/source-release.test.ps1`, `test/lifecycle-run.test.ps1`, `test/dotnet/**` | `agent` |
+| `scripts/**`, `.github/**`, `VERSION`, `test/release.test.py`, `test/construct-release.test.py`, `test/run-local-checks.sh`, `test/helpers/changed-groups.py`, `test/helpers/test-areas.py`, `docs/local-checks.md`, `service/src/Constructd.Core/Logic/ReleaseChannel.cs`, `service/tests/Constructd.Tests/Updates/ReleaseChannelTests.cs` | `release` |
 | `docs/**`, `*.md`, `assets/**` | |
 
 For installers, also run the touched script's own tests.
+
+`--quick` selects groups by the same table, never `e2e`, and within them:
+
+- The engine and agent .NET suites run only the test classes the touched paths reach
+  (`test/helpers/test-areas.py`): a changed test file selects its own classes; a changed source
+  file selects the test classes whose file names one of its top-level types, and the classes and
+  engine test folders named after a word of its file name (`VaultEndpoints.cs` reaches
+  `Constructd.Tests.Vault` and every `*Vault*Tests`). The whole suite runs when a source file
+  reaches nothing that way, when it is wiring every test depends on (`Program.cs`, the
+  composition, the fakes, a project file, the test support folders), or when the selection is more
+  than half the suite. A suite no touched path concerns does not run, nor does its build.
+- The script groups (`panel`, `t3`, `service`, `release` and the agent group's PowerShell steps)
+  run a test only when a touched path is that test, lies in a directory it names, or is named in
+  it by its file name (`bin/construct-vm.sh` reaches `test/construct-vm.test.sh`); the others are
+  listed as skipped.
+- `contracts-compile.test.sh` does not run.
+
+The quick tier is a heuristic for fast feedback. Run `--changed` before handing a change over.
+
 
 The `guest` group runs the guest rig (`test/e2e/guest-rig.sh quick`). It is not part
 of `all` and `--changed` never selects it; run it by name when guest-facing paths change
@@ -108,11 +145,71 @@ The `ui` group runs the client UI's unit tests (vitest), builds its static bundl
 and compares its screenshots in headless Chromium (Playwright). After an intended
 visual change, refresh the pictures with `npm run test:screens:update` in `ui/`.
 
+The `engine` group builds `service/Constructd.sln` and runs the engine's .NET tests: the real
+host (`Program`) in fake mode through `WebApplicationFactory`, in memory or on SQLite, one host
+per test, plus the drivers, stores and rules on their own. It leaves out the tests marked
+`[Trait("Category", "E2E")]`, which the `e2e` group runs, and compiles the frozen contract
+blocks of `docs/plans/host-administration-contracts.md` (`test/contracts-compile.test.sh`).
+Before this group existed the `service` group ran these tests; it now runs the scripts only.
+
+The `service` group tests the guest's scripts and CLI, provisioning, the console viewer, the
+host installer, packaging and updater, and the Hyper-V driver's PowerShell, each with its own
+stubs; nothing in it talks to a real host. Its last step, `test/shellcheck-changed.sh`, checks
+every shell script changed since the branch's base once: no new shellcheck diagnostics.
+
+The `e2e` group runs what goes end to end on this machine: the engine's tests with real clients
+(`HostAdminEndToEndTests`: the guest CLI in bash, node, curl and python against a real HTTPS
+engine on SQLite), the tests against a real guest when `CONSTRUCT_E2E_SSH_*` names one (skipped
+otherwise), and the UI on the real engine and two real device agents in headless Chromium
+(`ui/tests/e2e`). It is part of `all`; `--changed` and `--quick` never select it. What a full
+end-to-end setup with real hosts would add is in [plans/e2e-setup.md](plans/e2e-setup.md).
+
 The `panel` group tests the VS Code extension under plain node with `vscode` faked
 (finding, starting and installing the agent, the webview documents and their message
 bridge, Remote-SSH, the register-workspace offer), the profile validator the VM's
 `construct project set` loads from `extension/src/projects.js`, and the VM's
 `project-set.js` helper.
+
+## Keeping the suites fast
+
+Typical times on the 8-core development VM, with other work running beside it:
+
+| Group | Time |
+|---|---|
+| `panel` | a few seconds |
+| `t3` | about half a minute |
+| `service` | 3 to 4 minutes (its script tests run four at a time) |
+| `engine` | about 2 minutes, plus a minute when it builds from scratch |
+| `release` | about 1.5 minutes (the updater's suites) |
+| `ui` | under a minute |
+| `agent` | about 2 minutes |
+| `e2e` | about 2.5 minutes |
+| `all` | about 10 minutes |
+
+Before these changes `all` took about an hour: the engine suite alone 18 to 26 minutes.
+
+- An engine started in a test (`TestApp`, the agent tests' `EngineHost`) costs about a fifth of a second of
+  CPU because `Constructd.Api`, `Constructd.Store` and `Construct.Agent.Core` generate their minimal-API
+  request delegates at build time (`EnableRequestDelegateGenerator`). Without it every start compiled
+  expression trees for the engine's 220-odd endpoints and the engine suite took five times as long. An
+  endpoint the generator cannot handle is a build warning (RDG…), which the agent group's `-warnaserror`
+  turns into an error.
+- xUnit runs the classes of a suite in parallel and the tests of one class one after another. A class
+  whose tests add up to more than half a minute holds up the whole run: split it, as `UpgradeTests`.
+- A test class that cleans up asynchronously implements `IAsyncLifetime`. xUnit 2 never calls
+  `DisposeAsync` on a class that is only `IAsyncDisposable`: its engines and agents keep running and its
+  files stay behind. `TestClassDisposalTests` fails on such a class.
+- Wait for the event, not for time: a `TaskCompletionSource` a fake completes, the job's event stream, or a
+  poll whose generous bound only ends a broken run. A fake keeps its own delays short (the fake driver's
+  state reads settle in half a second, not the fifteen a Proxmox host's cache needs).
+- Make an expensive key once per class or per run (an RSA-3072 key takes most of a second); use P-256 where
+  the key type does not matter.
+- Write temporary files under `Path.GetTempPath()`. Each .NET test process points it (`TMPDIR`) at a
+  directory of its own, on `/dev/shm` where there is one, so SQLite does not wait for the disk, and removes
+  it at the end (`test/dotnet/TestTemp.cs`). Give every engine a database path of its own: the engine keeps
+  adopted VMs' keys, its source cache and backups next to it, also in memory mode.
+- A test that takes long by design because it runs real processes end to end gets
+  `[Trait("Category", "E2E")]` and runs in the `e2e` group.
 
 Windows PowerShell 5.1 behavior and the pinned Windows ISO executable need an
 actual Windows environment. Use a local disposable Windows VM with Node.js,

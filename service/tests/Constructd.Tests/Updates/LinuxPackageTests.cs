@@ -60,24 +60,5 @@ public sealed class LinuxPackageTests : IDisposable
         using(var zip=ZipFile.OpenRead(path))m=m with{LinuxSha256=UpdateFiles.Sha256(path),LinuxSizeBytes=new FileInfo(path).Length,LinuxUncompressedSizeBytes=zip.Entries.Sum(e=>e.Length)};
         Assert.Equal("coverage-failed",Assert.Throws<UpdateException>(()=>PackageStager.ExtractAndVerify(root,m,"linux")).Code);
     }
-    [Fact]
-    public async Task Local_linux_packager_passes_the_production_extractor()
-    {
-        var repo=new DirectoryInfo(AppContext.BaseDirectory);
-        while(repo is not null&&!File.Exists(Path.Combine(repo.FullName,"service/host/New-ConstructHostPackage.ps1")))repo=repo.Parent;
-        Assert.NotNull(repo);
-        var publish=Path.Combine(root,"publish");Directory.CreateDirectory(publish);
-        await File.WriteAllTextAsync(Path.Combine(publish,"Constructd.Api.exe"),"windows");
-        PackageTests.WindowsPublishExtras(publish);
-        await File.WriteAllTextAsync(Path.Combine(publish,"Constructd.Api"),"linux");
-        var output=Path.Combine(root,"output");
-        await PackageTests.Run("pwsh","-NoProfile","-File",Path.Combine(repo.FullName,"service/host/New-ConstructHostPackage.ps1"),"-PublishDir",publish,"-LinuxPublishDir",publish,"-OutputDir",output,"-Commit",new string('a',40));
-        var m=(await UpdateFiles.ReadAsync<ReleaseManifest>(Path.Combine(output,"manifest.json"),default))!;
-        ManifestRules.ValidateVariants(m);
-        File.Copy(Path.Combine(output,m.LinuxAsset!),Path.Combine(root,"package.zip"));
-        var files=PackageStager.ExtractAndVerify(root,m,"linux");
-        Assert.Contains(files,f=>f.Path=="service/Constructd.Api");
-        Assert.Contains(files,f=>f.Path=="scripts/bin/provision.sh");
-        Assert.Contains(files,f=>f.Path=="updater/update-construct-host.sh");
-    }
+    // The real packager's Linux payload goes through the extractor in PackageTests, with the Windows variants of the same run.
 }

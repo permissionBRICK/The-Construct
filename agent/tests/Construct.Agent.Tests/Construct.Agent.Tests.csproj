@@ -32,4 +32,9 @@
     <Using Include="Xunit" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- Shared by the .NET test projects: the per-run temporary directory and the disposal check. -->
+    <Compile Include="../../../test/dotnet/*.cs" LinkBase="Shared" />
+  </ItemGroup>
+
 </Project>

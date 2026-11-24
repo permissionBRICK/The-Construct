@@ -287,6 +287,7 @@ ok "host forwards: the request goes through construct expose --to host --reuse" 
 hf_lib="${tmp}/hostforwards.sh"
 {
   sed -n '/^_cfg_unquote() {$/,/^}$/p' "${PROVISION}"
+  sed -n '/^url_authority() {$/,/^}$/p' "${PROVISION}"
   sed -n '/^host_forward_authority() {$/,/^}$/p' "${PROVISION}"
   sed -n '/^setup_host_forwards() {$/,/^}$/p' "${PROVISION}"
   sed -n '/^record_t3_forward_url() {$/,/^}$/p' "${PROVISION}"

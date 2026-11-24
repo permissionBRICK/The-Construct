@@ -50,6 +50,14 @@ def event(kind):
     os.close(fd)
 event('start')
 if operation in ('clone', 'fetch'):
+    # The first TEST_BARRIER clones wait until that many have started (10 s at most), so the overlap the job
+    # limit allows always happens, however slowly this machine starts processes.
+    wanted, deadline = int(os.environ.get('TEST_BARRIER', '0')), time.time() + 10
+    def started():
+        with open(os.environ['TEST_EVENTS']) as events:
+            return sum(1 for line in events if '"kind": "start"' in line and ('"op": "clone"' in line or '"op": "fetch"' in line))
+    while started() < wanted and time.time() < deadline:
+        time.sleep(0.02)
     time.sleep(float(os.environ['TEST_DELAY']))
 if operation == 'rev-parse':
     time.sleep(float(os.environ.get('TEST_INSPECTION_DELAY', '0')))
@@ -78,10 +86,10 @@ sys.exit(rc)
         (self.runtime / 'generated.json').write_text(json.dumps({'repos': [
             {'url': str(self.source), 'directory': d} for d in directories]}))
 
-    def run_checkout(self, jobs=0, delay=0, expected=0):
+    def run_checkout(self, jobs=0, delay=0, expected=0, barrier=0):
         self.events.write_text('')
         result = subprocess.run(['bash', str(SCRIPT)], env=dict(self.env, CHECKOUT_JOBS=str(jobs),
-                                TEST_DELAY=str(delay)), text=True, stdout=subprocess.PIPE,
+                                TEST_DELAY=str(delay), TEST_BARRIER=str(barrier)), text=True, stdout=subprocess.PIPE,
                                 stderr=subprocess.STDOUT, timeout=30)
         self.assertEqual(result.returncode, expected, result.stdout)
         return result.stdout
@@ -104,11 +112,11 @@ sys.exit(rc)
 
     def test_parallel_clone_and_optional_limits(self):
         self.profiles(['a', 'b with spaces', 'c', 'd'])
-        self.run_checkout(delay=.25)
+        self.run_checkout(delay=.25, barrier=4)
         self.assertEqual(self.peak(), 4)
         for name in ['a', 'b with spaces', 'c', 'd']:
             self.assertEqual((self.workspace / name / 'file').read_text(), 'initial')
-        self.run_checkout(jobs=2, delay=.15)
+        self.run_checkout(jobs=2, delay=.15, barrier=2)
         self.assertEqual(self.peak(), 2)
         self.run_checkout(jobs=1, delay=.05)
         self.assertEqual(self.peak(), 1)

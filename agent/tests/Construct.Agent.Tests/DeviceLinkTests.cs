@@ -7,7 +7,7 @@ using Construct.Companion.Fakes;
 namespace Construct.Agent.Tests;
 
 /// <summary>The device's side of the user's VMs: which VMs get a link, local forwards, notifications, the open actions.</summary>
-public sealed class DeviceLinkTests : IAsyncDisposable
+public sealed class DeviceLinkTests : IAsyncLifetime
 {
     private readonly string _directory = Path.Combine(Path.GetTempPath(), "agent-test-device-" + Guid.NewGuid().ToString("n"));
     private readonly FakeToastRaiser _toasts = new();
@@ -493,7 +493,9 @@ public sealed class DeviceLinkTests : IAsyncDisposable
         Assert.Equal(("true", "dev", "it's", "repo"), (values["SMB_SHARE"], values["SMB_USER"], values["SMB_PASSWORD"], values["SMB_SHARE_NAME"]));
     }
 
-    public async ValueTask DisposeAsync()
+    public Task InitializeAsync() => Task.CompletedTask;
+
+    public async Task DisposeAsync()
     {
         await _device.DisposeAsync();
         foreach (var directory in new[] { _directory, _directory + "-local" })

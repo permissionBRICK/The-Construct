@@ -19,7 +19,7 @@ namespace Construct.Agent.Tests;
 /// sent and the engine's answer comes back with the hosts that had none. The engine is the real one, its job starts
 /// answered by a recorder in front of it.
 /// </summary>
-public sealed class GitJobRouteTests : IAsyncDisposable
+public sealed class GitJobRouteTests : IAsyncLifetime
 {
     private const string Token = "route-clone-token-7788";
     private readonly string _bin = Path.Combine(Path.GetTempPath(), "agent-test-git-" + Guid.NewGuid().ToString("n"));
@@ -180,7 +180,9 @@ public sealed class GitJobRouteTests : IAsyncDisposable
         Assert.Null(problem["hostsWithoutCredential"]);
     }
 
-    public async ValueTask DisposeAsync()
+    public Task InitializeAsync() => Task.CompletedTask;
+
+    public async Task DisposeAsync()
     {
         if (_laptop is not null) await _laptop.DisposeAsync();
         _engine?.Dispose();

@@ -12,7 +12,7 @@ public static class ChildConfigurationEndpoints
 {
     private sealed record Firmware(bool? SecureBoot, SecureBootTemplate? SecureBootTemplate, bool? Tpm, IReadOnlyList<BootDevice>? BootOrder);
     private sealed record HardwareRequest(int? Cpus, int? RamMb, int? DiskGb, Firmware? Firmware);
-    private sealed record ReleaseRequest(bool? Delete);
+    internal sealed record ReleaseRequest(bool? Delete);
     public static RouteGroupBuilder MapChildConfigurationEndpoints(this RouteGroupBuilder api)
     {
         api.MapPut("/vms/{name}/hardware", (string name, JsonElement body, HttpContext http, CancellationToken ct) => ChangeAsync(name, body, http, false, ct))

@@ -311,20 +311,7 @@ ok "an over-long label is refused" check_label "$(printf 'a%.0s' {1..64})" no
 ok "63 characters are still allowed" check_label "$(printf 'a%.0s' {1..63})" yes
 ok "an uppercase name is refused before normalization" check_label "Work-VM" no
 
-# ── shellcheck: the touched script gets no worse ──────────────────────────────
-echo ""
-echo "=== shellcheck ==="
-if command -v shellcheck >/dev/null 2>&1; then
-  now_count="$(shellcheck -f gcc "${SCRIPT}" 2>/dev/null | wc -l)"
-  base_count=0
-  if git -C "${ROOT}" show "HEAD:bin/build-autoinstall-iso.sh" >"${tmp}/sc_base.sh" 2>/dev/null; then
-    base_count="$(shellcheck -f gcc "${tmp}/sc_base.sh" 2>/dev/null | wc -l)"
-  fi
-  ok "shellcheck: bin/build-autoinstall-iso.sh has no new diagnostics (${now_count} now, ${base_count} at HEAD)" \
-    test "${now_count}" -le "${base_count}"
-else
-  printf 'WARN: shellcheck not installed; skipping\n'
-fi
+# The script gets no new shellcheck diagnostics: test/shellcheck-changed.sh, once for every changed script.
 
 echo ""
 echo "=== ${pass} passed, ${fail} failed ==="
