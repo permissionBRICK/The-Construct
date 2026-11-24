@@ -23,6 +23,7 @@ public sealed class PrimaryMemoryFloor(IHostConfigStore config, IVmRepository vm
     public sealed record View(int? MinimumRamGb, long? HostMinimumRamBytes, int? EffectiveMinimumRamMb, int RamGb,
         string Source, bool MayEdit);
 
+    public const string GateOwner = "memory-floor";
     private const long MiB = 1L << 20;
     public bool Supported => options.IsProxmox && driver is not null;
     private static string Section(Vm vm) => "memory-floor:" + vm.Name.ToLowerInvariant();
@@ -90,7 +91,7 @@ public sealed class PrimaryMemoryFloor(IHostConfigStore config, IVmRepository vm
         foreach (var listed in await vms.ListAsync(null, ct))
         {
             if (listed.Kind != VmKind.Primary) continue;
-            await using var gate = await PrimaryOperationGate.AcquireAsync(gates, listed.Name, "memory-floor", ct);
+            await using var gate = await PrimaryOperationGate.AcquireAsync(gates, listed.Name, GateOwner, ct);
             if (gate is null || await vms.GetAsync(listed.Name, ct) is not { } vm) continue;
             await TryApplyAsync(vm, ct);
         }

@@ -52,7 +52,15 @@ public static class DeviceRoutes
             var before = device.Settings.Read().Channel;
             device.Settings.Update(s => s with { Channel = request.Channel ?? s.Channel, AutoUpdate = request.AutoUpdate ?? s.AutoUpdate });
             // This PC's engine follows the device's channel, so one update moves both (F17).
-            if (request.Channel is { } changed && changed != before) await engineSetup.FollowChannelAsync(changed, ct);
+            if (request.Channel is { } changed && changed != before)
+            {
+                device.Updater.ChannelChanged();
+                await engineSetup.FollowChannelAsync(changed, ct);
+            }
+            else if (request.AutoUpdate == true)
+            {
+                device.Updater.TryAutoInstall();
+            }
             return TypedResults.Ok(Settings(device));
         }).WithName("SetDeviceSettings").WithDescription("Changes what is given: the release channel (this PC's engine follows it), automatic updates, start with the OS.");
 

@@ -120,6 +120,73 @@ public sealed class VmUpdateTests
     }
 
     [Fact]
+    public async Task Auto_reprovision_waits_for_startup_host_start_gate_instead_of_skipping()
+    {
+        await using var h = await StartAsync();
+        Assert.Equal(HttpStatusCode.OK, (await h.Client.PutAsJsonAsync("/api/v1/me/updates", new { autoReprovision = true })).StatusCode);
+
+        // Simulate HostStartStartupService holding the VM gate at the same 30 s mark as HostAutoUpdateService.
+        var gate = h.App.Service<IVmOperationGate>();
+        var held = await gate.AcquireAsync(ProvisionHarness.Vm, HostStartSettings.GateOwner, default);
+        try
+        {
+            var id = new string('e', 32);
+            var row = UpdateTests.Row(id) with { Commit = ProvisionHarness.Commit, State = HostUpdateState.Succeeded, Finished = DateTimeOffset.UtcNow };
+            await h.App.Service<IHostUpdateStore>().TryStartAsync(row, default);
+            await h.App.Service<HostAutoUpdateService>().TickAsync(default);
+            await Task.Delay(200);
+            Assert.Single(await ProvisionJobsAsync(h.App, ProvisionHarness.Vm));
+        }
+        finally
+        {
+            await held.DisposeAsync();
+        }
+
+        await WaitForJobsAsync(h.App, ProvisionHarness.Vm, 2);
+        Assert.All(await ProvisionJobsAsync(h.App, ProvisionHarness.Vm), j => Assert.Equal(JobState.Succeeded, j.State));
+    }
+
+    [Fact]
+    public async Task Provision_refuses_when_vm_becomes_deleting_while_waiting_on_background_gate()
+    {
+        await using var h = await StartAsync();
+        var gate = h.App.Service<IVmOperationGate>();
+        var vms = h.App.Service<IVmRepository>();
+        var held = await gate.AcquireAsync(ProvisionHarness.Vm, HostStartSettings.GateOwner, default);
+        try
+        {
+            var submitTask = h.Client.PostJsonAsync($"/api/v1/vms/{ProvisionHarness.Vm}/jobs",
+                new { kind = "provision", requestId = "deleting-during-wait", commit = ProvisionHarness.Commit });
+            await Task.Delay(150);
+            Assert.False(submitTask.IsCompleted);
+            var vm = (await vms.GetAsync(ProvisionHarness.Vm, default))!;
+            await vms.UpdateAsync(vm with { Deleting = true }, default);
+            await held.DisposeAsync();
+            held = null;
+            using var response = await submitTask;
+            Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+            Assert.Contains("vm-deleting", await response.Content.ReadAsStringAsync(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            if (held is not null) await held.DisposeAsync();
+        }
+    }
+
+    [Fact]
+    public async Task Provision_still_refuses_when_a_non_background_operation_holds_the_gate()
+    {
+        await using var h = await StartAsync();
+        var gate = h.App.Service<IVmOperationGate>();
+        await using var held = await gate.AcquireAsync(ProvisionHarness.Vm, "user-op", default);
+
+        var response = await h.Client.PostJsonAsync($"/api/v1/vms/{ProvisionHarness.Vm}/jobs",
+            new { kind = "provision", requestId = "blocked-by-user-op", commit = ProvisionHarness.Commit });
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        Assert.Contains("operation-in-progress", await response.Content.ReadAsStringAsync(), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task Vm_token_of_a_users_vm_reprovisions_that_vm_and_never_runs_the_host_update()
     {
         await using var h = await StartAsync();

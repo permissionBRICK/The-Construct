@@ -129,19 +129,21 @@ public sealed record ProvisionSubmission(string RequestId, string? Commit, VmDes
 /// one lifecycle job per VM (the VM's operation gate is held for the whole run), the desired state
 /// saved before the run so a retry or a reprovision needs no client.
 /// </summary>
-public sealed class ProvisionJobs(IJobStore jobs, IJobQueryStore history, IPersistedJobRunner runner, IVmOperationGate gates,
+public sealed class ProvisionJobs(IVmRepository vms, IJobStore jobs, IJobQueryStore history, IPersistedJobRunner runner, IVmOperationGate gates,
     IMaintenanceGate maintenance, IVmDesiredStateSource desired, IProvisionTargets targets, IReleaseInfo release,
     IHostConfigStore config, ConstructdOptions options, ProvisionJob job, ReinstallJob reinstall, IHypervisorDriver driver,
     BackupCoordinator backups, JobDevices devices, ProvisionStart starter, IClock clock)
 {
     // owner|vm|requestId → job id, the fast path; the stored jobs are the fallback.
     private readonly ConcurrentDictionary<string, string> _requests = new(StringComparer.OrdinalIgnoreCase);
-    private readonly SemaphoreSlim _submit = new(1, 1);
+    // Serialize request-id deduplication per VM so waiting on one VM's background gate never blocks other VMs.
+    private readonly ConcurrentDictionary<string, SemaphoreSlim> _submits = new(StringComparer.OrdinalIgnoreCase);
 
     public async Task<(Job Job, bool Replayed)> SubmitAsync(Vm vm, string actor, ProvisionSubmission request, CancellationToken ct)
     {
         var key = $"{vm.Owner}|{vm.Name}|{request.RequestId}";
-        await _submit.WaitAsync(ct);
+        var submit = _submits.GetOrAdd(vm.Name, _ => new SemaphoreSlim(1, 1));
+        await submit.WaitAsync(ct);
         try
         {
             // The request id is stored with the job, so a repeat after a restart finds it too.
@@ -164,7 +166,7 @@ public sealed class ProvisionJobs(IJobStore jobs, IJobQueryStore history, IPersi
             request.Secrets.Clear();
             throw;
         }
-        finally { _submit.Release(); }
+        finally { submit.Release(); }
     }
 
     /// <summary>The Construct commit a provision uses (<paramref name="requested"/>, else the engine's installed one), or why there is none.</summary>
@@ -241,7 +243,9 @@ public sealed class ProvisionJobs(IJobStore jobs, IJobQueryStore history, IPersi
             ?? throw new ProvisionRequestException(409, "vm-endpoint-unknown", "The VM has no SSH endpoint the engine can dial.");
 
         var id = Guid.NewGuid().ToString("n");
-        var operation = await gates.TryAcquireAsync(vm.Name, id, ct);
+        var operation = vm.Kind == VmKind.Primary
+            ? await Endpoints.PrimaryOperationGate.AcquireAsync(gates, vm.Name, id, ct)
+            : await gates.TryAcquireAsync(vm.Name, id, ct);
         if (operation is null)
         {
             gates.IsHeld(vm.Name, out var holder);
@@ -251,6 +255,13 @@ public sealed class ProvisionJobs(IJobStore jobs, IJobQueryStore history, IPersi
         IDisposable? handle = new GateHandle(operation, null);
         try
         {
+            var latest = await vms.GetAsync(vm.Name, ct)
+                ?? throw new ProvisionRequestException(404, "not-found", "Unknown VM.");
+            if (latest.Incarnation != vm.Incarnation || !Ownership.SameName(latest.Owner, vm.Owner))
+                throw new ProvisionRequestException(409, "vm-changed", "This VM was replaced; reload and try again.");
+            if (latest.Deleting)
+                throw new ProvisionRequestException(409, "vm-deleting", "This VM is being deleted.");
+            vm = latest;
             if (vm.CurrentJobId is { } current && await jobs.GetAsync(current, ct) is { State: JobState.Queued or JobState.Running })
                 throw new ProvisionRequestException(409, "operation-in-progress", "Another job runs on this VM.", current);
             var entered = maintenance.TryEnter("mutation:" + request.Kind, id, vm.Name)
@@ -304,7 +315,9 @@ public sealed class ProvisionJobs(IJobStore jobs, IJobQueryStore history, IPersi
             ?? throw new ProvisionRequestException(409, "vm-endpoint-unknown", "The VM has no SSH endpoint the engine can dial.");
 
         var id = Guid.NewGuid().ToString("n");
-        var operation = await gates.TryAcquireAsync(vm.Name, id, ct);
+        var operation = vm.Kind == VmKind.Primary
+            ? await Endpoints.PrimaryOperationGate.AcquireAsync(gates, vm.Name, id, ct)
+            : await gates.TryAcquireAsync(vm.Name, id, ct);
         if (operation is null)
         {
             gates.IsHeld(vm.Name, out var holder);
@@ -314,6 +327,13 @@ public sealed class ProvisionJobs(IJobStore jobs, IJobQueryStore history, IPersi
         IDisposable? handle = new GateHandle(operation, null);
         try
         {
+            var latest = await vms.GetAsync(vm.Name, ct)
+                ?? throw new ProvisionRequestException(404, "not-found", "Unknown VM.");
+            if (latest.Incarnation != vm.Incarnation || !Ownership.SameName(latest.Owner, vm.Owner))
+                throw new ProvisionRequestException(409, "vm-changed", "This VM was replaced; reload and try again.");
+            if (latest.Deleting)
+                throw new ProvisionRequestException(409, "vm-deleting", "This VM is being deleted.");
+            vm = latest;
             if (vm.CurrentJobId is { } current && await jobs.GetAsync(current, ct) is { State: JobState.Queued or JobState.Running })
                 throw new ProvisionRequestException(409, "operation-in-progress", "Another job runs on this VM.", current);
             var entered = maintenance.TryEnter("mutation:" + JobKinds.Restore, id, vm.Name)
