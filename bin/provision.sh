@@ -360,7 +360,8 @@ if [[ "${PROVISION_PHASE:-}" == "project-commands" ]]; then
   printf '%s\n' "$$" >"${_PROVISION_MARKER}" 2>/dev/null || true
   if [[ "${CHECKOUT_PROJECTS:-false}" == "true" ]]; then
     # A credential the host verified for this run is consulted FIRST through a one-shot
-    # file; the VM's own (restored) store comes after it. Hosts skipped at the prompt stay
+    # file; the VM's own (restored) store comes after it, asked only (never written:
+    # git offers a credential that worked to every helper to store). Hosts skipped at the prompt stay
     # skipped (GIT_CLONE_SKIP_HOSTS_B64 reaches checkout-projects.sh through the environment).
     _deferred_creds=""
     if [[ -n "${GIT_CLONE_CREDENTIALS_B64:-}" ]]; then
@@ -372,7 +373,7 @@ if [[ "${PROVISION_PHASE:-}" == "project-commands" ]]; then
         env GIT_CONFIG_COUNT=3 \
         GIT_CONFIG_KEY_0=credential.helper GIT_CONFIG_VALUE_0= \
         GIT_CONFIG_KEY_1=credential.helper GIT_CONFIG_VALUE_1="store --file=${_deferred_creds}" \
-        GIT_CONFIG_KEY_2=credential.helper GIT_CONFIG_VALUE_2=store \
+        GIT_CONFIG_KEY_2=credential.helper GIT_CONFIG_VALUE_2='!f() { if [ "$1" = get ]; then git credential-store get; fi; }; f' \
         bash "${REPO_DIR}/bin/checkout-projects.sh"
       rm -f "${_deferred_creds}" || true
     else
@@ -1537,18 +1538,23 @@ fi
 
 # 6. Optionally check out project repos (needs Git auth on the VM). When clone
 #    credentials were seeded, point a one-shot credential.helper at the temp file
-#    via GIT_CONFIG_* so the clone authenticates without an interactive prompt
-#    and without depending on a persisted store.
+#    via GIT_CONFIG_* so the clone authenticates without an interactive prompt.
+#    The VM's own store comes after it, as in the deferred phase: a repo whose
+#    token only the VM keeps (~/.git-credentials) still fetches. It is asked only
+#    (get): git hands a credential that worked to every helper to store, and the
+#    seeded one must not replace the VM's own (GIT_CREDENTIAL_STORE decides that).
 if [[ "${CHECKOUT_PROJECTS}" == "true" && "${DEFER_PROJECT_COMMANDS:-false}" == "true" ]]; then
   note "Project checkout deferred until the saved config is restored (its git credentials and config apply then)"
 elif [[ "${CHECKOUT_PROJECTS}" == "true" ]]; then
   if [[ -n "${_clone_creds_file}" && -s "${_clone_creds_file}" ]]; then
     run_step optional "Checking out project repos" \
-      env GIT_CONFIG_COUNT=2 \
+      env GIT_CONFIG_COUNT=3 \
       GIT_CONFIG_KEY_0=credential.helper \
       GIT_CONFIG_VALUE_0= \
       GIT_CONFIG_KEY_1=credential.helper \
       GIT_CONFIG_VALUE_1="store --file=${_clone_creds_file}" \
+      GIT_CONFIG_KEY_2=credential.helper \
+      GIT_CONFIG_VALUE_2='!f() { if [ "$1" = get ]; then git credential-store get; fi; }; f' \
       bash "${REPO_DIR}/bin/checkout-projects.sh"
   else
     run_step optional "Checking out project repos" bash "${REPO_DIR}/bin/checkout-projects.sh"

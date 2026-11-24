@@ -19,6 +19,9 @@ ok "main pass: a deferred checkout does not run" "$([[ "$out" != *"Checking out 
 ok "main pass: ...and says it waits for the restore" "$([[ "$out" == *"deferred until the saved config is restored"* ]] && echo true || echo false)"
 out="$(REPO_DIR=/r CHECKOUT_PROJECTS=true DEFER_PROJECT_COMMANDS=false _clone_creds_file="" PROJECTS=p bash -c "$stubs; $main")"
 ok "main pass: without a deferral the checkout runs as before" "$([[ "$out" == *"STEP optional Checking out project repos bash /r/bin/checkout-projects.sh"* ]] && echo true || echo false)"
+printf 'https://u:t@git.example\n' >"$tmp/seeded"
+out="$(REPO_DIR=/r CHECKOUT_PROJECTS=true DEFER_PROJECT_COMMANDS=false _clone_creds_file="$tmp/seeded" PROJECTS=p bash -c "$stubs; $main")"
+ok "main pass: a seeded credential is consulted first, the VM's own store after it" "$([[ "$out" == *"GIT_CONFIG_COUNT=3 "*"GIT_CONFIG_VALUE_1=store --file=$tmp/seeded GIT_CONFIG_KEY_2=credential.helper GIT_CONFIG_VALUE_2=!f() { if [ \"\$1\" = get ]; then git credential-store get; fi; }; f bash /r/bin/checkout-projects.sh"* ]] && echo true || echo false)"
 
 out="$(REPO_DIR=/r CHECKOUT_PROJECTS=true PROVISION_PHASE=project-commands _PERSISTENT_LOG_DIR="$tmp/p" _PROVISION_LOG_DIR="$tmp" _PROVISION_MARKER="$tmp/marker" bash -c "$stubs; $phase")"
 first="$(printf '%s\n' "$out" | grep -n 'Checking out project repos' | head -1 | cut -d: -f1)"
@@ -29,7 +32,7 @@ ok "deferred phase: ...and finishes with the result block" "$([[ "$out" == *"FIN
 
 handed="$(printf 'https://u:t@git.example' | base64 -w0)"
 out="$(REPO_DIR=/r CHECKOUT_PROJECTS=true PROVISION_PHASE=project-commands GIT_CLONE_CREDENTIALS_B64="$handed" _PERSISTENT_LOG_DIR="$tmp/p" _PROVISION_LOG_DIR="$tmp" _PROVISION_MARKER="$tmp/marker" bash -c "$stubs; $phase")"
-ok "deferred phase: a handed credential is consulted first, the VM's store after it" "$([[ "$out" == *"GIT_CONFIG_VALUE_1=store --file=$tmp/clone-credentials GIT_CONFIG_KEY_2=credential.helper GIT_CONFIG_VALUE_2=store bash /r/bin/checkout-projects.sh"* ]] && echo true || echo false)"
+ok "deferred phase: a handed credential is consulted first, the VM's store after it" "$([[ "$out" == *"GIT_CONFIG_VALUE_1=store --file=$tmp/clone-credentials GIT_CONFIG_KEY_2=credential.helper GIT_CONFIG_VALUE_2=!f() { if [ \"\$1\" = get ]; then git credential-store get; fi; }; f bash /r/bin/checkout-projects.sh"* ]] && echo true || echo false)"
 ok "deferred phase: ...and the one-shot file is removed afterwards" "$([[ ! -e "$tmp/clone-credentials" ]] && echo true || echo false)"
 
 out="$(REPO_DIR=/r CHECKOUT_PROJECTS=false PROVISION_PHASE=project-commands _PERSISTENT_LOG_DIR="$tmp/p" _PROVISION_LOG_DIR="$tmp" _PROVISION_MARKER="$tmp/marker" bash -c "$stubs; $phase")"
