@@ -7,8 +7,13 @@ using Constructd.Core.Logic;
 using Constructd.Windows.Updates;
 namespace Constructd.Api.Hosting;
 
+/// <summary>
+/// Reconciles a host update with the maintenance gate: at start, then every 2 s. Tests turn the periodic part off
+/// (<c>Constructd:Updates:RecoverySchedulerEnabled=false</c>) and call <see cref="ReconcileAsync"/> directly: a tick
+/// reopens a gate that no update holds, which a test that closes the gate by hand would race.
+/// </summary>
 public sealed class UpdateRecoveryService(HostUpdateJob work,IHostUpdateStore store,IUpdaterLauncher launcher,IHostLock hostLock,
-    IMaintenanceGate gate,IHostConfigStore config,IReleaseInfo release,IUpdateStager stager,ConstructdOptions options,IClock clock,IServiceProvider services,IJobStore jobs,ILogger<UpdateRecoveryService> logger) : BackgroundService
+    IMaintenanceGate gate,IHostConfigStore config,IReleaseInfo release,IUpdateStager stager,ConstructdOptions options,IClock clock,IServiceProvider services,IJobStore jobs,IConfiguration settings,ILogger<UpdateRecoveryService> logger) : BackgroundService
 {
     private bool _initialized;
     private string? _settledUpdate;
@@ -17,6 +22,7 @@ public sealed class UpdateRecoveryService(HostUpdateJob work,IHostUpdateStore st
     public override async Task StartAsync(CancellationToken ct) { await ReconcileAsync(ct); await base.StartAsync(ct); }
     protected override async Task ExecuteAsync(CancellationToken ct)
     {
+        if(!settings.GetValue("Constructd:Updates:RecoverySchedulerEnabled",true)) return;
         using var timer=new PeriodicTimer(TimeSpan.FromSeconds(2));
         try { while(await timer.WaitForNextTickAsync(ct)) await ReconcileAsync(ct); }
         catch(OperationCanceledException) when(ct.IsCancellationRequested) { }

@@ -166,6 +166,9 @@ public sealed class TestApp(
             ["Constructd:Idle:SchedulerEnabled"] = "false",
             ["Constructd:Lease:SchedulerEnabled"] = "false",
             ["Constructd:Vault:SchedulerEnabled"] = "false",
+            // The update recovery reconciles at start only: its periodic tick reopens a gate no update holds, which
+            // tests that close the gate by hand would race (a refusal they wait for came back accepted under load).
+            ["Constructd:Updates:RecoverySchedulerEnabled"] = "false",
             ["Constructd:Power:KeepHostAwake"] = "false",
             ["Constructd:ForwardReconcileSeconds"] = "0",
             ["Constructd:Idle:DefaultTimeoutMinutes"] = "120",
