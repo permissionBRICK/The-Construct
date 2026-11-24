@@ -240,8 +240,10 @@ export class FakeBackend implements Backend {
     };
   }
 
-  /** Jobs whose steps differ from their kind's: a reprovision or update that starts its VM first. */
+  /** Jobs whose steps differ from their kind's: a reprovision or update that starts its VM first, or an agent update. */
   private jobSteps = new Map<string, string[]>();
+  /** For an agent-update job in fake mode: which tool ids it updates (only those, without reprovisioning). */
+  private agentUpdateTargets = new Map<string, string[]>();
 
   /** A reprovision or update the user asked for starts a VM that is off first, right before its reprovision (the engine's start step). */
   private stepsFor(vmId: string, kind: JobKind): string[] {
@@ -343,6 +345,12 @@ export class FakeBackend implements Backend {
     j.pct = 100;
     j.log[j.log.length - 1] = `ok   ${j.step}`;
     const v = this.vm(d, j.vmId);
+    const agentOnly = this.agentUpdateTargets.get(j.id);
+    if (agentOnly) {
+      this.agentUpdateTargets.delete(j.id);
+      for (const ag of v.agents) if (agentOnly.includes(ag.id)) { ag.version = ag.latest; ag.newer = false; }
+      return;
+    }
     v.reprovisioned = 'just now';
     v.changeWaits = null;
     if (j.kind === 'update' && j.to) v.version = j.to;
@@ -509,8 +517,26 @@ export class FakeBackend implements Backend {
     if (a === 'restart' && when === 'now') this.restart(vmId);
   }
 
-  /** As on the engine: a reprovision brings every coding agent to its newest version. */
-  updateAgents(vmId: string) { this.startJob(vmId, 'reprovision'); }
+  /** Updates one coding agent (by tool id), or every coding agent that is behind, without reprovisioning the VM. */
+  updateAgents(vmId: string, agent?: string) {
+    if (activeJob(this.s, vmId)?.state === 'running') return;
+    const vm = this.s.vms.find(v => v.id === vmId);
+    if (!vm) return;
+    const targets = agent
+      ? vm.agents.filter(a => a.id === agent)
+      : vm.agents.filter(a => a.newer ?? newer(a.latest, a.version));
+    if (!targets.length) return;
+    const steps = [...(vm.power === 'off' ? [START_STEP] : []), ...targets.map(a => `Updating ${a.name}`), 'Checking agents'];
+    const j = this.newJob(vmId, 'update', 0, 0, steps);
+    this.agentUpdateTargets.set(j.id, targets.map(a => a.id));
+    const fail = this.failNext;
+    this.failNext = false;
+    this.set(d => {
+      d.jobs = d.jobs.filter(x => !(x.vmId === vmId && x.state === 'failed'));
+      d.jobs.push(j);
+    });
+    this.advance(j.id, fail);
+  }
 
   /* --- signing in to the coding agents: the CLI's text, a code typed, signed in --- */
 

@@ -783,6 +783,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/vms/{name}/agents/{agent}/update": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Updates one coding agent on the VM (claude, codex, opencode, antigravity, t3) in a dedicated job without reprovisioning the VM. Starts the VM first when it is off. The VM's owner only. */
+        post: operations["UpdateVmAgent"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/vms/{name}/agents/update": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Updates coding agents on the VM in one dedicated job without reprovisioning the VM. Names specific agents in `agents`, or omits it to update every reported agent that has a newer release. Starts the VM first when it is off. The VM's owner only. */
+        post: operations["UpdateVmAgents"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/vms/{name}/adopt": {
         parameters: {
             query?: never;
@@ -5712,6 +5746,9 @@ export interface components {
             /** @default false */
             auto: boolean;
         };
+        UpdateVmAgentsRequest: {
+            agents?: null | string[];
+        };
         UpstreamApplyRequest: {
             operationId: null | string;
             url: null | string;
@@ -8828,6 +8865,73 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description An error, as a Problem document. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    UpdateVmAgent: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+                agent: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Accepted */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VmJobAcceptedResponse"];
+                };
+            };
+            /** @description An error, as a Problem document. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    UpdateVmAgents: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": null | components["schemas"]["UpdateVmAgentsRequest"];
+            };
+        };
+        responses: {
+            /** @description Accepted */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VmJobAcceptedResponse"];
+                };
             };
             /** @description An error, as a Problem document. */
             default: {

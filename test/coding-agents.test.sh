@@ -188,5 +188,65 @@ mkdir -p "${mcp_home}"
 mcp claude-code,codex
 ok "a VM without Antigravity gets no Antigravity file" test ! -e "${mcp_file}"
 
+# ── AI_TOOLS_OVERRIDE: narrowed run updates only the chosen agent ────────────
+narrow_cfg="${tmp}/narrow-config.env"
+cat >"${narrow_cfg}" <<'ENV'
+AI_TOOLS="opencode,claude-code,codex,antigravity"
+T3CODE=true
+ENV
+run_case narrow_has_tool '
+  has_tool codex && ! has_tool claude-code && ! has_tool opencode && ! has_tool antigravity && ! has_tool t3code
+' AI_TOOLS="opencode,claude-code,codex,antigravity" AI_TOOLS_OVERRIDE=codex
+ok "AI_TOOLS_OVERRIDE narrows has_tool to the single chosen agent" test "$(cat "${tmp}/narrow_has_tool.rc")" = 0
+
+if [[ "${EUID}" -eq 0 ]]; then
+  narrow_home="${tmp}/narrow-root"
+  narrow_repo="${tmp}/narrow-repo"
+  narrow_stub="${tmp}/narrow-stub"
+  narrow_link="${tmp}/narrow-link"
+  narrow_log="${tmp}/narrow.log"
+  mkdir -p "${narrow_home}/.local/bin" "${narrow_repo}/bin" "${narrow_repo}/config" "${narrow_stub}" "${narrow_link}"
+  cp "${ROOT}/bin/install-ai-tools.sh" "${ROOT}/bin/t3code-patched.sh" "${ROOT}/bin/apt-wait.sh" "${narrow_repo}/bin/"
+  printf 'System prompt for __AGENT_DNS__\n' >"${narrow_repo}/config/systemprompt.md"
+  printf '#!/usr/bin/env bash\nprintf "agy %%s\\n" "$*" >>"%s"\n' "${narrow_log}" >"${narrow_home}/.local/bin/agy"
+  chmod +x "${narrow_home}/.local/bin/agy"
+  for tool in claude codex opencode t3 systemctl npm; do
+    printf '#!/usr/bin/env bash\nprintf "%s %%s\\n" "$*" >>"%s"\n' "${tool}" "${narrow_log}" >"${narrow_stub}/${tool}"
+    chmod +x "${narrow_stub}/${tool}"
+  done
+  printf '#!/usr/bin/env bash\nprintf "console-info\\n" >>"%s"\n' "${narrow_log}" >"${narrow_repo}/bin/print-connection-info.sh"
+  printf '#!/usr/bin/env bash\nprintf "login-banner\\n" >>"%s"\n' "${narrow_log}" >"${narrow_repo}/bin/update-login-banner.sh"
+  chmod +x "${narrow_repo}/bin/print-connection-info.sh" "${narrow_repo}/bin/update-login-banner.sh"
+
+  mkdir -p "${narrow_home}/.gemini/antigravity-cli"
+  printf '{"toolPermission":"ask"}\n' >"${narrow_home}/.gemini/antigravity-cli/settings.json"
+  env TARGET_USER=root AI_TOOLS_OVERRIDE=antigravity AI_TOOLS_UPDATE_ONLY=true AI_CONSOLE_INTEGRATION=false \
+    CONFIG_FILE="${narrow_cfg}" REPO_DIR="${narrow_repo}" \
+    AGENT_SYSTEM_PROMPT_ROOT_HOME="${narrow_home}" AGENT_SYSTEM_PROMPT_CUSTOM="${tmp}/none.md" \
+    CONSTRUCT_EXTERNAL_HOST=vm.example.test AGY_LINK="${narrow_link}/agy" \
+    PATH="${narrow_stub}:/usr/bin:/bin" \
+    bash "${narrow_repo}/bin/install-ai-tools.sh" >"${tmp}/narrow.out" 2>&1
+  narrow_rc=$?
+  ok "narrowed install-ai-tools.sh exits 0 for a single agent" test "${narrow_rc}" = 0
+  ok "narrowed run updates the chosen agent" grep -qx 'agy update' "${narrow_log}"
+  ok "narrowed run does not touch other agents, systemctl, or console integration" \
+    sh -c "! grep -Eq '^(claude|codex|opencode|t3|systemctl|npm|console-info|login-banner)' '${narrow_log}'"
+  ok "AI_TOOLS_UPDATE_ONLY preserves existing Antigravity toolPermission" \
+    jq_ok '.toolPermission == "ask"' "${narrow_home}/.gemini/antigravity-cli/settings.json"
+
+  printf '#!/usr/bin/env bash\nexit 7\n' >"${narrow_home}/.local/bin/agy"
+  chmod +x "${narrow_home}/.local/bin/agy"
+  env TARGET_USER=root AI_TOOLS_OVERRIDE=antigravity AI_TOOLS_UPDATE_ONLY=true AI_CONSOLE_INTEGRATION=false \
+    CONFIG_FILE="${narrow_cfg}" REPO_DIR="${narrow_repo}" \
+    AGENT_SYSTEM_PROMPT_ROOT_HOME="${narrow_home}" AGENT_SYSTEM_PROMPT_CUSTOM="${tmp}/none.md" \
+    CONSTRUCT_EXTERNAL_HOST=vm.example.test AGY_LINK="${narrow_link}/agy" \
+    PATH="${narrow_stub}:/usr/bin:/bin" \
+    bash "${narrow_repo}/bin/install-ai-tools.sh" >"${tmp}/narrow-fail.out" 2>&1
+  narrow_fail_rc=$?
+  ok "AI_TOOLS_UPDATE_ONLY fails when the tool updater exits non-zero" test "${narrow_fail_rc}" -ne 0
+  ok "failed AI_TOOLS_UPDATE_ONLY run still preserves toolPermission" \
+    jq_ok '.toolPermission == "ask"' "${narrow_home}/.gemini/antigravity-cli/settings.json"
+fi
+
 printf '\n%d passed, %d failed\n' "${pass}" "${fail}"
 [[ "${fail}" -eq 0 ]]

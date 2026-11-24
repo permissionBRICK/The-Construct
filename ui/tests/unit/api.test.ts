@@ -192,16 +192,27 @@ describe('ApiBackend', () => {
     expect(j).toMatchObject({ kind: 'reprovision', state: 'running' });
   });
 
-  it('updates a coding agent with a reprovision, which brings every agent to its newest', async () => {
+  it('updates a single coding agent through the single-agent route without reprovisioning', async () => {
     const { be, calls, on, settle } = world();
-    on('POST', `/api/engines/${E1}/vms/atlas/jobs`, { status: 202, json: { jobId: 'j7', kind: 'provision', replayed: false } });
-    on('GET', `/api/engines/${E1}/api/v1/jobs/j7`, { json: job('j7', 'atlas', 'running') });
+    on('POST', `/api/engines/${E1}/api/v1/vms/atlas/agents/codex/update`, { status: 202, json: { jobId: 'j7', kind: 'update-agents', replayed: false } });
+    on('GET', `/api/engines/${E1}/api/v1/jobs/j7`, { json: job('j7', 'atlas', 'running', 'update-agents', [{ at: '', text: 'updating Codex', step: 'codex', state: 'running', percent: null }]) });
     await be.start();
     expect(be.snapshot().na).not.toContain('agent-update');
+    be.updateAgents('atlas', 'codex');
+    await settle();
+    expect(posts(calls).map(c => c.path)).toEqual([`/api/engines/${E1}/api/v1/vms/atlas/agents/codex/update`]);
+    expect(activeJob(be.snapshot(), 'atlas')).toMatchObject({ kind: 'update', state: 'running', step: 'Updating Codex' });
+  });
+
+  it('updates all behind coding agents through the update-all route without reprovisioning', async () => {
+    const { be, calls, on, settle } = world();
+    on('POST', `/api/engines/${E1}/api/v1/vms/atlas/agents/update`, { status: 202, json: { jobId: 'j7b', kind: 'update-agents', replayed: false } });
+    on('GET', `/api/engines/${E1}/api/v1/jobs/j7b`, { json: job('j7b', 'atlas', 'running', 'update-agents', [{ at: '', text: 'updating Claude Code', step: 'claude', state: 'running', percent: null }]) });
+    await be.start();
     be.updateAgents('atlas');
     await settle();
-    expect(posts(calls).map(c => [c.path, (c.body as { kind: string }).kind])).toEqual([[`/api/engines/${E1}/vms/atlas/jobs`, 'provision']]);
-    expect(activeJob(be.snapshot(), 'atlas')).toMatchObject({ kind: 'reprovision', state: 'running' });
+    expect(posts(calls).map(c => [c.path, c.body])).toEqual([[`/api/engines/${E1}/api/v1/vms/atlas/agents/update`, {}]]);
+    expect(activeJob(be.snapshot(), 'atlas')).toMatchObject({ kind: 'update', state: 'running', step: 'Updating Claude Code' });
   });
 
   it('shows the engine\'s whole-job percentage with its sub-step, never going back, and a success with warnings', async () => {

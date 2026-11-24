@@ -61,6 +61,7 @@ public static class JobKinds
     public const string Provision = "provision";
     public const string Reinstall = "reinstall";
     public const string Restore = "restore";
+    public const string UpdateAgents = "update-agents";
 }
 
 /// <summary>

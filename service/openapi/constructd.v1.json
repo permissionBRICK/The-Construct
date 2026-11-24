@@ -3262,6 +3262,112 @@
         }
       }
     },
+    "/api/v1/vms/{name}/agents/{agent}/update": {
+      "post": {
+        "tags": [
+          "AgentUpdateEndpoints"
+        ],
+        "description": "Updates one coding agent on the VM (claude, codex, opencode, antigravity, t3) in a dedicated job without reprovisioning the VM. Starts the VM first when it is off. The VM's owner only.",
+        "operationId": "UpdateVmAgent",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "agent",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VmJobAcceptedResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error, as a Problem document.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/vms/{name}/agents/update": {
+      "post": {
+        "tags": [
+          "AgentUpdateEndpoints"
+        ],
+        "description": "Updates coding agents on the VM in one dedicated job without reprovisioning the VM. Names specific agents in `agents`, or omits it to update every reported agent that has a newer release. Starts the VM first when it is off. The VM's owner only.",
+        "operationId": "UpdateVmAgents",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/UpdateVmAgentsRequest"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VmJobAcceptedResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error, as a Problem document.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/vms/{name}/adopt": {
       "post": {
         "tags": [
@@ -15001,6 +15107,20 @@
           }
         }
       },
+      "UpdateVmAgentsRequest": {
+        "type": "object",
+        "properties": {
+          "agents": {
+            "type": [
+              "null",
+              "array"
+            ],
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
       "UpstreamApplyRequest": {
         "required": [
           "operationId",
@@ -18247,6 +18367,9 @@
     },
     {
       "name": "AgentSignInEndpoints"
+    },
+    {
+      "name": "AgentUpdateEndpoints"
     },
     {
       "name": "LocalAdoptionEndpoints"

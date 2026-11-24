@@ -518,7 +518,8 @@ export interface Backend {
   dismissJob(jobId: string): void;
   /** Hardware changes ask restart now or later; `when` says which. Other groups save at once. */
   saveSettings(vmId: string, patch: SettingsPatch, when?: 'now' | 'later'): void;
-  updateAgents(vmId: string): void;
+  /** Updates one coding agent (by tool id), or every coding agent that is behind when omitted, without reprovisioning. */
+  updateAgents(vmId: string, agent?: string): void;
   /** Starts a coding agent's own sign-in on the VM; one that runs ends. Where this device can, the sign-in returns
       from the browser without a pasted code. OpenCode first asks for an OpenRouter API key (`signInWithKey`);
       `list` starts OpenCode's own list of providers instead. */

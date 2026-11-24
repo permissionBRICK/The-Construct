@@ -207,8 +207,8 @@ public static partial class ProvisionScript
     /// nothing (it would run its whole usage report instead) and the timer reports.
     /// </summary>
     public const string AgentReportCommand =
-        "s=/usr/local/bin/construct-usage-report.sh; [ -x \"$s\" ] || s=" + RepoDir + "/bin/construct-usage-report.sh; " +
-        "grep -q -e '--agents' \"$s\" 2>/dev/null && bash \"$s\" --agents";
+        "for s in /usr/local/bin/construct-usage-report.sh " + RepoDir + "/bin/construct-usage-report.sh; do " +
+        "if [ -x \"$s\" ] && grep -q -e '--agents' \"$s\" 2>/dev/null; then exec bash \"$s\" --agents; fi; done; true";
 
     /// <summary>The PowerShell's final step: strip the bootstrap key (root path only) and reboot in the background.</summary>
     public static string RebootCommand(string? bootstrapPublicKey, string seedUser)

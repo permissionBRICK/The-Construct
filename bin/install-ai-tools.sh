@@ -82,6 +82,8 @@ T3CODE_PATCHED="${_t3_patched_override}"
 # one tool this run installs: T3 Code turns its providers on and off by it.
 CODING_AGENTS="${AI_TOOLS:-opencode,claude-code,codex}"
 AI_TOOLS="${AI_TOOLS_OVERRIDE:-${AI_TOOLS:-}}"
+AI_TOOLS_UPDATE_ONLY="${AI_TOOLS_UPDATE_ONLY:-false}"
+[[ "${AI_TOOLS_UPDATE_ONLY}" == "true" ]] || AI_TOOLS_UPDATE_ONLY=false
 WORKSPACE_ROOT="${WORKSPACE_ROOT:-/root/repos}"
 OPENCODE_HOST="${OPENCODE_HOST:-0.0.0.0}"
 OPENCODE_PORT="${OPENCODE_PORT:-4096}"
@@ -357,10 +359,10 @@ install_opencode() {
           systemctl start opencode-serve 2>/dev/null || true
           err "the move to OpenCode 2 failed (installer and npm); staying on OpenCode ${installed}"
           return 1
-        elif [[ "${had_opencode}" == true ]]; then
+        elif [[ "${had_opencode}" == true && "${AI_TOOLS_UPDATE_ONLY}" != "true" ]]; then
           warn "opencode update failed (installer and npm); keeping the existing version"
         else
-          err "opencode install failed: neither the official installer nor npm could fetch it"
+          err "opencode install/update failed: neither the official installer nor npm could fetch it"
           return 1
         fi
       fi
@@ -430,6 +432,17 @@ install_opencode() {
   elif [[ ! -x /usr/local/bin/opencode ]]; then
     warn "opencode install completed, but binary was not found in PATH or common locations"
     return 1
+  fi
+
+  if [[ "${AI_TOOLS_UPDATE_ONLY}" == "true" ]]; then
+    if systemctl is-active --quiet opencode-serve 2>/dev/null; then
+      systemctl restart opencode-serve
+      if ! systemctl is-active --quiet opencode-serve; then
+        err "opencode-serve failed to start after update"
+        return 1
+      fi
+    fi
+    return 0
   fi
 
   # Seed the global opencode config (permission=allow) BEFORE starting the
@@ -663,9 +676,15 @@ install_claude_code() {
   step "Installing Claude Code CLI"
   if command -v claude >/dev/null 2>&1; then
     note "Claude Code already installed; self-updating"
-    # Best-effort: a failed self-update keeps the working installed version --
-    # never worth degrading a provision over.
-    claude update || warn "claude self-update failed; keeping the installed version"
+    if [[ "${AI_TOOLS_UPDATE_ONLY}" == "true" ]]; then
+      if ! claude update; then
+        err "claude self-update failed"
+        return 1
+      fi
+    else
+      # Best-effort during provisioning: a failed self-update keeps the working installed version.
+      claude update || warn "claude self-update failed; keeping the installed version"
+    fi
   elif [[ "${TARGET_USER}" != "root" ]] && id "${TARGET_USER}" >/dev/null 2>&1; then
     sudo -H -u "${TARGET_USER}" bash -lc 'curl -fsSL https://claude.ai/install.sh | bash'
     if [[ -x "/home/${TARGET_USER}/.local/bin/claude" ]]; then
@@ -681,6 +700,10 @@ install_claude_code() {
     if [[ -x /root/.local/bin/claude ]]; then
       ln -sf /root/.local/bin/claude /usr/local/bin/claude
     fi
+  fi
+
+  if [[ "${AI_TOOLS_UPDATE_ONLY}" == "true" ]]; then
+    return 0
   fi
 
   # Voice dictation -- the CLI `/voice` command and the VS Code chat mic button --
@@ -860,13 +883,22 @@ install_codex() {
     case "${codex_current}" in
       */node_modules/*)
         note "Codex already installed (npm); updating via npm"
-        npm install -g @openai/codex@latest || warn "codex npm update failed; keeping the installed version"
+        if ! npm install -g @openai/codex@latest; then
+          if [[ "${AI_TOOLS_UPDATE_ONLY}" == "true" ]]; then
+            err "codex npm update failed"
+            return 1
+          fi
+          warn "codex npm update failed; keeping the installed version"
+        fi
         ;;
       *)
         note "Codex already installed; updating via the official installer"
         if ! codex_official_installer; then
           if command -v npm >/dev/null 2>&1 && npm install -g @openai/codex@latest; then
             warn "Official Codex installer failed; updated via npm instead"
+          elif [[ "${AI_TOOLS_UPDATE_ONLY}" == "true" ]]; then
+            err "codex update failed"
+            return 1
           else
             warn "codex update failed; keeping the installed version"
           fi
@@ -937,6 +969,17 @@ install_codex() {
   fi
   if [[ "${codex_target}" != "/usr/local/bin/codex" ]]; then
     ln -sf "${codex_target}" /usr/local/bin/codex
+  fi
+
+  if [[ "${AI_TOOLS_UPDATE_ONLY}" == "true" ]]; then
+    if systemctl is-active --quiet codex-app-server 2>/dev/null; then
+      systemctl restart codex-app-server
+      if ! systemctl is-active --quiet codex-app-server; then
+        err "codex-app-server failed to start after update"
+        return 1
+      fi
+    fi
+    return 0
   fi
 
   if [[ ! -f "${CODEX_TOKEN_FILE}" ]]; then
@@ -1025,12 +1068,18 @@ install_antigravity() {
   agy="${home_dir}/.local/bin/agy"
   if [[ -x "${agy}" ]]; then
     note "Antigravity CLI already installed; updating"
-    # Best-effort, like the other agents' self-updates: a failed update keeps the
-    # working installed version.
+    local agy_rc=0
     if [[ "${owner}" == root ]]; then
-      HOME="${home_dir}" "${agy}" update </dev/null || warn "agy update failed; keeping the installed version"
+      HOME="${home_dir}" "${agy}" update </dev/null || agy_rc=$?
     else
-      sudo -H -u "${owner}" "${agy}" update </dev/null || warn "agy update failed; keeping the installed version"
+      sudo -H -u "${owner}" "${agy}" update </dev/null || agy_rc=$?
+    fi
+    if [[ "${agy_rc}" -ne 0 ]]; then
+      if [[ "${AI_TOOLS_UPDATE_ONLY}" == "true" ]]; then
+        err "agy update failed (exit ${agy_rc})"
+        return "${agy_rc}"
+      fi
+      warn "agy update failed; keeping the installed version"
     fi
   elif ! run_installer_with_retries "Antigravity CLI" antigravity_official_installer "${owner}" "${home_dir}"; then
     err "The Antigravity CLI installer failed"
@@ -1042,6 +1091,9 @@ install_antigravity() {
   fi
   # One copy for every shell and for T3 Code, whose Antigravity provider points here.
   ln -sf "${agy}" "${link}"
+  if [[ "${AI_TOOLS_UPDATE_ONLY}" == "true" ]]; then
+    return 0
+  fi
   configure_antigravity_settings "${home_dir}" "${owner}"
   install_agent_system_prompt "${home_dir}/.gemini/AGENTS.md" "${owner}"
 }
@@ -1317,6 +1369,7 @@ install_t3code() {
     _have_ver="$(t3 --version 2>/dev/null | grep -oE '[0-9]+[.][0-9]+[.][0-9]+([-.][0-9A-Za-z.]+)?' | head -1 || true)"
     _t3_stock_key=""
     [[ -n "${_wanted_ver}" ]] && _t3_stock_key="stock:${_wanted_ver}"
+    _t3_stock_failed=false
     if [[ -n "${_t3_stock_key}" && "${_have_ver}" == "${_wanted_ver}" && \
           "$(cat /etc/construct/t3code-installed-build 2>/dev/null || true)" == "${_t3_stock_key}" ]]; then
       note "t3 ${_wanted_ver} (stock, channel=${T3CODE_CHANNEL}) is already installed; skipping the npm install."
@@ -1326,6 +1379,11 @@ install_t3code() {
       if command -v t3 >/dev/null 2>&1; then
         note "t3 already installed; installing t3@${_tag} (channel=${T3CODE_CHANNEL})"
         if ! npm install -g "t3@${_tag}" --allow-scripts=node-pty,msgpackr-extract; then
+          _t3_stock_failed=true
+          if [[ "${AI_TOOLS_UPDATE_ONLY}" == "true" ]]; then
+            err "t3 update failed"
+            return 1
+          fi
           warn "t3 update failed; keeping the existing version"
         fi
       else
@@ -1355,60 +1413,62 @@ install_t3code() {
     t3_bundle="$(dirname "$(dirname "${t3_bundle}")")/apps/server/dist/bin.mjs"
   fi
 
-  # Persist the bind settings so the unit's EnvironmentFile always defines them
-  # (an older config.env predating T3 Code has no T3CODE_* keys, and systemd
-  # would otherwise exec `t3 serve --host --port` with empty expansions).
-  bash "${REPO_DIR}/bin/config-set.sh" "${CONFIG_FILE}" T3CODE_HOST "${T3CODE_HOST}"
-  bash "${REPO_DIR}/bin/config-set.sh" "${CONFIG_FILE}" T3CODE_PORT "${T3CODE_PORT}"
-  bash "${REPO_DIR}/bin/config-set.sh" "${CONFIG_FILE}" T3CODE_CHANNEL "${T3CODE_CHANNEL}"
-  bash "${REPO_DIR}/bin/config-set.sh" "${CONFIG_FILE}" CONSTRUCT_T3_VOICE_INPUT \
-    "$([[ "${T3CODE_PATCHED:-false}" == "true" ]] && echo true || echo false)"
+  local _t3_pub_before="" _t3_pub_after=""
+  if [[ "${AI_TOOLS_UPDATE_ONLY}" != "true" ]]; then
+    # Persist the bind settings so the unit's EnvironmentFile always defines them
+    # (an older config.env predating T3 Code has no T3CODE_* keys, and systemd
+    # would otherwise exec `t3 serve --host --port` with empty expansions).
+    bash "${REPO_DIR}/bin/config-set.sh" "${CONFIG_FILE}" T3CODE_HOST "${T3CODE_HOST}"
+    bash "${REPO_DIR}/bin/config-set.sh" "${CONFIG_FILE}" T3CODE_PORT "${T3CODE_PORT}"
+    bash "${REPO_DIR}/bin/config-set.sh" "${CONFIG_FILE}" T3CODE_CHANNEL "${T3CODE_CHANNEL}"
+    bash "${REPO_DIR}/bin/config-set.sh" "${CONFIG_FILE}" CONSTRUCT_T3_VOICE_INPUT \
+      "$([[ "${T3CODE_PATCHED:-false}" == "true" ]] && echo true || echo false)"
 
-  # HTTPS reverse proxy for the web GUI. Runs BEFORE the service restart below so
-  # config.env already holds T3CODE_PUBLIC_BASE_URL when `t3 serve` starts (the
-  # patched server reads it once, at startup, for its pairing/startup URLs), and
-  # deliberately BEFORE the unchanged-build early return so flipping the HTTPS
-  # toggle is reconciled even when the T3 build itself is untouched. Best-effort:
-  # the setup script degrades to plain HTTP on its own rather than failing the
-  # T3 install, so a non-zero exit here is reported and then tolerated.
-  local _t3_pub_before _t3_pub_after
-  _t3_pub_before="$(sed -n 's/^T3CODE_PUBLIC_BASE_URL=//p' "${CONFIG_FILE}" 2>/dev/null | head -1 || true)"
-  # Added only when there is one (a service-managed VM behind a host forward), so the
-  # default path's invocation stays argument-for-argument identical.
-  local _t3_pub_env=()
-  if [[ -n "${T3CODE_PUBLIC_PORT}" ]]; then _t3_pub_env=("T3CODE_PUBLIC_PORT=${T3CODE_PUBLIC_PORT}"); fi
-  env T3CODE_HTTPS="${T3CODE_HTTPS}" T3CODE_HTTPS_PORT="${T3CODE_HTTPS_PORT}" \
-    ${_t3_pub_env[@]+"${_t3_pub_env[@]}"} \
-    T3CODE_PORT="${T3CODE_PORT}" CONSTRUCT_EXTERNAL_HOST="${CONSTRUCT_EXTERNAL_HOST}" \
-    CONFIG_FILE="${CONFIG_FILE}" REPO_DIR="${REPO_DIR}" \
-    bash "${REPO_DIR}/bin/setup-t3-https.sh" \
-    || warn "WARNING: T3 Code HTTPS setup failed; the web GUI stays on plain HTTP (:${T3CODE_PORT})"
-  _t3_pub_after="$(sed -n 's/^T3CODE_PUBLIC_BASE_URL=//p' "${CONFIG_FILE}" 2>/dev/null | head -1 || true)"
+    # HTTPS reverse proxy for the web GUI. Runs BEFORE the service restart below so
+    # config.env already holds T3CODE_PUBLIC_BASE_URL when `t3 serve` starts (the
+    # patched server reads it once, at startup, for its pairing/startup URLs), and
+    # deliberately BEFORE the unchanged-build early return so flipping the HTTPS
+    # toggle is reconciled even when the T3 build itself is untouched. Best-effort:
+    # the setup script degrades to plain HTTP on its own rather than failing the
+    # T3 install, so a non-zero exit here is reported and then tolerated.
+    _t3_pub_before="$(sed -n 's/^T3CODE_PUBLIC_BASE_URL=//p' "${CONFIG_FILE}" 2>/dev/null | head -1 || true)"
+    # Added only when there is one (a service-managed VM behind a host forward), so the
+    # default path's invocation stays argument-for-argument identical.
+    local _t3_pub_env=()
+    if [[ -n "${T3CODE_PUBLIC_PORT}" ]]; then _t3_pub_env=("T3CODE_PUBLIC_PORT=${T3CODE_PUBLIC_PORT}"); fi
+    env T3CODE_HTTPS="${T3CODE_HTTPS}" T3CODE_HTTPS_PORT="${T3CODE_HTTPS_PORT}" \
+      ${_t3_pub_env[@]+"${_t3_pub_env[@]}"} \
+      T3CODE_PORT="${T3CODE_PORT}" CONSTRUCT_EXTERNAL_HOST="${CONSTRUCT_EXTERNAL_HOST}" \
+      CONFIG_FILE="${CONFIG_FILE}" REPO_DIR="${REPO_DIR}" \
+      bash "${REPO_DIR}/bin/setup-t3-https.sh" \
+      || warn "WARNING: T3 Code HTTPS setup failed; the web GUI stays on plain HTTP (:${T3CODE_PORT})"
+    _t3_pub_after="$(sed -n 's/^T3CODE_PUBLIC_BASE_URL=//p' "${CONFIG_FILE}" 2>/dev/null | head -1 || true)"
 
-  # The unit is refreshed before the unchanged-build early return: a changed unit
-  # setting (OOMPolicy, say) must reach a VM whose T3 build did not change, and
-  # daemon-reload applies it to the running server without a restart.
-  install -d -m 0755 "${WORKSPACE_ROOT}"
-  local _t3_unit=/etc/systemd/system/t3code-serve.service _t3_unit_new
-  _t3_unit_new="$(sed "s|^WorkingDirectory=.*|WorkingDirectory=${WORKSPACE_ROOT}|" "${REPO_DIR}/systemd/t3code-serve.service")"
-  if [[ "$(cat "${_t3_unit}" 2>/dev/null)" != "${_t3_unit_new}" ]]; then
-    printf '%s\n' "${_t3_unit_new}" >"${_t3_unit}"
-    chmod 0644 "${_t3_unit}"
-    systemctl daemon-reload
+    # The unit is refreshed before the unchanged-build early return: a changed unit
+    # setting (OOMPolicy, say) must reach a VM whose T3 build did not change, and
+    # daemon-reload applies it to the running server without a restart.
+    install -d -m 0755 "${WORKSPACE_ROOT}"
+    local _t3_unit=/etc/systemd/system/t3code-serve.service _t3_unit_new
+    _t3_unit_new="$(sed "s|^WorkingDirectory=.*|WorkingDirectory=${WORKSPACE_ROOT}|" "${REPO_DIR}/systemd/t3code-serve.service")"
+    if [[ "$(cat "${_t3_unit}" 2>/dev/null)" != "${_t3_unit_new}" ]]; then
+      printf '%s\n' "${_t3_unit_new}" >"${_t3_unit}"
+      chmod 0644 "${_t3_unit}"
+      systemctl daemon-reload
+    fi
+
+    # Tells the threads a reprovision or reinstall interrupted what happened, once the
+    # run is done (docs/provisioning.md, "Resuming interrupted T3 Code threads").
+    # Refreshed with the T3 unit, before the early return, for the same reason.
+    install -m 0755 "${REPO_DIR}/bin/construct-t3-resume.py" /usr/local/bin/construct-t3-resume
+    if ! cmp -s "${REPO_DIR}/systemd/construct-t3-resume.service" /etc/systemd/system/construct-t3-resume.service; then
+      install -m 0644 "${REPO_DIR}/systemd/construct-t3-resume.service" /etc/systemd/system/construct-t3-resume.service
+      systemctl daemon-reload
+    fi
+    systemctl enable --quiet construct-t3-resume.service
+
+    migrate_t3_native_limit_resume
+    configure_t3_providers || warn "Could not set T3 Code's providers; continuing"
   fi
-
-  # Tells the threads a reprovision or reinstall interrupted what happened, once the
-  # run is done (docs/provisioning.md, "Resuming interrupted T3 Code threads").
-  # Refreshed with the T3 unit, before the early return, for the same reason.
-  install -m 0755 "${REPO_DIR}/bin/construct-t3-resume.py" /usr/local/bin/construct-t3-resume
-  if ! cmp -s "${REPO_DIR}/systemd/construct-t3-resume.service" /etc/systemd/system/construct-t3-resume.service; then
-    install -m 0644 "${REPO_DIR}/systemd/construct-t3-resume.service" /etc/systemd/system/construct-t3-resume.service
-    systemctl daemon-reload
-  fi
-  systemctl enable --quiet construct-t3-resume.service
-
-  migrate_t3_native_limit_resume
-  configure_t3_providers || warn "Could not set T3 Code's providers; continuing"
 
   # On an unchanged upstream T3 + Construct revision, the source builder has
   # already restored the exact server symlink and Desktop status. If that same
@@ -1448,13 +1508,15 @@ install_t3code() {
   systemctl enable t3code-serve
   systemctl restart t3code-serve
 
-  register_t3_projects
+  if [[ "${AI_TOOLS_UPDATE_ONLY}" != "true" ]]; then
+    register_t3_projects
+  fi
 
   if systemctl is-active --quiet t3code-serve; then
     if [[ "${T3CODE_PATCHED:-false}" == "true" ]]; then
       sed -n 's/^T3CODE_BUILD_KEY=//p' /etc/construct/t3code-desktop-status | head -1 > /etc/construct/t3code-installed-build
-    elif [[ -n "${_t3_stock_key}" ]]; then
-      # Only once the stock server is up: a failed run must not let the next one skip.
+    elif [[ -n "${_t3_stock_key}" && "${_t3_stock_failed:-false}" != "true" ]]; then
+      # Only once the stock install succeeded and the server is up: a failed run must not let the next one skip.
       printf '%s\n' "${_t3_stock_key}" > /etc/construct/t3code-installed-build
     fi
     echo "t3code-serve is running on ${T3CODE_HOST}:${T3CODE_PORT}"
