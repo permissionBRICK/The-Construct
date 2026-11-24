@@ -38,7 +38,7 @@ const NA = 'Not available yet';
 const RESTART_LINE = 'Windows has to restart to turn on Hyper-V.';
 const PREFS_KEY = 'construct.prefs';
 
-interface Started { kind: JobKind; from?: string; to?: string; freshImage?: boolean; backupId?: string }
+interface Started { kind: JobKind; from?: string; to?: string; freshImage?: boolean; backupId?: string; agents?: string[] }
 
 /** A coding agent's sign-in this device follows (see ApiBackend.signIn). */
 interface SignInAt {
@@ -1379,7 +1379,8 @@ export class ApiBackend implements Backend {
   private jobEnded(engine: string, job: JobResponse) {
     const key = jobKey(engine, job.id);
     if (!ended(job)) return;
-    const verb = { reprovision: 'Reprovisioned', reinstall: 'Reinstalled', update: 'Updated', restore: 'Restored', create: 'Created' }[this.started.get(key)?.kind ?? (job.kind === 'create-vm' ? 'create' : 'reprovision')];
+    const fallback: JobKind = job.kind === 'create-vm' ? 'create' : job.kind === 'reinstall' ? 'reinstall' : job.kind === 'restore' ? 'restore' : job.kind === 'update-agents' ? 'update' : 'reprovision';
+    const verb = { reprovision: 'Reprovisioned', reinstall: 'Reinstalled', update: 'Updated', restore: 'Restored', create: 'Created' }[this.started.get(key)?.kind ?? fallback];
     if (job.state === 'succeeded' && job.vmName) this.note(`${verb} ${job.vmName}`);
   }
 
@@ -1543,6 +1544,12 @@ export class ApiBackend implements Backend {
       return;
     }
     if (raw.kind === 'create-vm') { void this.provision(ref.engine, ref.name); return; }
+    if (raw.kind === 'update-agents') {
+      const result = raw.result as Loose | null;
+      const list = this.started.get(key)?.agents ?? (Array.isArray(result?.agents) ? result.agents.filter((x): x is string => typeof x === 'string') : null);
+      void this.startAgentUpdate(ref.engine, ref.name, list && list.length > 0 ? list : undefined);
+      return;
+    }
     const st = this.started.get(key);
     void this.whileStarting(engine, ref.name, st?.kind ?? job.kind, () => this.run(async () => {
       const r = await ok(this.agent.POST('/api/engines/{engine}/jobs/{id}/retry', { params: { path: { engine, id } }, body: {} as never }));
@@ -1601,9 +1608,22 @@ export class ApiBackend implements Backend {
     await ok(c.PUT('/api/v1/vms/{name}/desired', { ...path, body: next }));
   }
 
-  /** A coding agent's update: the VM's provision installs the newest version of each agent, so it is a reprovision. */
-  updateAgents(vmId: string) {
-    this.reprovision(vmId);
+  /** Updates one coding agent (`agent` = tool id), or every coding agent that is behind when omitted,
+      in a dedicated job without reprovisioning the VM. */
+  updateAgents(vmId: string, agent?: string) {
+    const ref = this.vmRef(vmId);
+    if (!ref) return;
+    void this.startAgentUpdate(ref.engine, ref.name, agent ? [agent] : undefined);
+  }
+
+  private async startAgentUpdate(engine: string, name: string, agents?: string[]) {
+    const c = this.engine(engine);
+    await this.whileStarting(engine, name, 'update', () => this.run(async () => {
+      const r = agents?.length === 1
+        ? await ok(c.POST('/api/v1/vms/{name}/agents/{agent}/update', { params: { path: { name, agent: agents[0] } } }))
+        : await ok(c.POST('/api/v1/vms/{name}/agents/update', { params: { path: { name } }, body: agents ? { agents } : {} }));
+      await this.track(engine, r.jobId, { kind: 'update', agents });
+    }));
   }
 
   /** A profile switched on or off for one VM: part of its desired state, applied at the next reprovision. */

@@ -39,6 +39,23 @@ describe('FakeBackend', () => {
     expect(be.snapshot().vms[0].changeWaits).toBeNull();
   });
 
+  it('updates a single coding agent without reprovisioning or touching other agents', () => {
+    const be = new FakeBackend({ scene: 'changed', tick: 10 });
+    const before = be.snapshot().vms[0];
+    const behind = before.agents.filter(a => a.latest !== a.version);
+    expect(behind.length).toBeGreaterThanOrEqual(1);
+    const chosen = behind[0];
+    be.updateAgents('atlas', chosen.id);
+    const j = activeJob(be.snapshot(), 'atlas')!;
+    expect(j.kind).toBe('update');
+    expect(j.step).toBe(`Updating ${chosen.name}`);
+    run(1000);
+    const after = be.snapshot().vms[0];
+    expect(after.agents.find(a => a.id === chosen.id)!.version).toBe(chosen.latest);
+    // Does not clear a pending reprovision change because it did not reprovision the VM.
+    expect(after.changeWaits).toBe(before.changeWaits);
+  });
+
   it('starts the repair in a T3 Code thread on failure, answered there and not here', () => {
     const be = new FakeBackend({ tick: 10 });
     be.demo('fail-next');

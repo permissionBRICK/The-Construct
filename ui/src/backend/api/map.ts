@@ -212,12 +212,20 @@ const PROVISION_STEPS: [string, string][] = [
 ];
 const REINSTALL_STEPS: [string, string][] = [['media', 'Preparing image'], ['backup', 'Backing up'], ['delete', 'Deleting'], ['create', 'Creating'], ...PROVISION_STEPS];
 const RESTORE_STEPS: [string, string][] = [['restore', 'Restoring']];
-const STEPS: Record<string, [string, string][]> = { provision: PROVISION_STEPS, reinstall: REINSTALL_STEPS, restore: RESTORE_STEPS };
+const AGENT_UPDATE_STEPS: [string, string][] = [
+  ['claude', 'Updating Claude Code'], ['codex', 'Updating Codex'], ['opencode', 'Updating OpenCode'],
+  ['antigravity', 'Updating Antigravity'], ['t3', 'Updating T3 Code'], ['report', 'Checking agents'],
+];
+const STEPS: Record<string, [string, string][]> = {
+  provision: PROVISION_STEPS, reinstall: REINSTALL_STEPS, restore: RESTORE_STEPS, 'update-agents': AGENT_UPDATE_STEPS,
+};
 /** A provision the user asked for starts a VM that is off first (ProvisionStart.Step). It comes before the first step and
     stays out of the list, so the bar of an engine that sends no whole-job percentage is the same as before. */
 const START_STEP: [string, string] = ['start', 'Starting the VM'];
 
-const JOB_KINDS: Record<string, JobKind> = { provision: 'reprovision', 'create-vm': 'create', reinstall: 'reinstall', restore: 'restore' };
+const JOB_KINDS: Record<string, JobKind> = {
+  provision: 'reprovision', 'create-vm': 'create', reinstall: 'reinstall', restore: 'restore', 'update-agents': 'update',
+};
 /** Engine job kinds the VM pages show. */
 export const VM_JOB_KINDS = Object.keys(JOB_KINDS);
 

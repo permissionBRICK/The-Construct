@@ -104,6 +104,13 @@ public sealed record AgentNoticesResponse(IReadOnlyList<AgentNoticeResponse> Not
 public sealed record VmAgentsResponse(DateTimeOffset? ReportedAt, IReadOnlyList<VmAgentResponse> Agents);
 
 /// <summary>
+/// <c>POST /vms/{name}/agents/update</c>, optional. <paramref name="Agents"/>: the tool ids to update
+/// (<c>claude</c>, <c>codex</c>, <c>opencode</c>, <c>antigravity</c>, <c>t3</c>); omitted or null updates every
+/// reported agent on the VM that has a newer release.
+/// </summary>
+public sealed record UpdateVmAgentsRequest(IReadOnlyList<string>? Agents = null);
+
+/// <summary>
 /// A coding agent's sign-in on a VM (<c>/vms/{name}/agents/{agent}/sign-in</c>, design 11.8). <paramref name="Text"/> is
 /// what the agent's terminal shows now, whole, as its CLI wrote it (links and codes included), followed by what the
 /// script or the connection said besides; empty once the sign-in ended. <paramref name="Revision"/> counts its changes. <paramref name="State"/>:

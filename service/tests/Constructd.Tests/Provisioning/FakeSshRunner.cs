@@ -23,6 +23,7 @@ public partial class FakeSshRunner : ISshRunner
     /// <summary>Output and exit code of the main provision.sh run; the default is a clean run.</summary>
     public Func<SshCall, (int Exit, string[] Lines)> Provision { get; set; } = _ => (0, Clean);
     public Func<SshCall, (int Exit, string[] Lines)> ProjectPhase { get; set; } = _ => (0, Clean);
+    public Func<SshCall, (int Exit, string[] Lines)> AgentUpdate { get; set; } = _ => (0, ["updated"]);
     public int UnpackExit { get; set; }
     public bool RebootRequired { get; set; }
     public string? SudoPrompt { get; set; }
@@ -65,6 +66,7 @@ public partial class FakeSshRunner : ISshRunner
         if (ProbeHangs && command == "true") await Task.Delay(Timeout.Infinite, ct);
         var step = command.Contains("PROVISION_PHASE", StringComparison.Ordinal) ? "project-commands"
             : command.Contains("bin/provision.sh", StringComparison.Ordinal) ? "provision"
+            : command.Contains("bin/install-ai-tools.sh", StringComparison.Ordinal) || command.Contains("bin/construct-t3-update.sh", StringComparison.Ordinal) ? "agent-update"
             : command.Contains("construct-repo.tar.gz", StringComparison.Ordinal) ? "copy"
             : command.Contains("provisioned.env", StringComparison.Ordinal) ? "applied" : "other";
         if (HoldAt == step && !command.StartsWith("umask 077", StringComparison.Ordinal))
@@ -84,6 +86,7 @@ public partial class FakeSshRunner : ISshRunner
         {
             "project-commands" => ProjectPhase(call),
             "provision" => ProvisionAndMark(call),
+            "agent-update" => AgentUpdate(call),
             "copy" => (command.Contains("tar -xzf", StringComparison.Ordinal) ? UnpackExit : 0, []),
             "applied" => (0, Marker.Select(kv => $"{kv.Key}={kv.Value}").ToArray()),
             _ when command.Contains("reboot-required", StringComparison.Ordinal) => (0, [RebootRequired ? "yes" : "no"]),

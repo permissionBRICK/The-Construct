@@ -161,6 +161,7 @@ app.MapGroup("/api/v1")
     .MapProvisionEndpoints()
     .MapRepairEndpoints()
     .MapAgentSignInEndpoints()
+    .MapAgentUpdateEndpoints()
     .MapLocalAdoptionEndpoints()
     .MapLanAccessEndpoints()
     // Host administration feature routes: one hook per implementation pair.

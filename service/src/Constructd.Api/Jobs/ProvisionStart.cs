@@ -38,7 +38,11 @@ public sealed class ProvisionStart(LifecycleStart starts, IVmRepository vms, IHy
     /// Starts the VM and waits until it answers over SSH; answers where to dial it. The caller holds the VM's gate. A start
     /// that is refused, and a guest that does not answer in time, fail the job with the <c>start</c> step and a plain reason.
     /// </summary>
-    public async Task<SshTarget> RunAsync(string jobId, Vm vm, ProvisionJobResult failed, IProgress<string> progress, CancellationToken ct)
+    public Task<SshTarget> RunAsync(string jobId, Vm vm, ProvisionJobResult failed, IProgress<string> progress, CancellationToken ct) =>
+        RunAsync(jobId, vm, (code, _) => failed with { FailedStep = Step, Code = code }, progress, ct);
+
+    /// <summary>Starts the VM and waits until it answers over SSH, building a job-specific failure result on refusal or timeout.</summary>
+    public async Task<SshTarget> RunAsync(string jobId, Vm vm, Func<string, string, object> failed, IProgress<string> progress, CancellationToken ct)
     {
         JobProgressTracker.Current?.Begin(Step, ProvisionJob.Label(Step), planned: false);
         await phases.SetPhaseAsync(jobId, Step, CancellationToken.None);
@@ -74,7 +78,11 @@ public sealed class ProvisionStart(LifecycleStart starts, IVmRepository vms, IHy
     /// started by hand a moment ago or by the host), the job waits for it in the <c>start</c> step the same bounded time
     /// instead of failing its copy at once. A guest that answers goes straight on, with no extra step.
     /// </summary>
-    public async Task<SshTarget> AnswerAsync(string jobId, Vm vm, SshTarget target, ProvisionJobResult failed, IProgress<string> progress, CancellationToken ct)
+    public Task<SshTarget> AnswerAsync(string jobId, Vm vm, SshTarget target, ProvisionJobResult failed, IProgress<string> progress, CancellationToken ct) =>
+        AnswerAsync(jobId, vm, target, (code, _) => failed with { FailedStep = Step, Code = code }, progress, ct);
+
+    /// <summary>Waits for a running VM to answer over SSH, building a job-specific failure result on timeout.</summary>
+    public async Task<SshTarget> AnswerAsync(string jobId, Vm vm, SshTarget target, Func<string, string, object> failed, IProgress<string> progress, CancellationToken ct)
     {
         if (await AnswersAsync(target, ct)) return target;
         JobProgressTracker.Current?.Begin(Step, WaitLabel, planned: false);
@@ -96,7 +104,7 @@ public sealed class ProvisionStart(LifecycleStart starts, IVmRepository vms, IHy
     }
 
     /// <summary>Waits until the VM answers over SSH, within the configured wait; <paramref name="late"/> says why it failed ({0}: the wait).</summary>
-    private async Task<SshTarget> WaitAsync(Vm current, ProvisionJobResult failed, IProgress<string> progress, string late, CancellationToken ct)
+    private async Task<SshTarget> WaitAsync(Vm current, Func<string, string, object> failed, IProgress<string> progress, string late, CancellationToken ct)
     {
         // One deadline bounds the whole wait, the endpoint's resolution and each probe included.
         var wait = TimeSpan.FromSeconds(Math.Max(1, options.StartedVmSshWaitSeconds));
@@ -154,10 +162,10 @@ public sealed class ProvisionStart(LifecycleStart starts, IVmRepository vms, IHy
         ? $"{wait.TotalMinutes:0} minute{(wait.TotalMinutes == 1 ? "" : "s")}"
         : $"{wait.TotalSeconds:0} second{(wait.TotalSeconds == 1 ? "" : "s")}";
 
-    private static JobFailureException Failure(IProgress<string> progress, ProvisionJobResult failed, string code, string message)
+    private static JobFailureException Failure(IProgress<string> progress, Func<string, string, object> failed, string code, string message)
     {
         Report(progress, "failed", message);
-        return new JobFailureException($"{code}: {message}", failed with { FailedStep = Step, Code = code });
+        return new JobFailureException($"{code}: {message}", failed(code, message));
     }
 
     private static void Report(IProgress<string> progress, string state, string line)

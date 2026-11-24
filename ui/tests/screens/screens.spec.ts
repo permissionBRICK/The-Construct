@@ -269,7 +269,8 @@ test('the overview updates or signs in a coding agent in one click', async ({ pa
   await expect(page.getByRole('group', { name: 'Sign in to Codex' })).toBeVisible();
   await page.getByRole('group', { name: 'Sign in to Codex' }).getByRole('button', { name: 'Cancel' }).click();
   await codex.getByRole('button', { name: 'Update' }).click();
-  await expect(page.locator('.blk.job .bh b')).toHaveText('Reprovisioning');
+  await expect(page.locator('.blk.job .bh b')).toHaveText('Updating');
+  await expect(page.locator('.blk.job .lbl')).toHaveText('Updating Codex');
   // Claude Code is signed in and up to date: nothing to click.
   await expect(page.locator('tr', { hasText: 'Claude Code' }).getByRole('button')).toHaveCount(0);
 });

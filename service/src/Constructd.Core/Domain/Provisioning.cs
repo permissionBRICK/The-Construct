@@ -166,3 +166,15 @@ public sealed record RestoreJobResult(string BackupId, bool Succeeded, string? F
 /// </summary>
 public sealed record ReinstallJobResult(string? BackupId, bool Succeeded, string? FailedStep, string? Code, string? Message,
     bool VmDeleted, bool Restored, ProvisionJobResult? Provision, bool RestoreNeeded = false, DateTimeOffset? BackupCreatedAt = null);
+
+/// <summary>
+/// The durable result of an <see cref="JobKinds.UpdateAgents"/> job: which coding agent tool ids were requested,
+/// which finished updating, and where a failure stopped. No secret.
+/// </summary>
+public sealed record AgentUpdateJobResult(
+    IReadOnlyList<string> Agents,
+    IReadOnlyList<string> Updated,
+    bool Succeeded,
+    string? FailedStep = null,
+    string? Code = null,
+    string? Message = null);

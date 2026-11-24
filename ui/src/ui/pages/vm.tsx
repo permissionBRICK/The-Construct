@@ -29,15 +29,15 @@ export function SignInCell({ vm, agent }: { vm: Vm; agent: (typeof AGENTS)[numbe
 }
 
 /** The overview's coding agents: one click to update an agent that has an update, or to sign in one that is signed out;
-    nothing when neither applies (finding 27). An update is a reprovision, which brings every agent to its newest. */
-function AgentActions({ vm, a, busy }: { vm: Vm; a: Agent; busy: boolean }) {
+    nothing when neither applies (finding 27). Updating one agent updates only that agent without a full reprovision. */
+export function AgentActions({ vm, a, busy }: { vm: Vm; a: Agent; busy: boolean }) {
   const { s, be } = useApp();
   const id = AGENTS.find(x => x.tool === a.id);
   const out = id && vm.settings.agents[id.id] && signInState(vm.agents, a.id) === 'no';
   const signing = !!id && s.signIn?.vmId === vm.id && s.signIn.agent === id.id && s.signIn.state !== 'failed' && s.signIn.state !== 'stopped';
   return (
     <span class="acts one">
-      {agentBehind(a) && <Btn sm kind="amber" icon="up" title={`Update to ${a.latest}`} disabled={busy} onClick={() => be.updateAgents(vm.id)}>Update</Btn>}
+      {agentBehind(a) && <Btn sm kind="amber" icon="up" title={`Update to ${a.latest}`} disabled={busy} onClick={() => be.updateAgents(vm.id, a.id)}>Update</Btn>}
       {out && <Btn sm icon="key" disabled={signing} onClick={() => be.signIn(vm.id, id.id)}>Sign in</Btn>}
     </span>
   );
@@ -386,23 +386,26 @@ export function Settings({ vm }: { vm: Vm }) {
         </Sec>
       </>
     ),
-    agents: () => (
-      <Sec title="Coding agents" right={<>{tag('agents')}{vm.agents.some(agentBehind) && !na(s, 'agent-update') && <Btn sm onClick={() => be.updateAgents(vm.id)}>Update all</Btn>}</>}>
-        {vm.problems?.agents && <div class="line badc">{vm.problems.agents}</div>}
-        <Table cols={[{ h: 'Agent' }, { h: 'Version', cls: 'm' }, { h: 'Latest', cls: 'x m' }, { h: '' }, { h: 'On', cls: 'e' }]}
-          rows={[
-            ...AGENTS.map(a => {
-              const r = na(s, 'agents') ? undefined : vm.agents.find(x => x.id === a.tool);
-              return [a.name, r?.version ?? '–', r ? (agentBehind(r) ? <Tag warn>{r.latest}</Tag> : r.latest) : '–',
-                st.agents[a.id] && !na(s, 'agents') ? <SignInCell vm={vm} agent={a} /> : '',
-                <Switch on={st.agents[a.id]} onChange={v => save({ agents: { [a.id]: v } })} label={a.name} />];
-            }),
-            // T3 Code is on in Services; its version shows here with the agents it runs.
-            ...vm.agents.filter(r => !AGENTS.some(a => a.tool === r.id)).map(r => [r.name, r.version, agentBehind(r) ? <Tag warn>{r.latest}</Tag> : r.latest, '', '']),
-          ]} />
-        {s.signIn?.vmId === vm.id && <SignInBlock si={s.signIn} />}
-      </Sec>
-    ),
+    agents: () => {
+      const busy = activeJob(s, vm.id)?.state === 'running';
+      return (
+        <Sec title="Coding agents" right={<>{tag('agents')}{vm.agents.some(agentBehind) && !na(s, 'agent-update') && <Btn sm disabled={busy} onClick={() => be.updateAgents(vm.id)}>Update all</Btn>}</>}>
+          {vm.problems?.agents && <div class="line badc">{vm.problems.agents}</div>}
+          <Table cols={[{ h: 'Agent' }, { h: 'Version', cls: 'm' }, { h: 'Latest', cls: 'x m' }, { h: '' }, { h: 'On', cls: 'e' }]}
+            rows={[
+              ...AGENTS.map(a => {
+                const r = na(s, 'agents') ? undefined : vm.agents.find(x => x.id === a.tool);
+                return [a.name, r?.version ?? '–', r ? (agentBehind(r) ? <Tag warn>{r.latest}</Tag> : r.latest) : '–',
+                  st.agents[a.id] && !na(s, 'agents') ? <SignInCell vm={vm} agent={a} /> : '',
+                  <Switch on={st.agents[a.id]} onChange={v => save({ agents: { [a.id]: v } })} label={a.name} />];
+              }),
+              // T3 Code is on in Services; its version shows here with the agents it runs.
+              ...vm.agents.filter(r => !AGENTS.some(a => a.tool === r.id)).map(r => [r.name, r.version, agentBehind(r) ? <Tag warn>{r.latest}</Tag> : r.latest, '', '']),
+            ]} />
+          {s.signIn?.vmId === vm.id && <SignInBlock si={s.signIn} />}
+        </Sec>
+      );
+    },
   };
   return (
     <Page>
