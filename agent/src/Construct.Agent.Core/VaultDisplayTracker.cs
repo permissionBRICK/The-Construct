@@ -56,9 +56,9 @@ public sealed class VaultDisplayTracker(TimeProvider? time = null)
     public void Report(DisplayedVaultRequest? request)
     {
         var items = Validate(request);
-        var now = _time.GetUtcNow();
         lock (_gate)
         {
+            var now = _time.GetUtcNow();
             _reportedAt = now;
             PruneExpiredMarksLocked(now);
             foreach (var item in items) _displayedAt[item] = now;
@@ -68,21 +68,48 @@ public sealed class VaultDisplayTracker(TimeProvider? time = null)
     /// <summary>Whether another app reported showing this item within <see cref="DisplayedFor"/>.</summary>
     public bool IsDisplayedElsewhere(string kind, string engine, string id)
     {
-        var now = _time.GetUtcNow();
         var key = new DisplayedVaultItem(kind, engine, id);
-        lock (_gate) return _displayedAt.TryGetValue(key, out var at) && Recent(at, now, DisplayedFor);
+        lock (_gate)
+        {
+            var now = _time.GetUtcNow();
+            return _displayedAt.TryGetValue(key, out var at) && Recent(at, now, DisplayedFor);
+        }
+    }
+
+    /// <summary>
+    /// Whether this item is currently held back for another app (either marked displayed within
+    /// <see cref="DisplayedFor"/> or still inside <see cref="DisplayGrace"/> while a reporter is active).
+    /// Matches the tray pop-out's eligibility predicate so the lone card never skips or preempts inconsistently.
+    /// </summary>
+    public bool IsSuppressed(string kind, string engine, string id)
+    {
+        var key = new DisplayedVaultItem(kind, engine, id);
+        lock (_gate)
+        {
+            var now = _time.GetUtcNow();
+            PruneExpiredMarksLocked(now);
+            var reporterPresent = _reportedAt is { } reported && Recent(reported, now, ReporterWindow);
+            if (!reporterPresent) return false;
+            if (!_firstSeen.TryGetValue(key, out var arrived))
+                _firstSeen[key] = arrived = now;
+            return !IsEligibleLocked(key, arrived, reporterPresent, now);
+        }
     }
 
     /// <summary>Whether another app sent a report (or heartbeat) within <see cref="ReporterWindow"/>.</summary>
     public bool HasActiveReporter()
     {
-        var now = _time.GetUtcNow();
-        lock (_gate) return _reportedAt is { } reported && Recent(reported, now, ReporterWindow);
+        lock (_gate)
+        {
+            var now = _time.GetUtcNow();
+            return _reportedAt is { } reported && Recent(reported, now, ReporterWindow);
+        }
     }
 
     /// <summary>
     /// Evaluates the currently pending approvals and entry requests and decides which are newly eligible to pop
-    /// now and which remain deferred waiting on a reporter.
+    /// now and which remain deferred waiting on a reporter. Does not mark items popped; call <see cref="MarkPopped"/>
+    /// only when a surface actually presents them.
     /// </summary>
     public VaultDisplayEvaluation Evaluate(IEnumerable<DisplayedVaultItem> current, IEnumerable<string>? unreachableEngines = null)
     {
@@ -94,12 +121,12 @@ public sealed class VaultDisplayTracker(TimeProvider? time = null)
         }
 
         var unreachable = unreachableEngines is null ? null : new HashSet<string>(unreachableEngines, StringComparer.Ordinal);
-        var now = _time.GetUtcNow();
         var newlyEligible = new List<DisplayedVaultItem>();
         var deferred = new List<DisplayedVaultItem>();
 
         lock (_gate)
         {
+            var now = _time.GetUtcNow();
             PruneExpiredMarksLocked(now);
             foreach (var gone in _firstSeen.Keys.Where(k => !present.Contains(k) && (unreachable is null || !unreachable.Contains(k.Engine))).ToArray())
                 _firstSeen.Remove(gone);
@@ -113,18 +140,38 @@ public sealed class VaultDisplayTracker(TimeProvider? time = null)
                 if (_popped.Contains(item)) continue;
 
                 if (IsEligibleLocked(item, arrived, reporterPresent, now))
-                {
-                    _popped.Add(item);
                     newlyEligible.Add(item);
-                }
                 else
-                {
                     deferred.Add(item);
-                }
             }
         }
 
         return new VaultDisplayEvaluation(newlyEligible, deferred);
+    }
+
+    /// <summary>
+    /// Marks eligible items as popped right as a surface presents them, re-checking eligibility under the lock so an
+    /// item that became displayed in the meantime is not permanently consumed. Returns the items actually marked.
+    /// </summary>
+    public IReadOnlyList<DisplayedVaultItem> MarkPopped(IEnumerable<DisplayedVaultItem> items)
+    {
+        var marked = new List<DisplayedVaultItem>();
+        lock (_gate)
+        {
+            var now = _time.GetUtcNow();
+            PruneExpiredMarksLocked(now);
+            var reporterPresent = _reportedAt is { } reported && Recent(reported, now, ReporterWindow);
+            foreach (var item in items)
+            {
+                if (_popped.Contains(item)) continue;
+                var arrived = _firstSeen.TryGetValue(item, out var seen) ? seen : now;
+                if (!IsEligibleLocked(item, arrived, reporterPresent, now)) continue;
+                _popped.Add(item);
+                marked.Add(item);
+            }
+        }
+
+        return marked;
     }
 
     private bool IsEligibleLocked(DisplayedVaultItem item, DateTimeOffset arrived, bool reporterPresent, DateTimeOffset now)

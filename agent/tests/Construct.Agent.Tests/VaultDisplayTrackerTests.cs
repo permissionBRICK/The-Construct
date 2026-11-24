@@ -30,6 +30,7 @@ public sealed class VaultDisplayTrackerTests
         var first = tracker.Evaluate([approval, entry]);
         Assert.Equal([approval, entry], first.NewlyEligible);
         Assert.Empty(first.Deferred);
+        Assert.Equal([approval, entry], tracker.MarkPopped(first.NewlyEligible));
 
         // Subsequent polls do not pop the same items again.
         clock.Advance(TimeSpan.FromSeconds(10));
@@ -52,18 +53,22 @@ public sealed class VaultDisplayTrackerTests
         var at0 = tracker.Evaluate([approval]);
         Assert.Empty(at0.NewlyEligible);
         Assert.Equal([approval], at0.Deferred);
+        Assert.True(tracker.IsSuppressed(VaultDisplayTracker.KindApproval, "eng1", "req-1"));
 
         // Just before DisplayGrace (5 s) expires: still held back, NOT marked popped.
         clock.Advance(TimeSpan.FromSeconds(4.9));
         var at49 = tracker.Evaluate([approval]);
         Assert.Empty(at49.NewlyEligible);
         Assert.Equal([approval], at49.Deferred);
+        Assert.True(tracker.IsSuppressed(VaultDisplayTracker.KindApproval, "eng1", "req-1"));
 
         // At 5 s: grace elapsed and reporter did not list this item -> pops now.
         clock.Advance(TimeSpan.FromSeconds(0.1));
+        Assert.False(tracker.IsSuppressed(VaultDisplayTracker.KindApproval, "eng1", "req-1"));
         var at50 = tracker.Evaluate([approval]);
         Assert.Equal([approval], at50.NewlyEligible);
         Assert.Empty(at50.Deferred);
+        Assert.Equal([approval], tracker.MarkPopped(at50.NewlyEligible));
 
         // Does not pop a second time.
         clock.Advance(TimeSpan.FromSeconds(2));
@@ -166,7 +171,9 @@ public sealed class VaultDisplayTrackerTests
         var popped = DisplayedVaultItem.Approval("eng2", "req-pop");
 
         // Pop eng2 item with no reporter.
-        Assert.Equal([popped], tracker.Evaluate([popped]).NewlyEligible);
+        var first = tracker.Evaluate([popped]);
+        Assert.Equal([popped], first.NewlyEligible);
+        Assert.Equal([popped], tracker.MarkPopped(first.NewlyEligible));
 
         // Reporter becomes active and eng1 item arrives.
         tracker.Report(new DisplayedVaultRequest([]));
@@ -182,6 +189,28 @@ public sealed class VaultDisplayTrackerTests
         var recovered = tracker.Evaluate([waiting, popped]);
         Assert.Equal([waiting], recovered.NewlyEligible);
         Assert.Empty(recovered.Deferred);
+    }
+
+    [Fact]
+    public void Item_reported_displayed_before_mark_popped_is_not_permanently_consumed()
+    {
+        var clock = new FakeClock(T0);
+        var tracker = new VaultDisplayTracker(clock);
+        var approval = DisplayedVaultItem.Approval("eng1", "req-race");
+
+        // Eligible during Evaluate (no reporter yet).
+        var eval = tracker.Evaluate([approval]);
+        Assert.Equal([approval], eval.NewlyEligible);
+
+        // Before TrayShell opens Alone and calls MarkPopped, T3 reports displaying it.
+        tracker.Report(new DisplayedVaultRequest([approval]));
+        Assert.Empty(tracker.MarkPopped(eval.NewlyEligible));
+
+        // Once T3 stops reporting and DisplayedFor elapses, the item is still eligible to pop.
+        clock.Advance(VaultDisplayTracker.DisplayedFor);
+        var later = tracker.Evaluate([approval]);
+        Assert.Equal([approval], later.NewlyEligible);
+        Assert.Equal([approval], tracker.MarkPopped(later.NewlyEligible));
     }
 
     [Fact]

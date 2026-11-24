@@ -252,7 +252,7 @@ public sealed partial class DeviceAgent
             approvals.Add(new VaultApprovalItem(engine.Id, engine.Name, id, Str(a, "vm"), Str(a, "op"), Str(a, "title"), Str(a, "message"),
                 Str(a, "action"), (a?["names"] as JsonArray ?? []).Select(n => n?.GetValue<string>() ?? "").ToArray(), Str(a, "reason"), Str(a, "source"),
                 Long(a, "createdAt"), Long(a, "deadline"), Int(a, "uses"), Int(a, "ttlSeconds"),
-                VaultDisplay.IsDisplayedElsewhere(VaultDisplayTracker.KindApproval, engine.Id, id)));
+                VaultDisplay.IsSuppressed(VaultDisplayTracker.KindApproval, engine.Id, id)));
         }
 
         return new VaultApprovalsView(approvals.OrderBy(a => a.CreatedAt).ToArray(), Unanswered(answered));
@@ -368,7 +368,7 @@ public sealed partial class DeviceAgent
             var id = Str(r, "id");
             requests.Add(new VaultEntryRequestItem(engine.Id, engine.Name, id, Str(r, "vm"), Str(r, "name"), Str(r, "description"),
                 Str(r, "reason"), Str(r, "source"), Long(r, "createdAt"), Long(r, "expiresAt"),
-                VaultDisplay.IsDisplayedElsewhere(VaultDisplayTracker.KindEntryRequest, engine.Id, id)));
+                VaultDisplay.IsSuppressed(VaultDisplayTracker.KindEntryRequest, engine.Id, id)));
         }
 
         return new VaultEntryRequestsView(requests.OrderBy(r => r.CreatedAt).ToArray(), Unanswered(answered));
