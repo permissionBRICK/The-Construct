@@ -1537,18 +1537,21 @@ fi
 
 # 6. Optionally check out project repos (needs Git auth on the VM). When clone
 #    credentials were seeded, point a one-shot credential.helper at the temp file
-#    via GIT_CONFIG_* so the clone authenticates without an interactive prompt
-#    and without depending on a persisted store.
+#    via GIT_CONFIG_* so the clone authenticates without an interactive prompt.
+#    The VM's own store comes after it, as in the deferred phase: a repo whose
+#    token only the VM keeps (~/.git-credentials) still fetches.
 if [[ "${CHECKOUT_PROJECTS}" == "true" && "${DEFER_PROJECT_COMMANDS:-false}" == "true" ]]; then
   note "Project checkout deferred until the saved config is restored (its git credentials and config apply then)"
 elif [[ "${CHECKOUT_PROJECTS}" == "true" ]]; then
   if [[ -n "${_clone_creds_file}" && -s "${_clone_creds_file}" ]]; then
     run_step optional "Checking out project repos" \
-      env GIT_CONFIG_COUNT=2 \
+      env GIT_CONFIG_COUNT=3 \
       GIT_CONFIG_KEY_0=credential.helper \
       GIT_CONFIG_VALUE_0= \
       GIT_CONFIG_KEY_1=credential.helper \
       GIT_CONFIG_VALUE_1="store --file=${_clone_creds_file}" \
+      GIT_CONFIG_KEY_2=credential.helper \
+      GIT_CONFIG_VALUE_2=store \
       bash "${REPO_DIR}/bin/checkout-projects.sh"
   else
     run_step optional "Checking out project repos" bash "${REPO_DIR}/bin/checkout-projects.sh"
