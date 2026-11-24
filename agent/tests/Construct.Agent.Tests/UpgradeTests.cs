@@ -1091,6 +1091,9 @@ public sealed class UpgradeTests
         Assert.Equal(1, guest.Inner.Provisions);
         Assert.True(File.Exists(Constructd.Api.Jobs.ProvisionTargets.AdoptedKeyPath(remote.Services.GetRequiredService<ConstructdOptions>(), "far")));
         Assert.Equal("converted", view["stage"]!.GetValue<string>());
+        // The account key after the VM's rows: this device is not enrolled at that host (it keeps no store there), so the
+        // old client's way enrols it, once the VM's rows are through.
+        Assert.Equal(("done", "Enrolled"), Row(view, "recipient:far"));
     }
 
     [Fact]

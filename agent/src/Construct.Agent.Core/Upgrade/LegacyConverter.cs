@@ -89,7 +89,6 @@ public sealed class LegacyConverter(DeviceAgent agent, IDeviceEngines engines, D
         Progress(copy * copying.Length / (copying.Length + 2));
         var legacyKeys = await BackupKeysAsync(legacy, ct).ConfigureAwait(false);
         Progress(copy * (copying.Length + 1) / (copying.Length + 2));
-        await RecipientsAsync(legacy, instances.Where(i => !i.Local), start.LocalEngine, ct).ConfigureAwait(false);
         Progress(copy);
         await LocalVmsAsync(legacy, instances, start.LocalEngine, copy, ct).ConfigureAwait(false);
         // A local VM's account key after its switch-over, when the engine runs it (and it runs: the adoption starts a VM
@@ -97,6 +96,10 @@ public sealed class LegacyConverter(DeviceAgent agent, IDeviceEngines engines, D
         await RecipientsAsync(legacy, instances.Where(i => i.Local), start.LocalEngine, ct).ConfigureAwait(false);
         await ReprovisionAsync(instances, start.LocalEngine, ct).ConfigureAwait(false);
         await HostVmsAsync(legacy, instances, ct).ConfigureAwait(false);
+        // A host VM's account key after its host's rows: an engine on the new version reaches it only once it holds
+        // the old client's key, and a host that moved in this run may forward the VM's SSH elsewhere than the old
+        // client knew. Through the engine where it can, else the old client's way (a host still on the old stack).
+        await RecipientsAsync(legacy, instances.Where(i => !i.Local), start.LocalEngine, ct).ConfigureAwait(false);
 
         var complete = _items.All(i => i.State is not "failed");
         if (complete && bridge.Read().Stage != BridgeState.Converted)

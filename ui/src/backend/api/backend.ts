@@ -727,10 +727,12 @@ export class ApiBackend implements Backend {
     }
     jobs.sort((a, b) => a.at.localeCompare(b.at));
     const auto = [...this.slices.values()].map(s => s.autoReprovision).filter(x => x !== null);
+    const hostAuto = [...this.slices.values()].filter(s => s.me?.role === 'admin' && s.admin?.updates).map(s => s.admin!.updates!.auto);
     this.emit({
       vms, hosts, jobs: jobs.map(({ at: _at, ...j }) => j),
-      // On only when this device and every engine update by themselves; the switch sets all of them.
-      prefs: { ...this.s.prefs, autoUpdate: this.deviceAutoUpdate && auto.every(Boolean) },
+      // On only when this device, every engine's reprovision of the user's VMs and every host the user administers
+      // update by themselves; the switch sets all of them.
+      prefs: { ...this.s.prefs, autoUpdate: this.deviceAutoUpdate && auto.every(Boolean) && hostAuto.every(Boolean) },
     });
   }
 
@@ -762,7 +764,8 @@ export class ApiBackend implements Backend {
       name: sl.view.name,
       kind: sl.kind,
       version: hostVersion(sl.health),
-      channel: u?.channel ?? '–',
+      // A host of the old stack calls the stable channel "main"; the engine reads both the same (ReleaseChannel).
+      channel: u?.channel === 'main' ? 'stable' : u?.channel ?? '–',
       admin,
       address: sl.view.url,
       signIn: 'token',
@@ -2146,12 +2149,30 @@ export class ApiBackend implements Backend {
       this.deviceAutoUpdate = patch.autoUpdate;
       void this.run(() => ok(this.agent.PUT('/api/device/settings', { body: { autoUpdate: patch.autoUpdate } }))).then(() => this.loadDevice());
       for (const id of this.slices.keys()) void this.run(() => ok(this.engine(id).PUT('/api/v1/me/updates', { body: { autoReprovision: patch.autoUpdate! } })), undefined, id);
+      this.setHostsAutoUpdate(patch.autoUpdate);
     }
     if (patch.channel !== undefined || patch.startWithOs !== undefined) {
       const body = { ...(patch.channel !== undefined ? { channel: patch.channel } : {}), ...(patch.startWithOs !== undefined ? { startWithOs: patch.startWithOs } : {}) };
       void this.run(() => ok(this.agent.PUT('/api/device/settings', { body })), 'Saved').then(() => this.loadDevice());
     }
     if (patch.notifications !== undefined) this.note(NA);
+  }
+
+  /** Each host the user administers updates itself with the switch (`updates.auto`), as this device and the user's VMs
+      do: one switch for everything the user owns (owner, 2026-11-24). A host the user does not administer follows its
+      admin. The section is replaced whole, from the stored one with only `auto` changed. */
+  private setHostsAutoUpdate(on: boolean) {
+    for (const [id, sl] of this.slices) {
+      if (sl.me?.role !== 'admin' || !sl.admin?.updates) continue;
+      const raw = sl.admin.config.find(c => c.name === 'updates')?.json;
+      if (!raw) continue;
+      let updates: Record<string, unknown>;
+      try { updates = JSON.parse(raw) as Record<string, unknown>; } catch { continue; }
+      sl.admin.updates = { ...sl.admin.updates, auto: on };
+      if (updates.auto === on) continue;
+      void this.run(() => ok(this.engine(id).PUT('/api/v1/host/config', { body: { updates: { ...updates, auto: on } } as never })), undefined, id);
+    }
+    this.compose();
   }
 
   /** A new recovery code; the old one stops working. The agent never shows a code twice. */

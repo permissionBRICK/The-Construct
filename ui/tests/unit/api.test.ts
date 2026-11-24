@@ -1183,9 +1183,15 @@ describe('ApiBackend device, connections and vault', () => {
     on('GET', `/api/engines/${E1}/api/v1/me/updates`, { json: { autoReprovision: true } });
     on('PUT', '/api/device/settings', b => ({ json: { channel: 'stable', autoUpdate: true, startWithOs: false, ...(b as object) } }));
     on('PUT', `/api/engines/${E1}/api/v1/me/updates`, { json: { autoReprovision: false } });
+    // The host this user administers updates itself too; the one switch covers it (owner, 2026-11-24).
+    on('GET', `/api/engines/${E1}/api/v1/host/updates/status`, { json: { supportsAutoApply: true, installed: { commit: 'c'.repeat(40), packageVersion: '3.1.0', installedAt: null, source: 'x' }, current: null, history: [], recoveryRecord: null, latestKnown: null, version: '3.1.0', channel: 'main', auto: true, available: null, availableError: null, databaseCopy: null } });
+    on('GET', `/api/engines/${E1}/api/v1/host/config`, { json: { updates: { repository: 'o/r', channel: 'main', auto: true, drainTimeoutMinutes: 60, healthTimeoutSeconds: 120, source: 'stored', updatedAt: null } } });
+    on('PUT', `/api/engines/${E1}/api/v1/host/config`, { json: {} });
     await be.start();
     const s = be.snapshot();
     expect(s.release).toBe('3.3.0');
+    // An old host's "main" is the stable channel.
+    expect(s.hosts.find(h => h.id === E1)?.channel).toBe('stable');
     expect(s.prefs).toMatchObject({ channel: 'nightly', autoUpdate: true, startWithOs: true });
     be.setPrefs({ channel: 'stable' });
     be.setPrefs({ startWithOs: false });
@@ -1194,6 +1200,7 @@ describe('ApiBackend device, connections and vault', () => {
     expect(posts(calls).map(c => [c.path, c.body])).toEqual([
       ['/api/device/settings', { channel: 'stable' }], ['/api/device/settings', { startWithOs: false }],
       ['/api/device/settings', { autoUpdate: false }], [`/api/engines/${E1}/api/v1/me/updates`, { autoReprovision: false }],
+      [`/api/engines/${E1}/api/v1/host/config`, { updates: { repository: 'o/r', channel: 'main', auto: false, drainTimeoutMinutes: 60, healthTimeoutSeconds: 120 } }],
     ]);
   });
 
