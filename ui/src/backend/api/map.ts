@@ -607,6 +607,7 @@ export function toApproval(a: ApprovalItem, vmId: string): VaultRequest {
   return {
     id: requestKey(a.engine, a.id), kind: 'lease', secret: a.names.join(', '), vmId, vmName: a.vm, hostName: a.engineName,
     reason: a.reason, span: a.ttlSeconds ? spanText(a.ttlSeconds) : a.uses ? `${a.uses} use${a.uses === 1 ? '' : 's'}` : '', action: a.action, ttlSeconds: a.ttlSeconds ?? null,
+    ...(a.displayedElsewhere ? { displayedElsewhere: true } : {}),
   };
 }
 
@@ -658,7 +659,10 @@ export function toEverything(v: EverythingView): Everything {
 /** A request to enter a secret: the description and the reason are the agent's. */
 export function toEntryRequest(r: EntryRequestItem, vmId: string): VaultRequest {
   const words = [r.description, r.reason].filter(x => x && x.trim()).join(' — ');
-  return { id: requestKey(r.engine, r.id), kind: 'enter', secret: r.name, vmId, vmName: r.vm, hostName: r.engineName, reason: words, span: '' };
+  return {
+    id: requestKey(r.engine, r.id), kind: 'enter', secret: r.name, vmId, vmName: r.vm, hostName: r.engineName, reason: words, span: '',
+    ...(r.displayedElsewhere ? { displayedElsewhere: true } : {}),
+  };
 }
 
 /* --- profiles --- */

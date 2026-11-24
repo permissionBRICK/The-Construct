@@ -206,6 +206,7 @@ export class ApiBackend implements Backend {
   private codeIssue = 0;
   private writersTimer: ReturnType<typeof setTimeout> | null = null;
   private requestsTimer: ReturnType<typeof setTimeout> | null = null;
+  private stopFocusRefresh: (() => void) | null = null;
   private disposed = false;
   constructor(private opts: ApiOptions) {
     this.fetchImpl = opts.fetch ?? ((...a: Parameters<typeof fetch>) => fetch(...a));
@@ -231,12 +232,26 @@ export class ApiBackend implements Backend {
         onDenied: () => this.note('This page lost its connection to Construct; open it again from the tray'),
       });
     }
+    if (typeof document !== 'undefined' && typeof window !== 'undefined') {
+      const refreshOnShow = () => {
+        if (this.disposed || !this.registered || !this.s.vaultRequests.length) return;
+        if (document.visibilityState === 'visible') void this.loadRequests();
+      };
+      document.addEventListener('visibilitychange', refreshOnShow);
+      window.addEventListener('focus', refreshOnShow);
+      this.stopFocusRefresh = () => {
+        document.removeEventListener('visibilitychange', refreshOnShow);
+        window.removeEventListener('focus', refreshOnShow);
+      };
+    }
     await this.load();
     this.schedule();
   }
 
   dispose() {
     this.stopEvents?.();
+    this.stopFocusRefresh?.();
+    this.stopFocusRefresh = null;
     if (this.timer) clearTimeout(this.timer);
     if (this.writersTimer) clearTimeout(this.writersTimer);
     if (this.requestsTimer) clearTimeout(this.requestsTimer);

@@ -8,7 +8,7 @@ import { Btn, Dot, Pip } from './kit';
 import { na, useApp } from './ctx';
 import { EverythingBlock, FilesCard, JobBlock, NEEDS_RUNNING, PowerBtn, ReinstallConfirm, SignInBlock, SignInCard, SignInCards, Tiles, VaultCard, VaultCards, WarnedBlock } from './blocks';
 import { lostSignIns } from '../model/signin';
-import { filesByVm } from '../model/vault';
+import { filesByVm, nextAloneRequest } from '../model/vault';
 import { PageView } from './pages';
 
 /* The three surfaces from the same parts: the tray pop-out (the stack), the window (sidebar, VM tabs,
@@ -134,8 +134,9 @@ export function PopOut() {
 export function Alone() {
   const { s, shell } = useApp();
   // A card done gives way to the next one waiting; the surface closes once none is left.
+  // Requests currently displayed inline in another app (e.g. T3 Code Desktop) are skipped on the lone tray card.
   const [gone, setGone] = useState<string[]>([]);
-  const r = s.vaultRequests.find(x => !gone.includes('v:' + x.id));
+  const r = nextAloneRequest(s.vaultRequests, gone);
   const files = filesByVm(s.vaultFiles.filter(f => !gone.includes('f:' + f.id)))[0];
   const lost = lostSignIns(s.vms).find(l => !gone.includes('n:' + l.vm.id + '/' + l.id.id));
   // A file answer that has not landed keeps the surface open: if it fails, the file comes back for another try.

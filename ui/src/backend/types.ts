@@ -183,6 +183,8 @@ export interface VaultRequest {
   action?: string;
   /** The span the VM asked for, in seconds; the default of the approval's span. Null: the request names none. */
   ttlSeconds?: number | null;
+  /** Another app on this device (such as T3 Code Desktop) recently reported showing this request inline. */
+  displayedElsewhere?: boolean;
 }
 
 /** A file on a VM that still holds secrets after their lease ended, as a scrub found it (agent logs are redacted

@@ -501,6 +501,50 @@ public sealed class VaultTests
         Assert.Empty((await laptop.GetAsync("api/agent-notices"))["notices"]!.AsArray());
     }
 
+    [Fact]
+    public async Task Displayed_vault_approvals_route_marks_approvals_and_entry_requests_and_validates_input()
+    {
+        using var engine = new EngineHost();
+        var (laptop, engineId) = await SetUpAsync(engine, "available");
+        await using var _ = laptop;
+        await laptop.PostAsync("api/vault/secrets", new { name = "db", description = "Database", value = "db_pw_123456" });
+        var vm = await CreateVmAsync(laptop, engine, engineId);
+
+        var health = await laptop.GetAsync("api/health");
+        Assert.Contains("vault-approvals-displayed", health["apiFeatures"]!.AsArray().Select(f => f!.GetValue<string>()));
+
+        var asked = await SubmitAsync(engine, vm, new { v = 1, op = "request", names = new[] { "db" }, reason = "migrate" });
+        var entry = await SubmitAsync(engine, vm, new { v = 1, op = "ask", names = new[] { "jira" }, description = "Jira token" });
+        var entryId = entry.Response!["requestId"]!.GetValue<string>();
+
+        // Initially nothing is displayed elsewhere.
+        Assert.False((await laptop.GetAsync("api/vault/approvals"))["approvals"]![0]!["displayedElsewhere"]!.GetValue<bool>());
+        Assert.False((await laptop.GetAsync("api/vault/entry-requests"))["requests"]![0]!["displayedElsewhere"]!.GetValue<bool>());
+
+        // Empty heartbeat is accepted.
+        await laptop.PostAsync("api/vault/approvals/displayed", new { items = Array.Empty<object>() }, HttpStatusCode.NoContent);
+        Assert.True(laptop.Host.Agent.VaultDisplay.HasActiveReporter());
+
+        // Reporting both the approval and the entry request marks them displayedElsewhere.
+        await laptop.PostAsync("api/vault/approvals/displayed", new
+        {
+            items = new object[]
+            {
+                new { kind = "approval", engine = engineId, id = asked.PendingId },
+                new { kind = "entry-request", engine = engineId, id = entryId },
+            },
+        }, HttpStatusCode.NoContent);
+
+        Assert.True((await laptop.GetAsync("api/vault/approvals"))["approvals"]![0]!["displayedElsewhere"]!.GetValue<bool>());
+        Assert.True((await laptop.GetAsync("api/vault/entry-requests"))["requests"]![0]!["displayedElsewhere"]!.GetValue<bool>());
+
+        // Validation: malformed kind, invalid engine, >50 items are refused with 400.
+        await laptop.PostAsync("api/vault/approvals/displayed", new { items = new[] { new { kind = "file", engine = engineId, id = "x" } } }, HttpStatusCode.BadRequest);
+        await laptop.PostAsync("api/vault/approvals/displayed", new { items = new[] { new { kind = "approval", engine = "../x", id = "x" } } }, HttpStatusCode.BadRequest);
+        var tooMany = Enumerable.Range(0, VaultDisplayTracker.MaxDisplayed + 1).Select(i => new { kind = "approval", engine = engineId, id = $"id-{i}" }).ToArray();
+        await laptop.PostAsync("api/vault/approvals/displayed", new { items = tooMany }, HttpStatusCode.BadRequest);
+    }
+
     private static async Task<(TestAgent Laptop, string EngineId)> SetUpAsync(EngineHost engine, string vaultMode)
     {
         var signIn = await engine.AddUserAsync("alice");

@@ -9,7 +9,7 @@ import { contrast, cssVars, SCHEME_ORDER, SCHEMES } from '../../src/model/tokens
 import type { Job } from '../../src/backend/types';
 import { profileError } from '../../src/model/profile';
 import { linkParts, lostSignIns, signedIn, signInState } from '../../src/model/signin';
-import { filesByVm } from '../../src/model/vault';
+import { filesByVm, nextAloneRequest } from '../../src/model/vault';
 
 const job = (p: Partial<Job>): Job => ({ id: 'j', vmId: 'atlas', kind: 'reprovision', state: 'running', step: 's', stepIndex: 0, stepCount: 3, pct: 0, log: [], error: null, repair: null, ...p });
 
@@ -262,5 +262,12 @@ describe('files that still hold a secret', () => {
     const groups = filesByVm([f('1', 'pc', 'atlas'), f('2', 'lab', 'atlas'), f('3', 'pc', 'Atlas'), f('4', 'pc', 'pebble')]);
     expect(groups.map(g => g.map(x => x.id))).toEqual([['1', '3'], ['2'], ['4']]);
     expect(filesByVm([])).toEqual([]);
+  });
+
+  it('skips vault requests displayed elsewhere on the lone tray card', () => {
+    const req = (id: string, displayedElsewhere = false) => ({ id, kind: 'lease' as const, secret: 'db', vmId: 'atlas', vmName: 'atlas', hostName: 'pc', reason: '', span: '', displayedElsewhere });
+    expect(nextAloneRequest([req('e1/a1', true), req('e1/a2', false)], [])?.id).toBe('e1/a2');
+    expect(nextAloneRequest([req('e1/a1', true)], [])).toBeUndefined();
+    expect(nextAloneRequest([req('e1/a1', false), req('e1/a2', false)], ['v:e1/a1'])?.id).toBe('e1/a2');
   });
 });

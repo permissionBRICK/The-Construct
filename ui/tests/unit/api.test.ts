@@ -842,6 +842,18 @@ describe('ApiBackend key vault', () => {
     expect(be.snapshot().vaultRequests.map(x => x.id)).toEqual([`${E1}/a1`, `${E1}/e1`]);
   });
 
+  it('carries displayedElsewhere on approvals and entry requests reported by another app', async () => {
+    const { be, on } = vaultWorld();
+    on('GET', '/api/vault/approvals', { json: { approvals: [approval(E1, 'a1', 'atlas', { displayedElsewhere: true }), approval(E1, 'a2', 'atlas', { displayedElsewhere: false })], unreachable: [] } });
+    on('GET', '/api/vault/entry-requests', { json: { requests: [{ engine: E1, engineName: 'orchard', id: 'e1', vm: 'atlas', name: 'stripe', description: 'Stripe test key', reason: 'test', source: 'root@atlas', createdAt: 3, expiresAt: 4, displayedElsewhere: true }], unreachable: [] } });
+    await be.start();
+    expect(be.snapshot().vaultRequests.map(x => [x.id, !!x.displayedElsewhere])).toEqual([
+      [`${E1}/a1`, true],
+      [`${E1}/a2`, false],
+      [`${E1}/e1`, true],
+    ]);
+  });
+
   it('takes a request away when it was answered elsewhere, also when the read of its engine fails', async () => {
     // Finding 47: a request allowed in the pop-out stayed in the window.
     const two = [{ id: E1, name: 'orchard', url: 'https://orchard.test:8443' }, { id: E2, name: 'lab', url: 'https://lab.test:8443' }];
