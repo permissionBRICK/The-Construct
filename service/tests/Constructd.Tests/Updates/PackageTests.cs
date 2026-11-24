@@ -115,10 +115,12 @@ public sealed class PackageTests : IDisposable
         Assert.False(await launcher.TryWriteFenceAsync(new("update",FenceDisposition.Closed,"system",DateTimeOffset.UtcNow),default));
         Assert.False(File.Exists(Path.Combine(_root,"updates","fence.json")));
     }
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task Local_packager_without_signing_passes_the_production_extractor(bool fdd)
+    /// <summary>
+    /// The packager runs once (each run takes seconds) and every variant it made goes through the production extractor:
+    /// the Windows self-contained and framework-dependent payloads and the Linux one.
+    /// </summary>
+    [Fact]
+    public async Task Local_packager_without_signing_passes_the_production_extractor_for_every_variant()
     {
         var repo=new DirectoryInfo(AppContext.BaseDirectory);
         while(repo is not null && !File.Exists(Path.Combine(repo.FullName,"service/host/New-ConstructHostPackage.ps1"))) repo=repo.Parent;
@@ -127,14 +129,28 @@ public sealed class PackageTests : IDisposable
         await File.WriteAllBytesAsync(Path.Combine(publish,"Constructd.Api.exe"),RandomNumberGenerator.GetBytes(4096));
         WindowsPublishExtras(publish);
         await File.WriteAllTextAsync(Path.Combine(publish,"Constructd.Api.runtimeconfig.json"), """{"runtimeOptions":{"frameworks":[{"name":"Microsoft.NETCore.App","version":"10.0.0"},{"name":"Microsoft.AspNetCore.App","version":"10.0.0"}]}}""");
+        await File.WriteAllTextAsync(Path.Combine(publish,"Constructd.Api"),"linux");
         var output=Path.Combine(_root,"output");
-        await Run("pwsh","-NoProfile","-File",Path.Combine(repo.FullName,"service/host/New-ConstructHostPackage.ps1"),"-PublishDir",publish,"-FrameworkDependentPublishDir",publish,"-OutputDir",output,"-Commit",new string('a',40));
+        await Run("pwsh","-NoProfile","-File",Path.Combine(repo.FullName,"service/host/New-ConstructHostPackage.ps1"),"-PublishDir",publish,"-FrameworkDependentPublishDir",publish,"-LinuxPublishDir",publish,"-OutputDir",output,"-Commit",new string('a',40));
         var bytes=await File.ReadAllBytesAsync(Path.Combine(output,"manifest.json"));
         var manifest=JsonSerializer.Deserialize<ReleaseManifest>(bytes,UpdateFiles.Json)!;
-        File.Copy(Path.Combine(output,fdd ? manifest.FrameworkDependentAsset! : manifest.PayloadAsset),Path.Combine(_root,"package.zip"));
-        var files=PackageStager.ExtractAndVerify(_root,manifest,fdd ? "framework-dependent" : "self-contained");
-        Assert.Contains(files,f=>f.Path=="scripts/service/host/Update-ConstructHost.ps1");
-        Assert.Contains(files,f=>f.Path=="service/Constructd.Api.exe");
+        ManifestRules.ValidateVariants(manifest);
+        IReadOnlyList<UpdateFile> Extract(string variant, string asset)
+        {
+            var root=Path.Combine(_root,variant);Directory.CreateDirectory(root);
+            File.Copy(Path.Combine(output,asset),Path.Combine(root,"package.zip"));
+            return PackageStager.ExtractAndVerify(root,manifest,variant);
+        }
+        foreach (var (variant, asset) in new[] { ("self-contained", manifest.PayloadAsset), ("framework-dependent", manifest.FrameworkDependentAsset!) })
+        {
+            var files=Extract(variant,asset);
+            Assert.Contains(files,f=>f.Path=="scripts/service/host/Update-ConstructHost.ps1");
+            Assert.Contains(files,f=>f.Path=="service/Constructd.Api.exe");
+        }
+        var linux=Extract("linux",manifest.LinuxAsset!);
+        Assert.Contains(linux,f=>f.Path=="service/Constructd.Api");
+        Assert.Contains(linux,f=>f.Path=="scripts/bin/provision.sh");
+        Assert.Contains(linux,f=>f.Path=="updater/update-construct-host.sh");
     }
     internal static PackageStager WindowsStager(IServiceProvider sp)=>new(sp.GetRequiredService<IReleaseSource>(),sp.GetRequiredService<IHostConfigStore>(),
         sp.GetRequiredService<ConstructdOptions>(),sp.GetRequiredService<IReleaseInfo>(),sp.GetService<IProcessRunner>()){IsWindows=true};
