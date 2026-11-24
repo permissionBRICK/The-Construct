@@ -681,7 +681,7 @@ describe('ApiBackend', () => {
     expect(posts(calls).map(c => [c.path, c.body])).toEqual([
       ['/api/engines/probe', { address: 'https://lab.test:8443' }],
       ['/api/engines', { address: 'https://lab.test:8443', pin: 'p2', userToken: 'tok', windowsSignIn: false }],
-      [`/api/engines/${E2}/vms`, { name: 'quill', ramGb: 8, diskGb: 64, desired: { projects: [], settings: {}, codingAgents: ['claude-code', 'codex', 'opencode'] } }],
+      [`/api/engines/${E2}/vms`, { name: 'quill', ramGb: 8, diskGb: 64, desired: { projects: [], settings: { t3Code: 'true', t3CodePatched: 'true' }, codingAgents: ['claude-code', 'codex', 'opencode'] } }],
     ]);
     expect(be.snapshot().notice?.text).toBe('Created quill');
   });
@@ -696,7 +696,7 @@ describe('ApiBackend', () => {
     expect(be.createVm({ where: 'remote', name: 'quill', hostAddress: 'https://orchard.test:8443', signIn: 'token', agents: ['claude-code', 'antigravity'] })).toBe('quill');
     await settle();
     const create = posts(calls).find(c => c.path === `/api/engines/${E1}/vms`)!;
-    expect((create.body as { desired: unknown }).desired).toEqual({ projects: [], settings: {}, codingAgents: ['claude-code', 'antigravity'] });
+    expect((create.body as { desired: unknown }).desired).toEqual({ projects: [], settings: { t3Code: 'true', t3CodePatched: 'true' }, codingAgents: ['claude-code', 'antigravity'] });
   });
 
   it('adds a user and hands out the first token once', async () => {

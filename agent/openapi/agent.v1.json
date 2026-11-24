@@ -2281,7 +2281,7 @@
         "tags": [
           "device"
         ],
-        "description": "Each engine the user administers updates itself, each engine reprovisions the user's own VMs, then this device updates; the parts and their state, never stored.",
+        "description": "Each engine the user administers updates itself, each engine reprovisions the user's own VMs, patched T3 Code Desktop updates on Windows when used, then this device updates; the parts and their state, never stored.",
         "operationId": "UpdateEverything",
         "responses": {
           "202": {
@@ -2290,6 +2290,99 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/EverythingView"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentProblem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/t3-desktop/update": {
+      "get": {
+        "tags": [
+          "device"
+        ],
+        "description": "Construct's patched T3 Code Desktop app on this device: whether it is supported and installed, its channel and build, any newer release on offer, and whether an automatic update is staged waiting for T3 Code Desktop to close.",
+        "operationId": "GetT3DesktopUpdate",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/T3DesktopUpdateView"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentProblem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/t3-desktop/update/check": {
+      "post": {
+        "tags": [
+          "device"
+        ],
+        "description": "Checks permissionBRICK/construct-t3-builds for a newer patched T3 Code Desktop build for this device's channel.",
+        "operationId": "CheckT3DesktopUpdate",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/T3DesktopUpdateView"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentProblem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/t3-desktop/update/install": {
+      "post": {
+        "tags": [
+          "device"
+        ],
+        "description": "Downloads (or reuses the staged) patched T3 Code Desktop installer, runs it silently (--updated /S), updates installed.json, and relaunches T3 Code Desktop if it was running. 501 not-available where not supported.",
+        "operationId": "InstallT3DesktopUpdate",
+        "responses": {
+          "202": {
+            "description": "Accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/T3DesktopUpdateView"
                 }
               }
             }
@@ -4654,6 +4747,79 @@
         "type": "object",
         "properties": {
           "on": {
+            "type": "boolean"
+          }
+        }
+      },
+      "T3DesktopUpdateView": {
+        "required": [
+          "supported",
+          "installed",
+          "channel",
+          "version",
+          "buildHash",
+          "available",
+          "availableDesktopVersion",
+          "state",
+          "error",
+          "checkedAt",
+          "waitingForClose"
+        ],
+        "type": "object",
+        "properties": {
+          "supported": {
+            "type": "boolean"
+          },
+          "installed": {
+            "type": "boolean"
+          },
+          "channel": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "version": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "buildHash": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "available": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "availableDesktopVersion": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "state": {
+            "type": "string"
+          },
+          "error": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "checkedAt": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "date-time"
+          },
+          "waitingForClose": {
             "type": "boolean"
           }
         }

@@ -3,7 +3,7 @@ using Construct.Agent.Device;
 
 namespace Construct.Agent.Update;
 
-/// <param name="Part"><c>engine</c> (the host update), <c>vms</c> (the user's own VMs there) or <c>device</c>.</param>
+/// <param name="Part"><c>engine</c> (the host update), <c>vms</c> (the user's own VMs there), <c>t3-desktop</c> or <c>device</c>.</param>
 /// <param name="State"><c>pending</c>, <c>running</c>, <c>done</c>, <c>skipped</c> or <c>failed</c>.</param>
 public sealed record UpdatePart(string Part, string? Engine, string Name, string State, string? Detail = null);
 
@@ -12,16 +12,16 @@ public sealed record EverythingView(bool Running, IReadOnlyList<UpdatePart> Part
 /// <summary>
 /// "Update everything" (12.1, S28): each engine the user administers runs its own update
 /// (<c>POST /host/updates/run</c>, only when it offers one), each engine reprovisions the user's own
-/// VMs (<c>POST /me/vms/reprovision</c>, which an engine scopes to its caller), and then this device
-/// updates itself. A host the user does not administer is not asked to update; nobody else's VM is
-/// named. A host that still runs the old Construct (no <c>GET /engine</c>) is updated through its own
-/// old update API when the user administers it and it offers the new version (<see cref="OldHostUpdate"/>,
-/// R5); then this device connects there as at a new host and its VMs are reprovisioned. Otherwise it is
-/// left out with a note. After a host update the VM part waits until the restarted engine answers
-/// healthy. The parts and their state live in memory only: there is no stored plan, and a run cut
-/// short is started again by hand.
+/// VMs (<c>POST /me/vms/reprovision</c>, which an engine scopes to its caller), patched T3 Code Desktop
+/// updates on Windows when used, and then this device updates itself. A host the user does not administer
+/// is not asked to update; nobody else's VM is named. A host that still runs the old Construct (no
+/// <c>GET /engine</c>) is updated through its own old update API when the user administers it and it
+/// offers the new version (<see cref="OldHostUpdate"/>, R5); then this device connects there as at a new
+/// host and its VMs are reprovisioned. Otherwise it is left out with a note. After a host update the VM
+/// part waits until the restarted engine answers healthy. The parts and their state live in memory only:
+/// there is no stored plan, and a run cut short is started again by hand.
 /// </summary>
-public sealed class UpdateEverything(IDeviceEngines engines, AgentUpdater self, Action changed, TimeProvider time)
+public sealed class UpdateEverything(IDeviceEngines engines, AgentUpdater self, Action changed, TimeProvider time, T3DesktopUpdater? t3Desktop = null)
 {
     private readonly object _gate = new();
     private List<UpdatePart> _parts = [];
@@ -39,6 +39,9 @@ public sealed class UpdateEverything(IDeviceEngines engines, AgentUpdater self, 
 
     /// <summary>The device part's name: the app on this device updates itself (on a PC with its own engine "This PC" names the host).</summary>
     public const string AppPart = "Construct app";
+
+    /// <summary>The T3 Code Desktop part's name (Windows only).</summary>
+    public const string T3DesktopPart = "T3 Code Desktop";
 
     /// <summary><c>X.Y.Z+&lt;commit&gt;</c> as the update tile shows it: <c>X.Y.Z · &lt;7 characters&gt;</c>.</summary>
     public static string ShortVersion(string? version) => version?.Split('+', 2) switch
@@ -97,8 +100,10 @@ public sealed class UpdateEverything(IDeviceEngines engines, AgentUpdater self, 
             if (_run.IsCompleted)
             {
                 var list = engines.List();
-                _parts = [.. list.SelectMany(e => new[] { new UpdatePart("engine", e.Id, e.Name, "pending"), new UpdatePart("vms", e.Id, e.Name, "pending") }),
-                    new UpdatePart("device", null, AppPart, "pending")];
+                var parts = list.SelectMany(e => new[] { new UpdatePart("engine", e.Id, e.Name, "pending"), new UpdatePart("vms", e.Id, e.Name, "pending") }).ToList();
+                if (t3Desktop?.Supported == true) parts.Add(new UpdatePart("t3-desktop", null, T3DesktopPart, "pending"));
+                parts.Add(new UpdatePart("device", null, AppPart, "pending"));
+                _parts = parts;
                 _run = RunAsync(list);
                 started = true;
             }
@@ -181,6 +186,13 @@ public sealed class UpdateEverything(IDeviceEngines engines, AgentUpdater self, 
             {
                 Set("vms", engine.Id, "failed", failure.Message);
             }
+        }
+
+        if (t3Desktop?.Supported == true)
+        {
+            Set("t3-desktop", null, "running", "Checking for updates.");
+            var outcome = await t3Desktop.RunForUpdateEverythingAsync(detail => Set("t3-desktop", null, "running", detail), CancellationToken.None).ConfigureAwait(false);
+            Set("t3-desktop", null, outcome.State, outcome.Detail);
         }
 
         if (self.Running is null) Set("device", null, "skipped", "This agent does not run from an installed package.");

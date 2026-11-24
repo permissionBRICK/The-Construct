@@ -31,6 +31,7 @@ internal sealed partial class WindowsPlatform : IDevicePlatform, IAgentLauncher
         Notifications = new WinRtToastRaiser(new DesktopRegistration(_registry, executable));
         Microphone = new WasapiAudioCapture();
         Shares = new NetUseShares();
+        T3Desktop = new WindowsT3Desktop();
     }
 
     public string Name => "windows";
@@ -47,6 +48,8 @@ internal sealed partial class WindowsPlatform : IDevicePlatform, IAgentLauncher
     public IAudioCapture? Microphone { get; }
 
     public IShareMapper? Shares { get; }
+
+    public IT3DesktopPlatform? T3Desktop { get; }
 
     public Task OpenAsync(string uri, CancellationToken ct)
     {
@@ -75,16 +78,8 @@ internal sealed partial class WindowsPlatform : IDevicePlatform, IAgentLauncher
     {
         var local = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
         var directory = Path.Combine(local, "Programs", "t3code");
-        if (!File.Exists(Path.Combine(local, "The-Construct", "artifacts", "t3code", "installed.json")) || !Directory.Exists(directory)) return Task.FromResult(false);
-        var executable = Directory.EnumerateFiles(directory, "*.exe")
-            .FirstOrDefault(p => !Path.GetFileName(p).StartsWith("Uninstall", StringComparison.OrdinalIgnoreCase));
-        if (executable is null) return Task.FromResult(false);
-        var start = new ProcessStartInfo(executable) { UseShellExecute = false, CreateNoWindow = true, WorkingDirectory = directory };
-        if (link is not null) start.ArgumentList.Add(link);
-        // Electron attaches to its parent's console unless told not to.
-        start.Environment["ELECTRON_NO_ATTACH_CONSOLE"] = "1";
-        using var _ = Process.Start(start);
-        return Task.FromResult(true);
+        if (!File.Exists(Path.Combine(local, "The-Construct", "artifacts", "t3code", "installed.json"))) return Task.FromResult(false);
+        return Task.FromResult(WindowsT3Desktop.StartDetached(directory, link));
     }
 
     public bool? StartWithOs => _registry.ReadString(DesktopRegistration.RunKey, RunValue) is { Length: > 0 };
@@ -192,6 +187,85 @@ internal sealed partial class WindowsPlatform : IDevicePlatform, IAgentLauncher
 
         [GeneratedRegex(@"\s([A-Za-z]:)\s+(\\\\\S+)")]
         private static partial Regex Mapping();
+    }
+
+    private sealed class WindowsT3Desktop : IT3DesktopPlatform
+    {
+        private readonly string _installDirectory;
+
+        public WindowsT3Desktop()
+        {
+            var local = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+            ArtifactDirectory = Path.Combine(local, "The-Construct", "artifacts", "t3code");
+            _installDirectory = Path.Combine(local, "Programs", "t3code");
+        }
+
+        public string ArtifactDirectory { get; }
+
+        public bool IsInstalled() => FindExecutable(_installDirectory) is not null;
+
+        public bool IsRunning()
+        {
+            if (!Directory.Exists(_installDirectory)) return false;
+            var prefix = _installDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
+            foreach (var process in Process.GetProcesses())
+            {
+                using (process)
+                {
+                    try
+                    {
+                        var file = process.MainModule?.FileName;
+                        if (file is not null && file.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) return true;
+                    }
+                    catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException)
+                    {
+                        // Foreign-session or exited processes cannot be queried; they are not our T3 Desktop.
+                    }
+                }
+            }
+
+            return false;
+        }
+
+        public async Task<int> RunInstallerAsync(string installerPath, bool allowCloseRunning, CancellationToken ct)
+        {
+            var start = new ProcessStartInfo(installerPath) { UseShellExecute = false, CreateNoWindow = true };
+            if (allowCloseRunning) start.ArgumentList.Add("--updated");
+            start.ArgumentList.Add("/S");
+            using var process = Process.Start(start) ?? throw new IOException("Could not start the T3 Code Desktop installer.");
+            using var limit = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            limit.CancelAfter(TimeSpan.FromMinutes(10));
+            try
+            {
+                await process.WaitForExitAsync(limit.Token).ConfigureAwait(false);
+                return process.ExitCode;
+            }
+            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+            {
+                try { process.Kill(entireProcessTree: true); } catch (InvalidOperationException) { }
+                throw new AgentFailure(504, "t3-desktop-timeout", "The T3 Code Desktop installer did not finish in time.");
+            }
+        }
+
+        public Task<bool> LaunchAsync(CancellationToken ct) => Task.FromResult(StartDetached(_installDirectory, null));
+
+        internal static string? FindExecutable(string directory) =>
+            Directory.Exists(directory)
+                ? Directory.EnumerateFiles(directory, "*.exe")
+                    .FirstOrDefault(p => !Path.GetFileName(p).StartsWith("Uninstall", StringComparison.OrdinalIgnoreCase))
+                : null;
+
+        internal static bool StartDetached(string directory, string? link)
+        {
+            var executable = FindExecutable(directory);
+            if (executable is null) return false;
+            var start = new ProcessStartInfo(executable) { UseShellExecute = false, CreateNoWindow = true, WorkingDirectory = directory };
+            if (link is not null) start.ArgumentList.Add(link);
+            // Electron attaches to its parent's console unless told not to.
+            start.Environment["ELECTRON_NO_ATTACH_CONSOLE"] = "1";
+            using var _ = Process.Start(start);
+            return true;
+        }
     }
 }
 

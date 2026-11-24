@@ -60,6 +60,7 @@ public static class DeviceRoutes
             else if (request.AutoUpdate == true)
             {
                 device.Updater.TryAutoInstall();
+                if (device.T3Desktop.Supported) _ = Task.Run(() => device.T3Desktop.CheckAndAutoApplyAsync(allowFreshInstallWithoutAutoUpdate: false, CancellationToken.None));
             }
             return TypedResults.Ok(Settings(device));
         }).WithName("SetDeviceSettings").WithDescription("Changes what is given: the release channel (this PC's engine follows it), automatic updates, start with the OS.");
@@ -147,7 +148,16 @@ public static class DeviceRoutes
         api.MapGet("/update/everything", () => TypedResults.Ok(device.Everything.View())).WithName("GetUpdateEverything");
 
         api.MapPost("/update/everything", () => TypedResults.Accepted((string?)null, device.Everything.Start())).WithName("UpdateEverything")
-            .WithDescription("Each engine the user administers updates itself, each engine reprovisions the user's own VMs, then this device updates; the parts and their state, never stored.");
+            .WithDescription("Each engine the user administers updates itself, each engine reprovisions the user's own VMs, patched T3 Code Desktop updates on Windows when used, then this device updates; the parts and their state, never stored.");
+
+        api.MapGet("/t3-desktop/update", () => TypedResults.Ok(device.T3Desktop.View())).WithName("GetT3DesktopUpdate")
+            .WithDescription("Construct's patched T3 Code Desktop app on this device: whether it is supported and installed, its channel and build, any newer release on offer, and whether an automatic update is staged waiting for T3 Code Desktop to close.");
+
+        api.MapPost("/t3-desktop/update/check", async (CancellationToken ct) => TypedResults.Ok(await device.T3Desktop.CheckAsync(ct))).WithName("CheckT3DesktopUpdate")
+            .WithDescription("Checks permissionBRICK/construct-t3-builds for a newer patched T3 Code Desktop build for this device's channel.");
+
+        api.MapPost("/t3-desktop/update/install", () => TypedResults.Accepted("/api/t3-desktop/update", device.T3Desktop.StartInstall())).WithName("InstallT3DesktopUpdate")
+            .WithDescription("Downloads (or reuses the staged) patched T3 Code Desktop installer, runs it silently (--updated /S), updates installed.json, and relaunches T3 Code Desktop if it was running. 501 not-available where not supported.");
 
         // ---- notices put away (finding 45): the pop-out and the window hide the same ones ----
 
