@@ -124,9 +124,17 @@ public sealed class TableVaultSyncTests
         await vault.PutSettingsAsync("alice", "locked", null, VaultCrypto.KeyCheck(key), CancellationToken.None);
         var sharedId = await laptop.AddEngineAsync(shared, await shared.AddUserAsync("alice"));
         await laptop.PostAsync($"api/engines/{sharedId}/connect", new { vaultMode = "locked" });
+        // The old Companion left c as the PC holds it, under an older stamp (the move stamps every secret anew): it stays,
+        // so the host ends no lease on a value that did not change.
+        var old = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - 60_000;
+        await vault.PutEntriesAsync("alice", [new VaultEntry("c", "c", false, VaultCrypto.SealEntry(key, "c", old, "", "c-first"), old, "pc:old", false)],
+            CancellationToken.None);
         foreach (var name in new[] { "a", "b", "c" })
             await laptop.PostAsync("api/vault/secrets", new { name, description = name, value = name + "-first" });
         await laptop.Host.Agent.SyncTableVaultsAsync(CancellationToken.None);
+        var first = (await vault.GetEntriesAsync("alice", CancellationToken.None)).Entries;
+        Assert.Equal([true, true, false], first.Select(e => e.UpdatedBy.StartsWith("device:", StringComparison.Ordinal)));
+        Assert.Equal("pc:old", Live(first, "c")!.UpdatedBy);
 
         // a: the host's edit is newer. b: the PC's is. c: both carry the same stamp, and "vm:dev" > "device:…".
         var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();

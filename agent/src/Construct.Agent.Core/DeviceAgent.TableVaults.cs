@@ -286,6 +286,10 @@ public sealed partial class DeviceAgent
 
             // The engine's readable flag is the sealed one; a payload that does not open with K is not sent.
             if (Open(keys.Vault, mine) is not { } opened) continue;
+            // The same secret under an older stamp (every record the move copied has a new one) stays: a new payload
+            // would end every lease on it where the engine cannot compare values.
+            if (theirs.GetValueOrDefault(mine.Name) is { Deleted: false } there && Open(keys.Vault, there) == opened &&
+                there.AutoApprove == opened.AutoApprove && SameText(there.Description, mine.Description)) continue;
             send.Add(new
             {
                 name = mine.Name, description = mine.Description, hasUsername = opened.Username.Length > 0, payload = mine.Payload,
@@ -372,6 +376,11 @@ public sealed partial class DeviceAgent
         catch (CryptographicException) { return null; }
     }
 
+    private static bool SameText(string a, string b) => Spaces().Replace(a, " ").Trim() == Spaces().Replace(b, " ").Trim();
+
+    [System.Text.RegularExpressions.GeneratedRegex("\\s+")]
+    private static partial System.Text.RegularExpressions.Regex Spaces();
+
     private static bool OpensCheck(byte[] vaultKey, string keyCheck)
     {
         try
@@ -385,11 +394,15 @@ public sealed partial class DeviceAgent
         }
     }
 
-    /// <summary>One entry as an engine's table keeps it (and a record, to compare): never a value, only its sealed payload.</summary>
-    private sealed record TableEntry(string Name, string Description, string? Payload, long UpdatedAt, string UpdatedBy, bool Deleted)
+    /// <summary>
+    /// One entry as an engine's table keeps it (and a record, to compare): never a value, only its sealed payload.
+    /// <paramref name="AutoApprove"/> is the readable copy the engine decides by.
+    /// </summary>
+    private sealed record TableEntry(string Name, string Description, string? Payload, long UpdatedAt, string UpdatedBy, bool Deleted, bool AutoApprove = false)
     {
         public static TableEntry Of(SecretRecord record) =>
-            new(record.Value.Name, record.Value.Description, record.Deleted ? null : record.Value.Payload, record.Value.UpdatedAt, record.Value.UpdatedBy, record.Deleted);
+            new(record.Value.Name, record.Value.Description, record.Deleted ? null : record.Value.Payload, record.Value.UpdatedAt, record.Value.UpdatedBy, record.Deleted,
+                !record.Deleted && record.Value.AutoApprove);
 
         /// <summary>An entry of <c>GET /vault/entries</c>, or null when it is not a valid one.</summary>
         public static TableEntry? Parse(JsonNode? node)
@@ -398,11 +411,13 @@ public sealed partial class DeviceAgent
             var by = Str(node, "updatedBy");
             var at = Long(node, "updatedAt");
             if (!SecretName().IsMatch(name) || by.Length == 0 || at <= 0) return null;
-            var deleted = node?["deleted"] is JsonValue d && d.TryGetValue<bool>(out var flag) && flag;
+            var deleted = True(node, "deleted");
             var payload = deleted ? null : Str(node, "payload");
             if (!deleted && payload!.Length == 0) return null;
-            return new TableEntry(name, Str(node, "description"), payload, at, by, deleted);
+            return new TableEntry(name, Str(node, "description"), payload, at, by, deleted, !deleted && True(node, "autoApprove"));
         }
+
+        private static bool True(JsonNode? node, string key) => node?[key] is JsonValue v && v.TryGetValue<bool>(out var flag) && flag;
 
         public override string ToString() => $"TableEntry {{ Name = {Name}, UpdatedAt = {UpdatedAt} }}";
     }
