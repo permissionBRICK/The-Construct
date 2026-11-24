@@ -130,13 +130,14 @@ public sealed class AgentHost : IAsyncDisposable
     /// <summary>The withdrawal of keys an earlier version granted outside the account's store, started at start (E12).</summary>
     public Task StrayGrants { get; private set; } = Task.CompletedTask;
 
-    /// <summary>Starts the API, then the device features (VM links, update checks).</summary>
+    /// <summary>Starts the API, then the device features (VM links, update checks) and the sync of table vaults.</summary>
     public async Task StartAsync(CancellationToken ct = default)
     {
         await App.StartAsync(ct).ConfigureAwait(false);
         Device.Start();
         Upgrade.Start();
         Upstream.Start();
+        Agent.StartTableVaultSync();
         StrayGrants = Task.Run(async () =>
         {
             try { await Agent.WithdrawStrayGrantsAsync(App.Lifetime.ApplicationStopping).ConfigureAwait(false); }

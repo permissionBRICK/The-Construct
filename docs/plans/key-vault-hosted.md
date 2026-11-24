@@ -68,6 +68,17 @@ winners back. The host never needs `K` to merge.
 
 `updatedBy` is `pc:<install id>` or `vm:<vm name>`.
 
+Since the platform rework the device agent does this for every host that keeps the vault in this
+table, that is, a host outside the account's store (E12) or one of the old release: the account's
+`secret` records take the place of the Companion's document, with the same rule, the same 30-day
+tombstones and the payloads passed on as sealed (records and table seal with `K` alike). It syncs
+after every vault change on the device, when another device or an engine writes a secret record,
+when such a host connects, and every minute, so what a VM adds there reaches the records. A host
+whose table has no key check yet is set up `locked` with the check of `K`; one set up with another
+key gets nothing. The host's own winners become records whose provenance names the VM
+(`updatedBy` `device:<id>` for the agent's own writes). A host that keeps failing shows it on its
+row of the vault page.
+
 ## Host service API (all under `/api/v1`)
 
 ### User credential (the Companion, owner only; admins get no access to other users' vaults)

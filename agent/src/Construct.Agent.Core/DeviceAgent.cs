@@ -33,6 +33,7 @@ public sealed partial class DeviceAgent : IDisposable
     private readonly AgentState _state;
     private readonly SemaphoreSlim _gate = new(1, 1);
     private readonly ConcurrentDictionary<string, HttpClient> _clients = new(StringComparer.Ordinal);
+    private readonly EngineHandlers _handlers = new();
     private readonly CancellationTokenSource _stopping = new();
     private AccountKeys? _keys;
 
@@ -57,7 +58,7 @@ public sealed partial class DeviceAgent : IDisposable
         }
 
         Events = new AgentEvents();
-        Streams = new EngineStreams(Events, EngineClientFor, () => Engines().Select(e => e.Id), _stopping.Token);
+        Streams = new EngineStreams(Events, EngineClientFor, () => Engines().Select(e => e.Id), _stopping.Token) { Connected = OnEngineConnected };
     }
 
     public AgentEvents Events { get; }
@@ -617,21 +618,28 @@ public sealed partial class DeviceAgent : IDisposable
     {
         Events.Publish("agent");
         Streams.Sync();
+        // An engine added, connected or signed in anew may keep the vault in its table.
+        RequestTableSync();
     }
 
     /// <summary>The pinned connection to an engine, without credentials (one per engine, reused).</summary>
     private HttpClient Client(EngineEntry entry) =>
         _clients.GetOrAdd(entry.Id, _ => new HttpClient(Handler(entry)) { BaseAddress = new Uri(entry.Url), Timeout = Timeout.InfiniteTimeSpan });
 
-    /// <summary>The pinned handler; it answers a sign-in challenge as the Windows user only while that is the engine's sign-in.</summary>
+    /// <summary>
+    /// The engine's pinned handler, shared by every client to it (<see cref="EngineHandlers"/>); it answers a sign-in challenge
+    /// as the Windows user only while that is the engine's sign-in. Disposing the client leaves it open.
+    /// </summary>
     private HttpMessageHandler Handler(EngineEntry entry) =>
-        entry.WindowsSignIn && entry.DeviceToken is null && _options.WindowsSignIn is { } signIn
-            ? signIn.Apply(EngineHttp.Pinned(entry.Pin))
-            : EngineHttp.Pinned(entry.Pin);
+        _handlers.For(entry.Id, entry.Url, entry.Pin, entry.WindowsSignIn && entry.DeviceToken is null ? _options.WindowsSignIn : null);
+
+    /// <summary>The engine's shared handler and the connections it opened (tests: calls to one engine share it).</summary>
+    internal (HttpMessageHandler Handler, int Connects)? SharedHandler(string engineId) => _handlers.Of(engineId);
 
     private void Forget(string id)
     {
         if (_clients.TryRemove(id, out var client)) client.Dispose();
+        _handlers.Drop(id);
     }
 
     /// <summary>Adds this device's credential at <paramref name="entry"/>: its token and a fresh proof, else the user's sign-in.</summary>
@@ -664,12 +672,16 @@ public sealed partial class DeviceAgent : IDisposable
     private HttpClient StoreHttp()
     {
         var engine = StoreEngine();
-        return EngineHttp.Client(new Uri(new Uri(engine.Url), "api/v1/store/"), engine.Pin, null,
-            new DeviceCredentialHandler(_key, RequestProof.StoreTokenHeader, Reveal(_state.StoreToken)!, Time));
+        var credential = new DeviceCredentialHandler(_key, RequestProof.StoreTokenHeader, Reveal(_state.StoreToken)!, Time) { InnerHandler = Unsigned(engine) };
+        return new HttpClient(credential) { BaseAddress = new Uri(new Uri(engine.Url), "api/v1/store/"), Timeout = TimeSpan.FromSeconds(30) };
     }
 
     /// <summary>The store of <paramref name="engine"/> without credentials.</summary>
-    private static HttpClient AnonymousStore(EngineEntry engine) => EngineHttp.Client(new Uri(new Uri(engine.Url), "api/v1/store/"), engine.Pin);
+    private HttpClient AnonymousStore(EngineEntry engine) =>
+        new(Unsigned(engine)) { BaseAddress = new Uri(new Uri(engine.Url), "api/v1/store/"), Timeout = TimeSpan.FromSeconds(30) };
+
+    // The engine's shared handler that never answers a sign-in challenge: the store's credential is its token.
+    private HttpMessageHandler Unsigned(EngineEntry engine) => _handlers.For(engine.Id, engine.Url, engine.Pin, null);
 
     private static async Task EnsureStoreAsync(HttpResponseMessage response, CancellationToken ct)
     {
@@ -712,6 +724,7 @@ public sealed partial class DeviceAgent : IDisposable
     {
         _stopping.Cancel();
         foreach (var client in _clients.Values) client.Dispose();
+        _handlers.Dispose();
         _keys?.Dispose();
         _key.Dispose();
     }

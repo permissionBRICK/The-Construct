@@ -7,7 +7,8 @@ namespace Construct.Agent.Engines;
 /// <summary>
 /// HTTPS to an engine. Every connection that may carry a credential checks the engine's certificate
 /// against the pin taken when the engine was added (SHA-256 of the certificate, as the Companion pins);
-/// redirects are never followed, so a token goes to the pinned engine or nowhere.
+/// redirects are never followed, so a token goes to the pinned engine or nowhere. A name with addresses of both
+/// families connects by <see cref="HappyEyeballs"/>.
 /// </summary>
 public static class EngineHttp
 {
@@ -93,5 +94,6 @@ public static class EngineHttp
         ConnectTimeout = TimeSpan.FromSeconds(10),
         PooledConnectionLifetime = TimeSpan.FromMinutes(5),
         SslOptions = new SslClientAuthenticationOptions(),
+        ConnectCallback = HappyEyeballs.ConnectAsync,
     };
 }

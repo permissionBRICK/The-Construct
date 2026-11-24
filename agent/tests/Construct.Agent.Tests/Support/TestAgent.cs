@@ -31,7 +31,7 @@ public sealed class TestAgent : IAsyncDisposable
     /// <param name="device">The device features; by default the real ones over a fake platform with a temporary home.</param>
     public static async Task<TestAgent> StartAsync(int localEnginePort = 1, string? directory = null, string? ui = null,
         Func<DeviceAgent, Action, Device.DeviceServices>? device = null, Engines.IWindowsSignIn? windowsSignIn = null,
-        Upgrade.IUpgradePlatform? upgrade = null, string? gitSearchPath = null)
+        Upgrade.IUpgradePlatform? upgrade = null, string? gitSearchPath = null, Action<DeviceAgent>? configure = null)
     {
         directory ??= Path.Combine(Path.GetTempPath(), "agent-test-" + Guid.NewGuid().ToString("n"));
         var options = new AgentOptions
@@ -41,7 +41,9 @@ public sealed class TestAgent : IAsyncDisposable
             // No test reaches the machine's own git (and its credentials): an empty directory unless a fake is given.
             GitSearchPath = gitSearchPath ?? Path.Combine(directory, "no-git"),
         };
-        var host = AgentHost.Create(options, new DeviceAgent(options) { PairingPoll = TimeSpan.FromMilliseconds(200) }, device);
+        var agent = new DeviceAgent(options) { PairingPoll = TimeSpan.FromMilliseconds(200) };
+        configure?.Invoke(agent);
+        var host = AgentHost.Create(options, agent, device);
         await host.StartAsync();
         return new TestAgent(host, directory);
     }

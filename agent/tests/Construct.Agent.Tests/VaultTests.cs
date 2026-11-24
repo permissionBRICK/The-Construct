@@ -73,6 +73,41 @@ public sealed class VaultTests
     }
 
     [Fact]
+    public async Task Adding_a_secret_asks_no_engine_for_leases_only_the_list_does()
+    {
+        // The move copies the old vault one secret after the other; each add once asked every engine (30 s each when one was away).
+        var leases = new CountedPath("/api/v1/vault/leases");
+        using var engine = new EngineHost(services => services.AddSingleton<Microsoft.AspNetCore.Hosting.IStartupFilter>(leases));
+        var (laptop, _) = await SetUpAsync(engine, "locked");
+        await using var __ = laptop;
+
+        var added = await laptop.PostAsync("api/vault/secrets", new { name = "db", description = "Database", value = "db_pw_123456" });
+        Assert.Equal(("db", "Database", true), (added["name"]!.GetValue<string>(), added["description"]!.GetValue<string>(), added["readable"]!.GetValue<bool>()));
+        Assert.Empty(added["leases"]!.AsArray());
+        Assert.Equal(0, leases.Count);
+        await laptop.GetAsync("api/vault/secrets");
+        Assert.True(leases.Count > 0);
+    }
+
+    /// <summary>Counts the requests to one path of the engine.</summary>
+    private sealed class CountedPath(string path) : Microsoft.AspNetCore.Hosting.IStartupFilter
+    {
+        private int _count;
+
+        public int Count => Volatile.Read(ref _count);
+
+        public Action<Microsoft.AspNetCore.Builder.IApplicationBuilder> Configure(Action<Microsoft.AspNetCore.Builder.IApplicationBuilder> next) => app =>
+        {
+            app.Use(call => context =>
+            {
+                if (context.Request.Path.StartsWithSegments(path)) Interlocked.Increment(ref _count);
+                return call(context);
+            });
+            next(app);
+        };
+    }
+
+    [Fact]
     public async Task Approvals_and_entry_requests_are_answered_here_with_the_device_as_provenance()
     {
         using var engine = new EngineHost();
