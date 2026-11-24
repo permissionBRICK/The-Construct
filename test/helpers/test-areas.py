@@ -18,15 +18,16 @@ ROOT = Path(__file__).resolve().parents[2]
 SUITES = {
     'engine': {
         'tests': 'service/tests/Constructd.Tests',
-        'sources': ['service/src/', 'service/openapi/'],
+        'sources': ['service/src/', 'service/openapi/', 'test/dotnet/'],
         'wiring': [r'(^|/)Program\.cs$', r'/Composition/', r'\.csproj$', r'appsettings[^/]*\.json$', r'^service/openapi/',
-                   r'^service/src/Constructd\.Fakes/', r'/Infrastructure/', r'^service/tests/Constructd\.Tests/Support/'],
+                   r'^service/src/Constructd\.Fakes/', r'/Infrastructure/', r'^service/tests/Constructd\.Tests/Support/',
+                   r'^test/dotnet/'],
     },
     'agent': {
         'tests': 'agent/tests/Construct.Agent.Tests',
-        'sources': ['agent/src/', 'agent/openapi/', 'agent/tests/Construct.Companion.Fakes/'],
+        'sources': ['agent/src/', 'agent/openapi/', 'agent/tests/Construct.Companion.Fakes/', 'test/dotnet/'],
         'wiring': [r'(^|/)Program\.cs$', r'\.csproj$', r'^agent/openapi/', r'/Http/', r'^agent/tests/Construct\.Agent\.Tests/Support/',
-                   r'^agent/tests/Construct\.Companion\.Fakes/'],
+                   r'^agent/tests/Construct\.Companion\.Fakes/', r'^test/dotnet/'],
     },
 }
 # Words of a file name that name no area of their own.

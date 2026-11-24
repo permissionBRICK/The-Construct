@@ -2,6 +2,11 @@
 # Run from any directory. Dependencies, the groups and the quick tier are documented in docs/local-checks.md.
 set -euo pipefail
 cd "$(dirname "$0")/.."
+# Preserve explicit real-guest E2E SSH settings before isolating every other CONSTRUCT_* variable.
+e2e_ssh_env=()
+for var in CONSTRUCT_E2E_SSH_HOST CONSTRUCT_E2E_SSH_PORT CONSTRUCT_E2E_SSH_USER CONSTRUCT_E2E_SSH_KEY CONSTRUCT_E2E_SSH_PASSWORD; do
+  if [[ -n "${!var:-}" ]]; then e2e_ssh_env+=("$var=${!var}"); fi
+done
 # A configured guest environment must not alter host-side fixtures or tests.
 . test/helpers/isolate-env.sh
 usage='Usage: bash test/run-local-checks.sh <group>... | --changed [<base>] | --quick [<base>]
@@ -11,10 +16,13 @@ comma-separated <names>, for instance engine:Vault,BackupApiTests or agent:Upgra
 
 # ---- the groups to run ----------------------------------------------------------------------------
 quick=''
+from_changed=''
+base=''
 changed=()
 selected=()
 declare -A filter=()
 if [[ "${1:-}" == --changed || "${1:-}" == --quick ]]; then
+  from_changed=1
   [[ "$1" == --quick ]] && quick=1
   # Touched paths since the merge base with <base> (default: the first of origin/nightly, origin/rework,
   # origin/main that exists), committed or not, mapped to groups by the table in docs/local-checks.md.
@@ -26,14 +34,20 @@ if [[ "${1:-}" == --changed || "${1:-}" == --quick ]]; then
   fi
   [[ -n "$base" ]] || { echo 'No base branch found; pass one: --changed <base>' >&2; exit 2; }
   fork="$(git merge-base "$base" HEAD)"
-  mapfile -t changed < <({ git diff --name-only --no-renames "$fork"; git ls-files --others --exclude-standard; } | sort -u)
-  mapfile -t selected < <(printf '%s\n' "${changed[@]}" | python3 test/helpers/changed-groups.py)
+  changed_diff="$(git diff --name-only --no-renames "$fork")"
+  changed_untracked="$(git ls-files --others --exclude-standard)"
+  changed_all="$(printf '%s\n%s\n' "$changed_diff" "$changed_untracked" | sed '/^$/d' | sort -u)"
+  if [[ -n "$changed_all" ]]; then mapfile -t changed <<< "$changed_all"; fi
+  selected_raw="$(printf '%s\n' "${changed[@]}" | python3 test/helpers/changed-groups.py)"
+  if [[ -n "$selected_raw" ]]; then mapfile -t selected <<< "$selected_raw"; fi
   if [[ ${#selected[@]} -eq 0 ]]; then echo "No checks for the changes since $base."; exit 0; fi
   echo "Changed since $base: ${selected[*]}${quick:+ (quick)}"
   if [[ -n "$quick" ]]; then
     # The quick tier: no end-to-end tests, and of the .NET suites only the test classes the changes reach.
     [[ " ${selected[*]} " == *" all "* ]] && selected=(panel t3 service engine release ui agent)
-    mapfile -t selected < <(printf '%s\n' "${selected[@]}" | grep -vx e2e)
+    filtered_selected="$(printf '%s\n' "${selected[@]}" | grep -vx e2e || true)"
+    selected=()
+    if [[ -n "$filtered_selected" ]]; then mapfile -t selected <<< "$filtered_selected"; fi
     for suite in engine agent; do
       areas="$(printf '%s\n' "${changed[@]}" | python3 test/helpers/test-areas.py "$suite")"
       case "$areas" in all) ;; '') filter[$suite]=none ;; *) filter[$suite]="$areas" ;; esac
@@ -53,7 +67,14 @@ else
     selected+=("$name")
   done
 fi
-[[ " ${selected[*]} " == *" all "* ]] && selected+=(panel t3 service engine release ui agent e2e)
+if [[ " ${selected[*]} " == *" all "* ]]; then
+  if [[ -n "$from_changed" ]]; then
+    # --changed never includes e2e (only explicit `all` or `e2e` runs it).
+    selected+=(panel t3 service engine release ui agent)
+  else
+    selected+=(panel t3 service engine release ui agent e2e)
+  fi
+fi
 runs() { [[ " ${selected[*]} " == *" $1 "* ]]; }
 
 # ---- steps: each one is timed, a failure is counted and the run goes on ----------------------------------
@@ -63,10 +84,22 @@ runs() { [[ " ${selected[*]} " == *" $1 "* ]]; }
 jobs="${CHECKS_JOBS:-$(( $(nproc) / 2 ))}"
 [[ "$jobs" =~ ^[0-9]+$ && "$jobs" -ge 1 ]] || jobs=1
 logs="$(mktemp -d)"
-trap 'kill $(jobs -p) 2>/dev/null || true; rm -rf "$logs"' EXIT
 summary=()
 commands=()
 pids=()
+cleanup() {
+  local p
+  for p in "${pids[@]}"; do
+    kill -- "-$p" 2>/dev/null || kill "$p" 2>/dev/null || true
+  done
+  for p in "${pids[@]}"; do
+    wait "$p" 2>/dev/null || true
+  done
+  rm -rf "$logs"
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 failures=0
 declare -A ran=()
 step() {
@@ -82,8 +115,8 @@ step() {
   fi
   if [[ -n "${scripted:-}" && $jobs -gt 1 ]]; then
     while [[ $(jobs -rp | wc -l) -ge $jobs ]]; do wait -n || true; done
-    ( started=$SECONDS; "$@" >"$logs/$n" 2>&1 </dev/null && status=0 || status=$?
-      echo $((SECONDS - started)) >"$logs/$n.time"; exit "$status" ) &
+    setsid bash -c 'log="$1"; shift; started=$SECONDS; "$@" >"$log" 2>&1 </dev/null && status=0 || status=$?; echo $((SECONDS - started)) >"$log.time"; exit "$status"' \
+      _ "$logs/$n" "$@" &
     pids[n]=$!
     return 0
   fi
@@ -225,14 +258,16 @@ if runs service; then
   step bash test/backup-e2e.test.sh
   step bash test/external-host.test.sh
   # Every changed shell script, once: no new shellcheck diagnostics against the branch's base.
-  scripted='' step bash test/shellcheck-changed.sh
+  scripted='' step bash test/shellcheck-changed.sh ${base:+"$base"}
 fi
 if runs release; then
   # Release tooling, channel resolution and the updater tests (docs/release-flow.md).
   step python3 test/release.test.py
   step python3 test/construct-release.test.py
-  # The engine group runs these with everything else.
-  runs engine || { scripted='' step dotnet test service/tests/Constructd.Tests -c Release --filter 'FullyQualifiedName~Constructd.Tests.Updates'; }
+  # Skip only when an unfiltered engine run covers Updates.
+  if ! (runs engine && [[ -z "${filter[engine]:-}" ]]); then
+    scripted='' step dotnet test service/tests/Constructd.Tests -c Release --filter 'FullyQualifiedName~Constructd.Tests.Updates'
+  fi
   step pwsh -NoProfile -File service/tests/host-updater.test.ps1
   step bash service/tests/host-updater.test.sh
 fi
@@ -274,7 +309,11 @@ if runs e2e; then
   # End to end on this machine: the engine's tests with real clients (and a real guest when CONSTRUCT_E2E_SSH_*
   # names one), and the UI's run on the real engine and two real device agents in headless Chromium.
   step dotnet build service/Constructd.sln -c Release
-  step dotnet test service/tests/Constructd.Tests -c Release --no-build --filter 'Category=E2E'
+  if [[ ${#e2e_ssh_env[@]} -gt 0 ]]; then
+    step env "${e2e_ssh_env[@]}" dotnet test service/tests/Constructd.Tests -c Release --no-build --filter 'Category=E2E'
+  else
+    step dotnet test service/tests/Constructd.Tests -c Release --no-build --filter 'Category=E2E'
+  fi
   step in_ui npm install --no-audit --no-fund
   step in_ui npm run build
   step in_ui npm run test:e2e

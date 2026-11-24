@@ -152,6 +152,30 @@ public sealed class PackageTests : IDisposable
         Assert.Contains(linux,f=>f.Path=="scripts/bin/provision.sh");
         Assert.Contains(linux,f=>f.Path=="updater/update-construct-host.sh");
     }
+
+    [Fact]
+    public async Task Local_packager_builds_linux_variant_when_framework_dependent_is_omitted()
+    {
+        var repo=new DirectoryInfo(AppContext.BaseDirectory);
+        while(repo is not null && !File.Exists(Path.Combine(repo.FullName,"service/host/New-ConstructHostPackage.ps1"))) repo=repo.Parent;
+        Assert.NotNull(repo);
+        var publish=Path.Combine(_root,"publish-linux-only");Directory.CreateDirectory(publish);
+        await File.WriteAllBytesAsync(Path.Combine(publish,"Constructd.Api.exe"),RandomNumberGenerator.GetBytes(4096));
+        WindowsPublishExtras(publish);
+        await File.WriteAllTextAsync(Path.Combine(publish,"Constructd.Api"),"linux");
+        var output=Path.Combine(_root,"output-linux-only");
+        await Run("pwsh","-NoProfile","-File",Path.Combine(repo.FullName,"service/host/New-ConstructHostPackage.ps1"),"-PublishDir",publish,"-LinuxPublishDir",publish,"-OutputDir",output,"-Commit",new string('b',40));
+        var bytes=await File.ReadAllBytesAsync(Path.Combine(output,"manifest.json"));
+        var manifest=JsonSerializer.Deserialize<ReleaseManifest>(bytes,UpdateFiles.Json)!;
+        ManifestRules.ValidateVariants(manifest);
+        Assert.Null(manifest.FrameworkDependentAsset);
+        Assert.NotNull(manifest.LinuxAsset);
+        var root=Path.Combine(_root,"linux-only");Directory.CreateDirectory(root);
+        File.Copy(Path.Combine(output,manifest.LinuxAsset!),Path.Combine(root,"package.zip"));
+        var linux=PackageStager.ExtractAndVerify(root,manifest,"linux");
+        Assert.Contains(linux,f=>f.Path=="service/Constructd.Api");
+        Assert.Contains(linux,f=>f.Path=="updater/update-construct-host.sh");
+    }
     internal static PackageStager WindowsStager(IServiceProvider sp)=>new(sp.GetRequiredService<IReleaseSource>(),sp.GetRequiredService<IHostConfigStore>(),
         sp.GetRequiredService<ConstructdOptions>(),sp.GetRequiredService<IReleaseInfo>(),sp.GetService<IProcessRunner>()){IsWindows=true};
     /// <summary>What a win-x64 publish carries besides the executable, which the packager checks for.</summary>
