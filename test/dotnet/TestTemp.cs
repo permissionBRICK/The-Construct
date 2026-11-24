@@ -56,6 +56,7 @@ internal static class TestTemp
         }
     }
 
+    [System.Runtime.Versioning.SupportedOSPlatform("linux")]
     private static bool EnsureOwnerDirectory(string path, uint uid)
     {
         try
