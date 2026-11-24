@@ -134,7 +134,7 @@ public sealed class VmUpdateTests
             var row = UpdateTests.Row(id) with { Commit = ProvisionHarness.Commit, State = HostUpdateState.Succeeded, Finished = DateTimeOffset.UtcNow };
             await h.App.Service<IHostUpdateStore>().TryStartAsync(row, default);
             await h.App.Service<HostAutoUpdateService>().TickAsync(default);
-            await Task.Delay(150);
+            await Task.Delay(200);
             Assert.Single(await ProvisionJobsAsync(h.App, ProvisionHarness.Vm));
         }
         finally
@@ -144,6 +144,33 @@ public sealed class VmUpdateTests
 
         await WaitForJobsAsync(h.App, ProvisionHarness.Vm, 2);
         Assert.All(await ProvisionJobsAsync(h.App, ProvisionHarness.Vm), j => Assert.Equal(JobState.Succeeded, j.State));
+    }
+
+    [Fact]
+    public async Task Provision_refuses_when_vm_becomes_deleting_while_waiting_on_background_gate()
+    {
+        await using var h = await StartAsync();
+        var gate = h.App.Service<IVmOperationGate>();
+        var vms = h.App.Service<IVmRepository>();
+        var held = await gate.AcquireAsync(ProvisionHarness.Vm, HostStartSettings.GateOwner, default);
+        try
+        {
+            var submitTask = h.Client.PostJsonAsync($"/api/v1/vms/{ProvisionHarness.Vm}/jobs",
+                new { kind = "provision", requestId = "deleting-during-wait", commit = ProvisionHarness.Commit });
+            await Task.Delay(150);
+            Assert.False(submitTask.IsCompleted);
+            var vm = (await vms.GetAsync(ProvisionHarness.Vm, default))!;
+            await vms.UpdateAsync(vm with { Deleting = true }, default);
+            await held.DisposeAsync();
+            held = null;
+            using var response = await submitTask;
+            Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+            Assert.Contains("vm-deleting", await response.Content.ReadAsStringAsync(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            if (held is not null) await held.DisposeAsync();
+        }
     }
 
     [Fact]

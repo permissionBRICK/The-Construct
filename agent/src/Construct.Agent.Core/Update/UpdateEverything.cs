@@ -265,8 +265,8 @@ public sealed class UpdateEverything(IDeviceEngines engines, AgentUpdater self, 
     /// </summary>
     /// <remarks>
     /// The offer can be up to 15 minutes old (the engine reads its channel at most that often), while the update run reads
-    /// the channel again and installs its newest release: with two nightlies minutes apart the engine came back with the
-    /// newer one and was taken for rolled back (FatPC 2026-11-22). So a commit other than the offer's is checked against
+    /// the channel again and installs its newest release: with two releases minutes apart the engine came back with the
+    /// newer one and was taken for rolled back. So a commit other than the offer's is checked against
     /// the engine's own record of <paramref name="update"/>, which names what the run installed.
     /// </remarks>
     private async Task<string?> HealthyAsync(string engine, string? commit, string? update)

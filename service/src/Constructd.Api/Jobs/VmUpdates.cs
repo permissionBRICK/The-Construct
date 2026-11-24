@@ -28,7 +28,7 @@ public sealed record UpdateFollowed(string UpdateId);
 /// restart ends the sequence.
 /// </summary>
 public sealed class VmUpdates(IVmRepository vms, IUserStore users, IJobStore jobs, IHostConfigStore config, IServiceProvider services,
-    ProvisionStart starter, ILogger<VmUpdates> logger)
+    ProvisionStart starter, IHostApplicationLifetime lifetime, ILogger<VmUpdates> logger)
 {
     public static string SettingsKey(string user) => "user-updates:" + user.ToLowerInvariant();
     public static string FollowersKey(string updateId) => "update-follow:" + updateId;
@@ -63,26 +63,32 @@ public sealed class VmUpdates(IVmRepository vms, IUserStore users, IJobStore job
     {
         var queued = list.GroupBy(v => v.Vm.Name, StringComparer.OrdinalIgnoreCase).Select(g => (g.First().Vm, StartStopped: g.Any(v => v.StartStopped))).ToArray();
         var names = queued.Select(v => v.Vm.Name).ToArray();
+        var stopping = lifetime.ApplicationStopping;
         _ = Task.Run(async () =>
         {
             foreach (var (name, owner, created, startStopped) in queued.Select(v => (v.Vm.Name, v.Vm.Owner, v.Vm.Created, v.StartStopped)))
             {
+                if (stopping.IsCancellationRequested) break;
                 try
                 {
                     // The same VM as when it was queued: a VM deleted meanwhile and recreated under its name
                     // by somebody else is not touched.
-                    if (await vms.GetAsync(name, CancellationToken.None) is not { Deleting: false } vm ||
+                    if (await vms.GetAsync(name, stopping) is not { Deleting: false } vm ||
                         !Ownership.SameName(vm.Owner, owner) || vm.Created != created) continue;
                     // The engine's own chain never starts a VM: one that is off keeps its update due until someone starts it.
-                    if (!startStopped && await starter.StoppedAsync(vm, CancellationToken.None))
+                    if (!startStopped && await starter.StoppedAsync(vm, stopping))
                     {
                         logger.LogInformation("Reprovision of {Vm} after an update skipped: the VM is off. Its update stays due.", name);
                         continue;
                     }
 
-                    var job = await SubmitAsync(vm, actor, device, startStopped, CancellationToken.None);
-                    while (await jobs.GetAsync(job.Id, CancellationToken.None) is { State: JobState.Queued or JobState.Running })
-                        await Task.Delay(TimeSpan.FromSeconds(1));
+                    var job = await SubmitAsync(vm, actor, device, startStopped, stopping);
+                    while (await jobs.GetAsync(job.Id, stopping) is { State: JobState.Queued or JobState.Running })
+                        await Task.Delay(TimeSpan.FromSeconds(1), stopping);
+                }
+                catch (OperationCanceledException) when (stopping.IsCancellationRequested)
+                {
+                    break;
                 }
                 catch (Exception ex)
                 {
@@ -101,7 +107,6 @@ public sealed class VmUpdates(IVmRepository vms, IUserStore users, IJobStore job
     public async Task<IReadOnlyList<string>> FollowAsync(HostUpdateRecord succeeded, CancellationToken ct)
     {
         if ((await config.GetAsync<UpdateFollowed>(FollowedKey, ct))?.UpdateId == succeeded.Id) return [];
-        await config.SetAsync(FollowedKey, new UpdateFollowed(succeeded.Id), "system", ct);
         var list = new List<(Vm, bool)>();
         foreach (var user in await users.ListAsync(ct))
             if ((await SettingsAsync(user.Name, ct)).AutoReprovision) list.AddRange((await PrimariesAsync(user.Name, ct)).Select(v => (v, false)));
@@ -110,6 +115,7 @@ public sealed class VmUpdates(IVmRepository vms, IUserStore users, IJobStore job
             if (await vms.GetAsync(name, ct) is { Kind: VmKind.Primary, Deleting: false } vm &&
                 (followers!.Owner is null || Ownership.SameName(vm.Owner, followers.Owner)))
                 list.Add((vm, followers.Start?.Any(s => Ownership.SameName(s, vm.Name)) == true));
+        await config.SetAsync(FollowedKey, new UpdateFollowed(succeeded.Id), "system", ct);
         return list.Count == 0 ? [] : Start(list, "system");
     }
 }

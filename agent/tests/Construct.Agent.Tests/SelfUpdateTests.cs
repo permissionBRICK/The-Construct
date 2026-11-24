@@ -178,6 +178,107 @@ public sealed class SelfUpdateTests : IAsyncLifetime
         Assert.Equal([device.Install.ExecutableOf(New)], device.Platform.Launched);
     }
 
+    private sealed class DelayedManifestHandler(string url, string sha256, TaskCompletionSource entered, TaskCompletionSource release) : HttpMessageHandler
+    {
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            if (request.RequestUri!.AbsoluteUri == url)
+            {
+                entered.TrySetResult();
+                await release.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(new System.Text.Json.Nodes.JsonObject
+                    {
+                        ["channel"] = "nightly",
+                        ["version"] = New,
+                        ["commit"] = "2222222222222222222222222222222222222222",
+                        ["releaseTag"] = "host-2222222222222222222222222222222222222222",
+                        ["packages"] = new System.Text.Json.Nodes.JsonObject
+                        {
+                            ["agentLinux"] = new System.Text.Json.Nodes.JsonObject { ["asset"] = "construct-agent-2222222-linux-x64.zip", ["sha256"] = sha256 },
+                        },
+                    }.ToJsonString()),
+                };
+            }
+
+            return new HttpResponseMessage(HttpStatusCode.NotFound);
+        }
+    }
+
+    [Fact]
+    public async Task Channel_change_during_an_in_flight_check_discards_the_old_channels_offer()
+    {
+        var manifestEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseManifest = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var handler = new DelayedManifestHandler(Channel, _published, manifestEntered, releaseManifest);
+        _device = new FakeDevice(_directory, channel: handler, running: Old, version: Old);
+        _device.Settings.Update(s => s with { Channel = Channel, AutoUpdate = true });
+        Directory.CreateDirectory(_device.Install.DirectoryOf(Old));
+        File.WriteAllText(_device.Install.ExecutableOf(Old), "old");
+        _device.Install.Write(new InstallState(Old, null));
+
+        var checkTask = _device.Updater.CheckAsync(CancellationToken.None);
+        await manifestEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        _device.Settings.Update(s => s with { Channel = "https://other.example/manifest.json" });
+        _device.Updater.ChannelChanged();
+        releaseManifest.SetResult();
+        await checkTask.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Null(_device.Updater.View().Available);
+        Assert.Equal("idle", _device.Updater.View().State);
+        Assert.False(_device.Updater.TryAutoInstall());
+        Assert.Empty(_device.Platform.Launched);
+    }
+
+    [Fact]
+    public async Task Automatic_install_defers_while_agent_is_busy_instead_of_cutting_it_short()
+    {
+        var device = Device();
+        device.Settings.Update(s => s with { AutoUpdate = true });
+        device.Busy = "the update of hosts and VMs";
+        await device.Updater.CheckAsync(CancellationToken.None);
+
+        Assert.False(device.Updater.TryAutoInstall());
+        Assert.Equal("idle", device.Updater.View().State);
+        Assert.Empty(device.Platform.Launched);
+    }
+
+    [Fact]
+    public async Task Download_timeout_records_failure_and_suppresses_automatic_retry()
+    {
+        var handler = new FakeDevice.StaticHandler(request => request.RequestUri!.AbsoluteUri switch
+        {
+            Channel => new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(new System.Text.Json.Nodes.JsonObject
+                {
+                    ["channel"] = "nightly",
+                    ["version"] = New,
+                    ["commit"] = "2222222222222222222222222222222222222222",
+                    ["releaseTag"] = "host-2222222222222222222222222222222222222222",
+                    ["packages"] = new System.Text.Json.Nodes.JsonObject
+                    {
+                        ["agentLinux"] = new System.Text.Json.Nodes.JsonObject { ["asset"] = "construct-agent-2222222-linux-x64.zip", ["sha256"] = _published },
+                    },
+                }.ToJsonString()),
+            },
+            _ => throw new TaskCanceledException("Simulated HTTP timeout"),
+        });
+        _device = new FakeDevice(_directory, channel: handler, running: Old, version: Old);
+        _device.Settings.Update(s => s with { Channel = Channel, AutoUpdate = true });
+        Directory.CreateDirectory(_device.Install.DirectoryOf(Old));
+        File.WriteAllText(_device.Install.ExecutableOf(Old), "old");
+        _device.Install.Write(new InstallState(Old, null));
+
+        await _device.Updater.CheckAsync(CancellationToken.None);
+        Assert.True(_device.Updater.TryAutoInstall());
+        await _device.Updater.Work.WaitAsync(TimeSpan.FromSeconds(10));
+
+        Assert.Equal("failed", _device.Updater.View().State);
+        Assert.False(_device.Updater.TryAutoInstall());
+    }
+
     [Fact]
     public async Task A_package_whose_hash_differs_from_the_manifest_is_not_installed()
     {

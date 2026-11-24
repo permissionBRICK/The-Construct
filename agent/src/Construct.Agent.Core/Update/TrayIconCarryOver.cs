@@ -16,8 +16,8 @@ public interface ITrayIconSettings
 
 /// <summary>
 /// Windows 11 remembers per executable path whether a tray icon shows on the taskbar, and each update runs the agent from
-/// a new <c>versions/&lt;version&gt;/</c> directory: without help every update put the icon back into the overflow
-/// (FatPC 2026-11-22). Once Windows has an entry for this version's icon, the choice made for the previous version is
+/// a new <c>versions/&lt;version&gt;/</c> directory: without help every update put the icon back into the overflow.
+/// Once Windows has an entry for this version's icon, the choice made for the previous version is
 /// copied to it (when there is none, a taskbar place any earlier version or the old Companion had), unless the user
 /// already chose for this version; entries of versions no longer on disk are removed. A fixed icon GUID (<c>NIF_GUID</c>)
 /// would be the documented way, but Windows binds such a GUID to one path unless every build is signed by one publisher.

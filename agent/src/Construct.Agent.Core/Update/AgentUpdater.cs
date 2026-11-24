@@ -54,8 +54,12 @@ public sealed class AgentUpdater : IAsyncDisposable
     private DateTimeOffset? _checkedAt;
     private string? _waiting;
     private string? _autoFailedVersion;
+    private long _channelEpoch;
+    private long _checkSeq;
+    private long _activeCheck;
     private Task _work = Task.CompletedTask;
     private Task _loop = Task.CompletedTask;
+    private Task _staleCheck = Task.CompletedTask;
 
     /// <param name="packageKey">This build's key in the manifest's <c>packages</c>: <c>agentWindows</c> or <c>agentLinux</c>.</param>
     /// <param name="busy">What the user started that is still in flight (a pairing, "update everything"), in words; null when the agent is idle.</param>
@@ -131,34 +135,32 @@ public sealed class AgentUpdater : IAsyncDisposable
     /// <summary>
     /// A check in the background unless one ran in the last <see cref="FreshFor"/> or one is under way: the pop-out
     /// asks for it when it opens, so a new release shows without waiting for the hourly check (finding 16). With
-    /// automatic updates on, starts the install when a newer version is found (or already cached) and has not
-    /// already failed automatically.
+    /// automatic updates on, starts the install when idle and a newer version is found (or already cached) and has
+    /// not already failed automatically.
     /// </summary>
     public void CheckIfStale()
     {
         bool fresh;
         lock (_gate)
         {
-            if (_state is "checking" or "waiting" or "downloading" or "installing") return;
+            if (_lifetime.IsCancellationRequested || _state is "checking" or "waiting" or "downloading" or "installing") return;
             fresh = _checkedAt is { } at && _options.Time.GetUtcNow() - at < FreshFor;
-        }
-
-        if (fresh)
-        {
-            TryAutoInstall();
-            return;
-        }
-
-        _ = Task.Run(async () =>
-        {
-            try
+            if (!fresh)
             {
-                await CheckAsync(_lifetime.Token).ConfigureAwait(false);
-                TryAutoInstall();
+                _staleCheck = Task.Run(async () =>
+                {
+                    try
+                    {
+                        await CheckAsync(_lifetime.Token).ConfigureAwait(false);
+                        TryAutoInstall();
+                    }
+                    catch (AgentFailure) { /* shown as the check's error */ }
+                    catch (OperationCanceledException) { }
+                }, CancellationToken.None);
             }
-            catch (AgentFailure) { /* shown as the check's error */ }
-            catch (OperationCanceledException) { }
-        });
+        }
+
+        if (fresh) TryAutoInstall();
     }
 
     /// <summary>Drops any cached offer from the previous channel so the next stale check reads the new channel.</summary>
@@ -166,11 +168,12 @@ public sealed class AgentUpdater : IAsyncDisposable
     {
         lock (_gate)
         {
+            _channelEpoch++;
             if (_state is "waiting" or "downloading" or "installing") return;
             _offer = null;
             _checkedAt = null;
             _autoFailedVersion = null;
-            if (_state == "failed") { _state = "idle"; _error = null; }
+            if (_state is "checking" or "failed") { _state = "idle"; _error = null; }
         }
 
         _changed();
@@ -179,38 +182,66 @@ public sealed class AgentUpdater : IAsyncDisposable
     /// <summary>Reads the channel's manifest; a different version than this one is on offer.</summary>
     public async Task<UpdateView> CheckAsync(CancellationToken ct)
     {
+        var channel = _settings.Read().Channel;
+        long epoch;
+        long checkId;
         lock (_gate)
         {
             if (_state is "waiting" or "downloading" or "installing") return View();
+            epoch = _channelEpoch;
+            checkId = ++_checkSeq;
+            _activeCheck = checkId;
             _state = "checking";
             _error = null;
         }
 
+        var notify = false;
         try
         {
-            var package = await ReadManifestAsync(_settings.Read().Channel, ct).ConfigureAwait(false);
+            var package = await ReadManifestAsync(channel, ct).ConfigureAwait(false);
             lock (_gate)
             {
-                _offer = package.Version == _options.Version ? null : package;
-                _state = "idle";
-                _checkedAt = _options.Time.GetUtcNow();
+                if (_channelEpoch == epoch && _activeCheck == checkId && _state == "checking")
+                {
+                    _offer = package.Version == _options.Version ? null : package;
+                    _state = "idle";
+                    _checkedAt = _options.Time.GetUtcNow();
+                    notify = true;
+                }
             }
         }
         catch (AgentFailure failure)
         {
             lock (_gate)
             {
-                _state = "failed";
-                _error = failure.Message;
-                // A failed check counts as one: the pop-out does not ask the network again on every open.
-                _checkedAt = _options.Time.GetUtcNow();
+                if (_channelEpoch == epoch && _activeCheck == checkId && _state == "checking")
+                {
+                    _state = "failed";
+                    _error = failure.Message;
+                    // A failed check counts as one: the pop-out does not ask the network again on every open.
+                    _checkedAt = _options.Time.GetUtcNow();
+                    notify = true;
+                }
+            }
+
+            throw;
+        }
+        catch
+        {
+            lock (_gate)
+            {
+                if (_activeCheck == checkId && _state == "checking")
+                {
+                    _state = "idle";
+                    notify = true;
+                }
             }
 
             throw;
         }
         finally
         {
-            _changed();
+            if (notify) _changed();
         }
 
         return View();
@@ -219,35 +250,56 @@ public sealed class AgentUpdater : IAsyncDisposable
     /// <summary>Starts the install of the version on offer; it waits until the agent is idle.</summary>
     public UpdateView StartInstall()
     {
+        AgentPackage offer;
+        TaskCompletionSource gate;
         lock (_gate)
         {
             if (Running is null) throw new AgentFailure(409, "not-installed", "This agent does not run from an installed package and cannot update itself.");
             if (_offer is null) throw new AgentFailure(409, "no-update", "No update is on offer; check first.");
             if (!_work.IsCompleted) return View();
+            offer = _offer;
             _autoFailedVersion = null;
             _state = "waiting";
             _error = null;
-            _work = InstallAsync(_offer, _lifetime.Token);
+            gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            _work = Task.Run(async () =>
+            {
+                await gate.Task.ConfigureAwait(false);
+                await InstallAsync(offer, automatic: false, _lifetime.Token).ConfigureAwait(false);
+            }, CancellationToken.None);
         }
 
         _changed();
+        gate.SetResult();
         return View();
     }
 
-    /// <summary>Starts the install when automatic updates are on, an update is on offer, and that version has not already failed automatically.</summary>
+    /// <summary>
+    /// Starts the install when automatic updates are on, the agent is not currently busy, an update is on offer,
+    /// and that version has not already failed automatically.
+    /// </summary>
     public bool TryAutoInstall()
     {
-        if (Running is null || !_settings.Read().AutoUpdate) return false;
+        if (_lifetime.IsCancellationRequested || Running is null || !_settings.Read().AutoUpdate || _busy() is not null) return false;
+        AgentPackage offer;
+        TaskCompletionSource gate;
         lock (_gate)
         {
-            if (_offer is null || !_work.IsCompleted) return false;
+            if (_lifetime.IsCancellationRequested || _offer is null || !_work.IsCompleted) return false;
             if (string.Equals(_autoFailedVersion, _offer.Version, StringComparison.Ordinal)) return false;
+            offer = _offer;
             _state = "waiting";
             _error = null;
-            _work = InstallAsync(_offer, _lifetime.Token);
+            gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            _work = Task.Run(async () =>
+            {
+                await gate.Task.ConfigureAwait(false);
+                await InstallAsync(offer, automatic: true, _lifetime.Token).ConfigureAwait(false);
+            }, CancellationToken.None);
         }
 
         _changed();
+        gate.SetResult();
         return true;
     }
 
@@ -257,11 +309,11 @@ public sealed class AgentUpdater : IAsyncDisposable
         get { lock (_gate) return _work; }
     }
 
-    private async Task InstallAsync(AgentPackage package, CancellationToken ct)
+    private async Task InstallAsync(AgentPackage package, bool automatic, CancellationToken ct)
     {
         try
         {
-            await WaitUntilIdleAsync(ct).ConfigureAwait(false);
+            if (!await WaitUntilIdleAsync(automatic, ct).ConfigureAwait(false)) { Set("idle"); return; }
             Set("downloading");
             var target = _install.DirectoryOf(package.Version);
             if (!Directory.Exists(target))
@@ -287,7 +339,7 @@ public sealed class AgentUpdater : IAsyncDisposable
             }
 
             Set("installing");
-            await WaitUntilIdleAsync(ct).ConfigureAwait(false);
+            if (!await WaitUntilIdleAsync(automatic, ct).ConfigureAwait(false)) { Set("idle"); return; }
             _install.Write(new InstallState(package.Version, Running, Pending: true));
             // The surfaces open now open again in the new version (finding 5), the window first so the pop-out shows over it.
             var surfaces = (OpenSurfaces?.Invoke() ?? []).Where(s => s is "pop" or "win").ToArray();
@@ -296,8 +348,10 @@ public sealed class AgentUpdater : IAsyncDisposable
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
+            Set("idle");
         }
-        catch (Exception ex) when (ex is AgentFailure or IOException or InvalidDataException or UnauthorizedAccessException or HttpRequestException)
+        catch (Exception ex) when (ex is AgentFailure or IOException or InvalidDataException or UnauthorizedAccessException or HttpRequestException
+            || (ex is OperationCanceledException && !ct.IsCancellationRequested))
         {
             lock (_gate)
             {
@@ -321,9 +375,10 @@ public sealed class AgentUpdater : IAsyncDisposable
 
     /// <summary>
     /// Waits while something the user started is in flight, saying what (finding 21), and no longer than
-    /// <see cref="IdleLimit"/>: then the install goes ahead.
+    /// <see cref="IdleLimit"/>: a manual install then goes ahead; an automatic install defers rather than
+    /// cutting short an in-flight operation such as a host update.
     /// </summary>
-    private async Task WaitUntilIdleAsync(CancellationToken ct)
+    private async Task<bool> WaitUntilIdleAsync(bool automatic, CancellationToken ct)
     {
         var until = _options.Time.GetUtcNow() + IdleLimit;
         string before;
@@ -342,11 +397,14 @@ public sealed class AgentUpdater : IAsyncDisposable
             await Task.Delay(IdlePoll, _options.Time, ct).ConfigureAwait(false);
         }
 
+        var stillBusy = _busy() is not null;
         lock (_gate)
         {
             _waiting = null;
             if (waited) _state = before;
         }
+
+        return !(automatic && stillBusy);
     }
 
     /// <summary>Downloads to <paramref name="path"/> and compares its SHA-256 with the manifest's; a mismatch deletes it.</summary>
@@ -484,7 +542,9 @@ public sealed class AgentUpdater : IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         await _lifetime.CancelAsync().ConfigureAwait(false);
-        try { await Task.WhenAll(_loop, Work).ConfigureAwait(false); }
+        Task stale;
+        lock (_gate) stale = _staleCheck;
+        try { await Task.WhenAll(_loop, stale, Work).ConfigureAwait(false); }
         catch (OperationCanceledException) { }
     }
 }
