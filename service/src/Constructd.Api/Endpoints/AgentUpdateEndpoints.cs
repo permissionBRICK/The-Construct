@@ -58,7 +58,7 @@ public static class AgentUpdateEndpoints
     private static async Task<IResult> UpdateManyAsync(string name, UpdateVmAgentsRequest? request, HttpContext http, IVmRepository vms,
         AgentUpdateJobs updates, CancellationToken ct)
     {
-        IReadOnlyList<string> tools;
+        IReadOnlyList<string>? tools = null;
         if (request?.Agents is { } requested)
         {
             if (requested.Count == 0 || requested.Any(a => !AgentUpdateScript.IsKnownTool(a)) ||
@@ -66,23 +66,18 @@ public static class AgentUpdateEndpoints
                 return CodedProblems.Validation("agents", "Expected one or more unique agents: " + string.Join(", ", AgentUpdateScript.KnownTools) + ".");
             tools = requested;
         }
-        else
-        {
-            tools = [];
-        }
 
         var (vm, denied) = await OwnerPrimaryAsync(name, http, vms, ct);
         if (vm is null) return denied!;
-        if (request?.Agents is null) tools = await updates.BehindAsync(vm, ct);
         return await SubmitAsync(vm, http, updates, tools, ct);
     }
 
-    private static async Task<IResult> SubmitAsync(Vm vm, HttpContext http, AgentUpdateJobs updates, IReadOnlyList<string> tools, CancellationToken ct)
+    private static async Task<IResult> SubmitAsync(Vm vm, HttpContext http, AgentUpdateJobs updates, IReadOnlyList<string>? tools, CancellationToken ct)
     {
         try
         {
-            var job = await updates.StartAsync(vm, http.User.Actor(), tools, ct);
-            http.SetAuditDetail($"agents={string.Join(',', AgentUpdateScript.Order(tools))}; job={job.Id}");
+            var (job, chosen) = await updates.StartAsync(vm, http.User.Actor(), tools, ct);
+            http.SetAuditDetail($"agents={string.Join(',', chosen)}; job={job.Id}");
             return Results.Accepted("/api/v1/jobs/" + job.Id, new VmJobAcceptedResponse(job.Id, job.Kind, false));
         }
         catch (ProvisionRequestException ex)

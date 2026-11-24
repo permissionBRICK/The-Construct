@@ -1547,7 +1547,8 @@ export class ApiBackend implements Backend {
     if (raw.kind === 'update-agents') {
       const result = raw.result as Loose | null;
       const list = this.started.get(key)?.agents ?? (Array.isArray(result?.agents) ? result.agents.filter((x): x is string => typeof x === 'string') : null);
-      void this.startAgentUpdate(ref.engine, ref.name, list && list.length > 0 ? list : undefined);
+      if (!list || list.length === 0) { this.note('Select the coding agent to update again'); return; }
+      void this.startAgentUpdate(ref.engine, ref.name, list);
       return;
     }
     const st = this.started.get(key);
@@ -1619,10 +1620,18 @@ export class ApiBackend implements Backend {
   private async startAgentUpdate(engine: string, name: string, agents?: string[]) {
     const c = this.engine(engine);
     await this.whileStarting(engine, name, 'update', () => this.run(async () => {
-      const r = agents?.length === 1
-        ? await ok(c.POST('/api/v1/vms/{name}/agents/{agent}/update', { params: { path: { name, agent: agents[0] } } }))
-        : await ok(c.POST('/api/v1/vms/{name}/agents/update', { params: { path: { name } }, body: agents ? { agents } : {} }));
-      await this.track(engine, r.jobId, { kind: 'update', agents });
+      try {
+        const r = agents?.length === 1
+          ? await ok(c.POST('/api/v1/vms/{name}/agents/{agent}/update', { params: { path: { name, agent: agents[0] } } }))
+          : await ok(c.POST('/api/v1/vms/{name}/agents/update', { params: { path: { name } }, body: agents ? { agents } : {} }));
+        await this.track(engine, r.jobId, { kind: 'update', agents });
+      } catch (e) {
+        if (e instanceof ApiError && e.status === 404) {
+          this.note('This host needs an update before single-agent updates are available; use Reprovision for now');
+          return;
+        }
+        throw e;
+      }
     }));
   }
 

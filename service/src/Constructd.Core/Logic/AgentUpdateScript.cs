@@ -25,16 +25,23 @@ public static class AgentUpdateScript
         return KnownTools.Where(set.Contains).ToArray();
     }
 
+    /// <summary>Exit code returned by the guest guard when its scripts predate <c>AI_TOOLS_UPDATE_ONLY</c>.</summary>
+    public const int ReprovisionRequiredExit = 42;
+
     /// <summary>
     /// The root shell command that updates only <paramref name="tool"/> on the guest. Never interpolates untrusted
-    /// input: every tool maps through an explicit allowlist to a fixed script invocation.
+    /// input: every tool maps through an explicit allowlist to a fixed script invocation, and verifies the guest's
+    /// script supports <c>AI_TOOLS_UPDATE_ONLY</c> before running so an older guest never falls back to a full install.
     /// </summary>
     public static string Command(string tool, string? claudeUser = null)
     {
         var user = claudeUser is not null && ProvisionScript.IsSafeUserName(claudeUser) ? claudeUser : "root";
         var repo = ProvisionScript.RepoDir;
+        var guard = $"if [ ! -f {repo}/bin/install-ai-tools.sh ] || ! grep -q AI_TOOLS_UPDATE_ONLY {repo}/bin/install-ai-tools.sh; then " +
+            $"echo 'This VM needs one reprovision before single-agent updates can run.' >&2; exit {ReprovisionRequiredExit}; fi; ";
         if (tool == "t3")
-            return $"env REPO_DIR={repo} bash {repo}/bin/construct-t3-update.sh";
+            return guard + $"if [ ! -f {repo}/bin/construct-t3-update.sh ]; then echo 'This VM needs one reprovision before T3 Code updates can run.' >&2; exit {ReprovisionRequiredExit}; fi; " +
+                $"env AI_TOOLS_UPDATE_ONLY=true REPO_DIR={repo} bash {repo}/bin/construct-t3-update.sh";
 
         var aiTool = tool switch
         {
@@ -45,7 +52,7 @@ public static class AgentUpdateScript
             _ => throw new ArgumentException("Unknown coding agent.", nameof(tool)),
         };
 
-        return $"env TARGET_USER={ProvisionScript.Quote(user)} AI_TOOLS_OVERRIDE={aiTool} AI_CONSOLE_INTEGRATION=false REPO_DIR={repo} bash {repo}/bin/install-ai-tools.sh";
+        return guard + $"env TARGET_USER={ProvisionScript.Quote(user)} AI_TOOLS_OVERRIDE={aiTool} AI_TOOLS_UPDATE_ONLY=true AI_CONSOLE_INTEGRATION=false REPO_DIR={repo} bash {repo}/bin/install-ai-tools.sh";
     }
 
     /// <summary>Short progress label for one step of an <c>update-agents</c> job.</summary>

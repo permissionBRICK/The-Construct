@@ -56,6 +56,7 @@ public sealed class AgentUpdateTests
         Assert.DoesNotContain(commands, c => c.Contains("construct-t3-update.sh", StringComparison.Ordinal));
         var updateCmd = Assert.Single(commands, c => c.Contains("bin/install-ai-tools.sh", StringComparison.Ordinal));
         Assert.Contains("AI_TOOLS_OVERRIDE=codex", updateCmd);
+        Assert.Contains("AI_TOOLS_UPDATE_ONLY=true", updateCmd);
         Assert.Contains("AI_CONSOLE_INTEGRATION=false", updateCmd);
         Assert.Contains(commands, c => c.Contains("construct-usage-report.sh", StringComparison.Ordinal) && c.Contains("--agents", StringComparison.Ordinal));
 
@@ -86,8 +87,8 @@ public sealed class AgentUpdateTests
         Assert.Equal(JobState.Succeeded, t3Job.State);
 
         var commands = h.Ssh.Commands.Select(FakeSshRunner.Unwrap).ToArray();
-        Assert.Single(commands, c => c.Contains("bin/construct-t3-update.sh", StringComparison.Ordinal));
-        Assert.Single(commands, c => c.Contains("bin/install-ai-tools.sh", StringComparison.Ordinal));
+        Assert.Single(commands, c => c.Contains("bash /opt/construct/repo/bin/construct-t3-update.sh", StringComparison.Ordinal));
+        Assert.Single(commands, c => c.Contains("bash /opt/construct/repo/bin/install-ai-tools.sh", StringComparison.Ordinal));
         Assert.DoesNotContain(commands, c => c.Contains("bin/provision.sh", StringComparison.Ordinal));
     }
 
@@ -252,5 +253,44 @@ public sealed class AgentUpdateTests
         // Claude succeeded before Codex failed, so the agent report was still refreshed.
         var agents = await (await h.Client.GetAsync($"/api/v1/vms/{Vm}/agents")).ReadAsync<VmAgentsResponse>();
         Assert.Equal("2.2.0", Assert.Single(agents.Agents, a => a.Tool == "claude").Version);
+    }
+
+    [Fact]
+    public async Task Update_all_returns_agents_unknown_when_no_versions_have_been_reported()
+    {
+        await using var h = await ProvisionHarness.StartAsync();
+        var response = await h.Client.PostJsonAsync($"/api/v1/vms/{Vm}/agents/update", new { });
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        Assert.Equal("agents-unknown", (await response.ReadAsync<JsonObject>())["code"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public async Task Older_guest_scripts_report_reprovision_required()
+    {
+        await using var h = await ProvisionHarness.StartAsync();
+        h.Ssh.AgentUpdate = _ => (42, ["This VM needs one reprovision before single-agent updates can run."]);
+
+        var response = await h.Client.PostAsync($"/api/v1/vms/{Vm}/agents/codex/update", null);
+        Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
+        var job = await h.Client.WaitForJobAsync((await response.ReadAsync<VmJobAcceptedResponse>()).JobId);
+        Assert.Equal(JobState.Failed, job.State);
+        var result = Result(job);
+        Assert.Equal("reprovision-required", result.Code);
+        Assert.Equal(["codex"], result.Agents);
+    }
+
+    [Fact]
+    public async Task Vm_replaced_before_gate_admission_is_refused()
+    {
+        await using var h = await ProvisionHarness.StartAsync();
+        var original = (await h.App.Vms.GetAsync(Vm, default))!;
+        Assert.True(await h.App.Vms.RemoveAsync(Vm, default));
+        Assert.Equal(VmAddOutcome.Added, await h.App.Vms.AddAsync(original with { Incarnation = original.Incarnation + 1, Owner = "bob" }, 10, default));
+
+        var updates = h.App.Service<Constructd.Api.Jobs.AgentUpdateJobs>();
+        var ex = await Assert.ThrowsAsync<Constructd.Api.Jobs.ProvisionRequestException>(
+            () => updates.StartAsync(original, "alice", ["codex"], default));
+        Assert.Equal("vm-changed", ex.Code);
+        Assert.Empty(h.Ssh.Commands);
     }
 }

@@ -218,7 +218,9 @@ if [[ "${EUID}" -eq 0 ]]; then
   printf '#!/usr/bin/env bash\nprintf "login-banner\\n" >>"%s"\n' "${narrow_log}" >"${narrow_repo}/bin/update-login-banner.sh"
   chmod +x "${narrow_repo}/bin/print-connection-info.sh" "${narrow_repo}/bin/update-login-banner.sh"
 
-  env TARGET_USER=root AI_TOOLS_OVERRIDE=antigravity AI_CONSOLE_INTEGRATION=false \
+  mkdir -p "${narrow_home}/.gemini/antigravity-cli"
+  printf '{"toolPermission":"ask"}\n' >"${narrow_home}/.gemini/antigravity-cli/settings.json"
+  env TARGET_USER=root AI_TOOLS_OVERRIDE=antigravity AI_TOOLS_UPDATE_ONLY=true AI_CONSOLE_INTEGRATION=false \
     CONFIG_FILE="${narrow_cfg}" REPO_DIR="${narrow_repo}" \
     AGENT_SYSTEM_PROMPT_ROOT_HOME="${narrow_home}" AGENT_SYSTEM_PROMPT_CUSTOM="${tmp}/none.md" \
     CONSTRUCT_EXTERNAL_HOST=vm.example.test AGY_LINK="${narrow_link}/agy" \
@@ -229,6 +231,21 @@ if [[ "${EUID}" -eq 0 ]]; then
   ok "narrowed run updates the chosen agent" grep -qx 'agy update' "${narrow_log}"
   ok "narrowed run does not touch other agents, systemctl, or console integration" \
     sh -c "! grep -Eq '^(claude|codex|opencode|t3|systemctl|npm|console-info|login-banner)' '${narrow_log}'"
+  ok "AI_TOOLS_UPDATE_ONLY preserves existing Antigravity toolPermission" \
+    jq_ok '.toolPermission == "ask"' "${narrow_home}/.gemini/antigravity-cli/settings.json"
+
+  printf '#!/usr/bin/env bash\nexit 7\n' >"${narrow_home}/.local/bin/agy"
+  chmod +x "${narrow_home}/.local/bin/agy"
+  env TARGET_USER=root AI_TOOLS_OVERRIDE=antigravity AI_TOOLS_UPDATE_ONLY=true AI_CONSOLE_INTEGRATION=false \
+    CONFIG_FILE="${narrow_cfg}" REPO_DIR="${narrow_repo}" \
+    AGENT_SYSTEM_PROMPT_ROOT_HOME="${narrow_home}" AGENT_SYSTEM_PROMPT_CUSTOM="${tmp}/none.md" \
+    CONSTRUCT_EXTERNAL_HOST=vm.example.test AGY_LINK="${narrow_link}/agy" \
+    PATH="${narrow_stub}:/usr/bin:/bin" \
+    bash "${narrow_repo}/bin/install-ai-tools.sh" >"${tmp}/narrow-fail.out" 2>&1
+  narrow_fail_rc=$?
+  ok "AI_TOOLS_UPDATE_ONLY fails when the tool updater exits non-zero" test "${narrow_fail_rc}" -ne 0
+  ok "failed AI_TOOLS_UPDATE_ONLY run still preserves toolPermission" \
+    jq_ok '.toolPermission == "ask"' "${narrow_home}/.gemini/antigravity-cli/settings.json"
 fi
 
 printf '\n%d passed, %d failed\n' "${pass}" "${fail}"

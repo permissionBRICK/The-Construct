@@ -112,6 +112,7 @@ done
 step "Updating T3 Code ($(config_value T3CODE_CHANNEL || true), $([[ "${T3CODE_PATCHED}" == "true" ]] && echo "Construct build: $(config_value T3CODE_BUILD_SOURCE)" || echo stock))"
 _install_rc=0
 env TARGET_USER=root AI_TOOLS_OVERRIDE=t3code AI_CONSOLE_INTEGRATION=false \
+  AI_TOOLS_UPDATE_ONLY="${AI_TOOLS_UPDATE_ONLY:-false}" \
   REPO_DIR="${REPO_DIR}" CONFIG_FILE="${CONFIG_FILE}" \
   bash "${REPO_DIR}/bin/install-ai-tools.sh" || _install_rc=$?
 
