@@ -1408,6 +1408,40 @@
         }
       }
     },
+    "/api/vault/approvals/displayed": {
+      "post": {
+        "tags": [
+          "vault"
+        ],
+        "description": "Reports which pending vault approvals and entry requests another app on this device shows inline right now (at most 50; an empty list is a heartbeat), so the tray pop-out holds back while they are shown there.",
+        "operationId": "ReportDisplayedVaultApprovals",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DisplayedVaultRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentProblem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/vault/approvals/{engine}/{id}": {
       "post": {
         "tags": [
@@ -3693,6 +3727,39 @@
           }
         }
       },
+      "DisplayedVaultItem": {
+        "required": [
+          "kind",
+          "engine",
+          "id"
+        ],
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string"
+          },
+          "engine": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          }
+        }
+      },
+      "DisplayedVaultRequest": {
+        "required": [
+          "items"
+        ],
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DisplayedVaultItem"
+            }
+          }
+        }
+      },
       "EngineProbe": {
         "required": [
           "url",
@@ -5103,6 +5170,10 @@
               "integer"
             ],
             "format": "int32"
+          },
+          "displayedElsewhere": {
+            "type": "boolean",
+            "default": false
           }
         }
       },
@@ -5173,6 +5244,10 @@
           "expiresAt": {
             "type": "integer",
             "format": "int64"
+          },
+          "displayedElsewhere": {
+            "type": "boolean",
+            "default": false
           }
         }
       },

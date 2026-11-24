@@ -248,13 +248,18 @@ public sealed partial class DeviceAgent
         foreach (var (engine, body) in answered)
         foreach (var a in body["approvals"] as JsonArray ?? [])
         {
-            approvals.Add(new VaultApprovalItem(engine.Id, engine.Name, Str(a, "id"), Str(a, "vm"), Str(a, "op"), Str(a, "title"), Str(a, "message"),
+            var id = Str(a, "id");
+            approvals.Add(new VaultApprovalItem(engine.Id, engine.Name, id, Str(a, "vm"), Str(a, "op"), Str(a, "title"), Str(a, "message"),
                 Str(a, "action"), (a?["names"] as JsonArray ?? []).Select(n => n?.GetValue<string>() ?? "").ToArray(), Str(a, "reason"), Str(a, "source"),
-                Long(a, "createdAt"), Long(a, "deadline"), Int(a, "uses"), Int(a, "ttlSeconds")));
+                Long(a, "createdAt"), Long(a, "deadline"), Int(a, "uses"), Int(a, "ttlSeconds"),
+                VaultDisplay.IsSuppressed(VaultDisplayTracker.KindApproval, engine.Id, id)));
         }
 
         return new VaultApprovalsView(approvals.OrderBy(a => a.CreatedAt).ToArray(), Unanswered(answered));
     }
+
+    /// <summary>Records which pending vault approvals and entry requests another app on this device shows inline.</summary>
+    public void ReportDisplayedVaultItems(DisplayedVaultRequest? request) => VaultDisplay.Report(request);
 
     /// <summary>
     /// Allows or denies one approval. On an engine in <c>locked</c> mode an allow first unlocks the VM that asked, so
@@ -360,8 +365,10 @@ public sealed partial class DeviceAgent
         foreach (var (engine, body) in answered)
         foreach (var r in body["requests"] as JsonArray ?? [])
         {
-            requests.Add(new VaultEntryRequestItem(engine.Id, engine.Name, Str(r, "id"), Str(r, "vm"), Str(r, "name"), Str(r, "description"),
-                Str(r, "reason"), Str(r, "source"), Long(r, "createdAt"), Long(r, "expiresAt")));
+            var id = Str(r, "id");
+            requests.Add(new VaultEntryRequestItem(engine.Id, engine.Name, id, Str(r, "vm"), Str(r, "name"), Str(r, "description"),
+                Str(r, "reason"), Str(r, "source"), Long(r, "createdAt"), Long(r, "expiresAt"),
+                VaultDisplay.IsSuppressed(VaultDisplayTracker.KindEntryRequest, engine.Id, id)));
         }
 
         return new VaultEntryRequestsView(requests.OrderBy(r => r.CreatedAt).ToArray(), Unanswered(answered));
@@ -576,8 +583,10 @@ public sealed record EntryInput([property: ConstructSecret] string Value, string
 
 /// <param name="Uses">The uses the VM asked for (null: any number until the lease ends).</param>
 /// <param name="TtlSeconds">The lease duration the VM asked for (null: the engine's default, one hour); the user may choose another when allowing.</param>
+/// <param name="DisplayedElsewhere">Another app on this device (such as T3 Code Desktop) recently reported showing this approval inline.</param>
 public sealed record VaultApprovalItem(string Engine, string EngineName, string Id, string Vm, string Op, string Title, string Message, string Action,
-    IReadOnlyList<string> Names, string Reason, string Source, long CreatedAt, long Deadline, int? Uses = null, int? TtlSeconds = null);
+    IReadOnlyList<string> Names, string Reason, string Source, long CreatedAt, long Deadline, int? Uses = null, int? TtlSeconds = null,
+    bool DisplayedElsewhere = false);
 
 /// <param name="Unreachable">Engines that did not answer: their requests are not in the list.</param>
 public sealed record VaultApprovalsView(IReadOnlyList<VaultApprovalItem> Approvals, IReadOnlyList<string> Unreachable);
@@ -586,8 +595,9 @@ public sealed record VaultApprovalsView(IReadOnlyList<VaultApprovalItem> Approva
 public sealed record ApprovalDecision(string Decision, int? TtlSeconds = null);
 
 /// <param name="Description">Written by the agent that asked: shown as its plain text.</param>
+/// <param name="DisplayedElsewhere">Another app on this device (such as T3 Code Desktop) recently reported showing this request inline.</param>
 public sealed record VaultEntryRequestItem(string Engine, string EngineName, string Id, string Vm, string Name, string Description, string Reason,
-    string Source, long CreatedAt, long ExpiresAt);
+    string Source, long CreatedAt, long ExpiresAt, bool DisplayedElsewhere = false);
 
 public sealed record VaultEntryRequestsView(IReadOnlyList<VaultEntryRequestItem> Requests, IReadOnlyList<string> Unreachable);
 

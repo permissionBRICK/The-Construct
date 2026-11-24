@@ -59,12 +59,16 @@ public sealed partial class DeviceAgent : IDisposable
 
         Events = new AgentEvents();
         Streams = new EngineStreams(Events, EngineClientFor, () => Engines().Select(e => e.Id), _stopping.Token) { Connected = OnEngineConnected };
+        VaultDisplay = new VaultDisplayTracker(options.Time);
     }
 
     public AgentEvents Events { get; }
 
     /// <summary>The engines' change streams on <see cref="Events"/>; the host starts them (<see cref="EngineStreams.Sync"/>).</summary>
     public EngineStreams Streams { get; }
+
+    /// <summary>Tracks which pending vault approvals and entry requests another app on this device shows inline.</summary>
+    public VaultDisplayTracker VaultDisplay { get; }
 
     public string DeviceId => _key.PublicKey.Id;
 

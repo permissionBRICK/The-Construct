@@ -14,18 +14,22 @@ namespace Construct.Agent.Windows;
 /// </summary>
 internal sealed class TrayShell : ApplicationContext, IAgentShell
 {
+    private const int IdleVaultPollMs = 10_000;
+    private const int DeferredVaultPollMs = 2_000;
     private readonly Control _dispatcher = new();
     private readonly NotifyIcon _tray = new() { Visible = true, Text = "Construct" };
     private readonly ContextMenuStrip _menu = new();
     private readonly System.Windows.Forms.Timer _clickTimer = new() { Interval = SystemInformation.DoubleClickTime };
-    private readonly System.Windows.Forms.Timer _vaultTimer = new() { Interval = 10_000 };
+    private readonly System.Windows.Forms.Timer _vaultTimer = new() { Interval = IdleVaultPollMs };
     private readonly System.Windows.Forms.Timer _placeTimer = new() { Interval = 2_000 };
     private readonly PopupGesture _gesture = new();
     private readonly Dictionary<string, AgentWindow> _windows = [];
     // The content height each floating surface last reported (CSS pixels): it opens at that size (finding 7).
     private readonly Dictionary<string, double> _contentHeight = [];
-    private readonly HashSet<string> _seenRequests = [];
+    private readonly HashSet<string> _seenFiles = [];
     private readonly HashSet<string> _seenNotices = [];
+    private DisplayedVaultItem[] _lastCandidates = [];
+    private string[] _lastUnreachable = [];
     private readonly DeviceAgent _agent;
     private readonly DeviceServices _device;
     private readonly Uri _origin;
@@ -195,27 +199,48 @@ internal sealed class TrayShell : ApplicationContext, IAgentShell
     /// <summary>Asks the engines for vault requests and lost sign-ins; a new one, with both surfaces closed, pops its card alone.</summary>
     private async Task PollVaultAsync()
     {
-        if (_polling || !_agent.Device().Registered) return;
+        if (!_agent.Device().Registered) return;
+        // Re-evaluate already known deferred requests even if an unrelated slow engine poll is still in flight.
+        if (_polling)
+        {
+            EvaluateKnownCandidates();
+            return;
+        }
+
         _polling = true;
         try
         {
             var approvals = Task.Run(() => _agent.ApprovalsAsync(CancellationToken.None));
             var entries = Task.Run(() => _agent.EntryRequestsAsync(CancellationToken.None));
             var files = Task.Run(() => _agent.VaultFilesAsync(CancellationToken.None));
-            await Task.WhenAll(approvals, entries, files);
-            var ids = new List<string>();
-            ids.AddRange(approvals.Result.Approvals.Select(a => "a:" + a.Engine + "/" + a.Id));
-            ids.AddRange(entries.Result.Requests.Select(r => "e:" + r.Engine + "/" + r.Id));
+            var noticesTask = Task.Run(() => _agent.AgentNoticesAsync(CancellationToken.None));
+            await Task.WhenAll(approvals, entries, files, noticesTask);
+            var displayedCandidates = new List<DisplayedVaultItem>(approvals.Result.Approvals.Count + entries.Result.Requests.Count);
+            displayedCandidates.AddRange(approvals.Result.Approvals.Select(a => DisplayedVaultItem.Approval(a.Engine, a.Id)));
+            displayedCandidates.AddRange(entries.Result.Requests.Select(r => DisplayedVaultItem.EntryRequest(r.Engine, r.Id)));
+            var unreachable = approvals.Result.Unreachable.Concat(entries.Result.Unreachable).ToArray();
+            _lastCandidates = displayedCandidates.ToArray();
+            _lastUnreachable = unreachable;
+
+            var evaluation = _agent.VaultDisplay.Evaluate(_lastCandidates, _lastUnreachable);
+            var nextInterval = evaluation.Deferred.Count > 0 ? DeferredVaultPollMs : IdleVaultPollMs;
+            if (_vaultTimer.Interval != nextInterval) _vaultTimer.Interval = nextInterval;
             // A file a scrub found still holding a secret waits until answered: it pops once per agent run.
-            ids.AddRange(files.Result.Files.Select(f => "f:" + f.Engine + "/" + f.Id));
             // Ids are never forgotten during a run: one whose engine was briefly out of reach must not pop again.
-            var fresh = ids.Where(_seenRequests.Add).ToArray();
+            var freshFiles = files.Result.Files.Select(f => "f:" + f.Engine + "/" + f.Id).Where(_seenFiles.Add).ToArray();
             // A lost sign-in pops once: its id carries the time of the loss, so only a new loss pops again.
-            var notices = (await Task.Run(() => _agent.AgentNoticesAsync(CancellationToken.None))).Notices
+            var notices = noticesTask.Result.Notices
                 .Select(n => "n:" + n.Engine + "/" + n.Vm + "/" + n.Agent + "@" + n.At).Where(_seenNotices.Add).ToArray();
             // The open window shows the card on every page, but only to someone looking at it: behind other windows or
             // minimized, the card pops alone all the same (finding 43).
-            if ((fresh.Length > 0 || notices.Length > 0) && !Visible("pop") && !InFront("win"))
+            if (Visible("pop") || InFront("win"))
+            {
+                if (evaluation.NewlyEligible.Count > 0) _agent.VaultDisplay.MarkPopped(evaluation.NewlyEligible);
+                return;
+            }
+
+            var poppedApprovals = evaluation.NewlyEligible.Count > 0 ? _agent.VaultDisplay.MarkPopped(evaluation.NewlyEligible) : [];
+            if (poppedApprovals.Count > 0 || freshFiles.Length > 0 || notices.Length > 0)
             {
                 Show("alone", null);
                 _attention = true;
@@ -228,6 +253,27 @@ internal sealed class TrayShell : ApplicationContext, IAgentShell
         finally
         {
             _polling = false;
+        }
+    }
+
+    private void EvaluateKnownCandidates()
+    {
+        if (_lastCandidates.Length == 0) return;
+        var evaluation = _agent.VaultDisplay.Evaluate(_lastCandidates, _lastUnreachable);
+        var nextInterval = evaluation.Deferred.Count > 0 ? DeferredVaultPollMs : IdleVaultPollMs;
+        if (_vaultTimer.Interval != nextInterval) _vaultTimer.Interval = nextInterval;
+        if (evaluation.NewlyEligible.Count == 0) return;
+        if (Visible("pop") || InFront("win"))
+        {
+            _agent.VaultDisplay.MarkPopped(evaluation.NewlyEligible);
+            return;
+        }
+
+        if (_agent.VaultDisplay.MarkPopped(evaluation.NewlyEligible).Count > 0)
+        {
+            Show("alone", null);
+            _attention = true;
+            DrawIcon();
         }
     }
 

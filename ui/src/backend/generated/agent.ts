@@ -523,6 +523,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/vault/approvals/displayed": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Reports which pending vault approvals and entry requests another app on this device shows inline right now (at most 50; an empty list is a heartbeat), so the tray pop-out holds back while they are shown there. */
+        post: operations["ReportDisplayedVaultApprovals"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/vault/approvals/{engine}/{id}": {
         parameters: {
             query?: never;
@@ -1262,6 +1279,14 @@ export interface components {
         DismissNoticeRequest: {
             key: string;
         };
+        DisplayedVaultItem: {
+            kind: string;
+            engine: string;
+            id: string;
+        };
+        DisplayedVaultRequest: {
+            items: components["schemas"]["DisplayedVaultItem"][];
+        };
         EngineProbe: {
             url: string;
             pin: string;
@@ -1589,6 +1614,8 @@ export interface components {
             uses?: null | number;
             /** Format: int32 */
             ttlSeconds?: null | number;
+            /** @default false */
+            displayedElsewhere: boolean;
         };
         VaultApprovalsView: {
             approvals: components["schemas"]["VaultApprovalItem"][];
@@ -1607,6 +1634,8 @@ export interface components {
             createdAt: number;
             /** Format: int64 */
             expiresAt: number;
+            /** @default false */
+            displayedElsewhere: boolean;
         };
         VaultEntryRequestsView: {
             requests: components["schemas"]["VaultEntryRequestItem"][];
@@ -2778,6 +2807,37 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["VaultApprovalsView"];
                 };
+            };
+            /** @description An error. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["AgentProblem"];
+                };
+            };
+        };
+    };
+    ReportDisplayedVaultApprovals: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DisplayedVaultRequest"];
+            };
+        };
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description An error. */
             default: {

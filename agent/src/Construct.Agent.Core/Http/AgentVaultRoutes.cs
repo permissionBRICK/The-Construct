@@ -52,6 +52,13 @@ public static class AgentVaultRoutes
         vault.MapGet("/approvals", async (DeviceAgent agent, CancellationToken ct) => TypedResults.Ok(await agent.ApprovalsAsync(ct)))
             .WithName("ListVaultApprovals");
 
+        vault.MapPost("/approvals/displayed", (DeviceAgent agent, [FromBody] DisplayedVaultRequest request) =>
+        {
+            agent.ReportDisplayedVaultItems(request);
+            return TypedResults.NoContent();
+        }).WithName("ReportDisplayedVaultApprovals")
+            .WithDescription("Reports which pending vault approvals and entry requests another app on this device shows inline right now (at most 50; an empty list is a heartbeat), so the tray pop-out holds back while they are shown there.");
+
         vault.MapPost("/approvals/{engine}/{id}", async (DeviceAgent agent, string engine, string id, [FromBody] ApprovalDecision decision, CancellationToken ct) =>
         {
             if (decision.Decision is not ("allow" or "deny")) throw new AgentFailure(400, "invalid-decision", "allow or deny.");
