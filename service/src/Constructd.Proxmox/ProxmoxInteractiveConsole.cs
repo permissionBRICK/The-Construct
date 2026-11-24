@@ -25,7 +25,7 @@ public sealed class ProxmoxInteractiveConsole : IInteractiveConsole, IAsyncDispo
         options.Proxmox.ValidateConsolePorts(options.SshForwardPorts, options.AppForwardPorts);
         this.options = options; this.sessions = sessions; this.clock = clock; this.streaming = streaming;
         commands = new(runner, options);
-        address = IPAddress.Parse(options.ListenAddress);
+        address = Constructd.Core.Logic.DualStackListener.ParseListenAddress(options.ListenAddress);
     }
 
     public async Task<ConsoleConnection> ConnectAsync(ConsoleSession session, CancellationToken ct)
@@ -77,9 +77,8 @@ public sealed class ProxmoxInteractiveConsole : IInteractiveConsole, IAsyncDispo
         for (var port = options.Proxmox.ConsolePorts.Start; port <= options.Proxmox.ConsolePorts.End; port++)
         {
             if (proxies.Values.Any(p => p.Connection.Port == port)) continue;
-            var listener = new TcpListener(address, port);
-            try { listener.Start(1); return listener; }
-            catch (SocketException) { listener.Stop(); }
+            try { return Constructd.Core.Logic.DualStackListener.Start(address, port, backlog: 1); }
+            catch (SocketException) { }
         }
         throw new ConsoleTransportException();
     }

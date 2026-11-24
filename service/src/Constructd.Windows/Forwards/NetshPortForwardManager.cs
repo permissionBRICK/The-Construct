@@ -119,7 +119,8 @@ public sealed class NetshPortForwardManager : IPortForwardManager
 
         _sshPorts = new PortAllocator(options.SshForwardPorts.Start, options.SshForwardPorts.End);
         _appPorts = new PortAllocator(options.AppForwardPorts.Start, options.AppForwardPorts.End);
-        _listenAddress = ArgumentGuard.IPv4(options.ListenAddress, "Constructd:ListenAddress");
+        var listenAddress = string.Equals(options.ListenAddress?.Trim(), "*", StringComparison.Ordinal) ? "0.0.0.0" : options.ListenAddress;
+        _listenAddress = ArgumentGuard.IPv4(listenAddress, "Constructd:ListenAddress");
         _portAvailable = portAvailable ?? (port => CanBindPort(_listenAddress, port));
 
         // Two independent allocators over overlapping ranges would each consider a shared port free and

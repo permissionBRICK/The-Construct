@@ -59,10 +59,11 @@ if (OperatingSystem.IsWindows())
 
 if (!string.IsNullOrWhiteSpace(options.ListenUrl))
 {
+    var listenUrls = Constructd.Core.Logic.ListenUrls.Normalize(options.ListenUrl);
     // Plus the loopback endpoint the HTTPS shared port relays the vault pages to (docs/https-forwards.md).
     builder.WebHost.UseUrls(VaultRelayEndpoint.ListenUrl(options) is { } vaultRelayUrl
-        ? $"{options.ListenUrl};{vaultRelayUrl}"
-        : options.ListenUrl);
+        ? $"{listenUrls};{vaultRelayUrl}"
+        : listenUrls);
 }
 
 ConfigureTls(builder, options);

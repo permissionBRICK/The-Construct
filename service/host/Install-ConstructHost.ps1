@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
     Install (or update) the constructd host service on this Windows machine.
@@ -519,11 +519,15 @@ function Test-PublicHostPattern {
 }
 
 function Get-ListenPort {
-    <# The port the API listens on, taken from -ListenUrl. #>
+    <# The port the API listens on, taken from -ListenUrl (including wildcard +/*/[::]). #>
     param([Parameter(Mandatory = $true)][string]$Url)
 
+    if ($Url.Contains(';')) {
+        throw "-ListenUrl must be a single absolute URL like https://0.0.0.0:7462; got '$Url'."
+    }
+    $normalized = $Url.Trim().Replace('://*', '://localhost').Replace('://+', '://localhost')
     $uri = $null
-    if (-not [System.Uri]::TryCreate($Url, [System.UriKind]::Absolute, [ref]$uri)) {
+    if (-not [System.Uri]::TryCreate($normalized, [System.UriKind]::Absolute, [ref]$uri)) {
         throw "-ListenUrl must be an absolute URL like https://0.0.0.0:7462; got '$Url'."
     }
     if ($uri.Port -le 0) { throw "-ListenUrl must include a port; got '$Url'." }

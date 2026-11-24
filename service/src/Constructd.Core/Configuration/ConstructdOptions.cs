@@ -49,7 +49,7 @@ public sealed class ConstructdOptions
     public PersistenceMode EffectivePersistence =>
         Persistence ?? (Fake ? PersistenceMode.Memory : PersistenceMode.Sqlite);
 
-    /// <summary>URL the service listens on, e.g. <c>https://0.0.0.0:7462</c>.</summary>
+    /// <summary>URL the service listens on, e.g. <c>https://0.0.0.0:7462</c> (wildcard <c>0.0.0.0</c> binds dual-stack IPv6 + IPv4 where supported).</summary>
     public string? ListenUrl { get; set; }
 
     /// <summary>PFX path for the TLS certificate (alternative to <see cref="CertThumbprint"/>).</summary>
