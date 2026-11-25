@@ -151,11 +151,13 @@ function icacls.exe { $script:icacls += ,@($args); $global:LASTEXITCODE = 0 }
 $temp = Join-Path ([IO.Path]::GetTempPath()) ('solo-key-' + [guid]::NewGuid().ToString('n'))
 try {
     $keys = Join-Path $temp 'data/keys'
+    $keyPath = Join-Path $keys 'bootstrap_ed25519'
     $pub = Install-ConstructBootstrapKey -KeysDir $keys
     ok "without an old key a pair is generated in the data directory" ($script:keygen -eq 1 -and $pub -eq (Join-Path $keys 'bootstrap_ed25519.pub'))
-    ok "the private key is given to LocalSystem" ($script:icacls.Count -eq 1 -and $script:icacls[0][0] -eq (Join-Path $keys 'bootstrap_ed25519') -and ($script:icacls[0] -join ' ') -match '/setowner \*S-1-5-18$')
+    ok "the private key's explicit ACL is reset to inherit the hardened data directory" ($script:icacls.Count -eq 2 -and $script:icacls[0][0] -eq $keyPath -and ($script:icacls[0] -join ' ') -match '/reset$')
+    ok "the private key is given to LocalSystem" ($script:icacls.Count -eq 2 -and $script:icacls[1][0] -eq $keyPath -and ($script:icacls[1] -join ' ') -match '/setowner \*S-1-5-18$')
     $null = Install-ConstructBootstrapKey -KeysDir $keys
-    ok "a re-run keeps the generated pair" ($script:keygen -eq 1)
+    ok "a re-run keeps the generated pair and re-applies its ACL and owner" ($script:keygen -eq 1 -and $script:icacls.Count -eq 4 -and ($script:icacls[2] -join ' ') -match '/reset$' -and ($script:icacls[3] -join ' ') -match '/setowner \*S-1-5-18$')
     $old = Join-Path $temp 'client/keys/bootstrap_ed25519'
     New-Item -ItemType Directory -Path (Split-Path -Parent $old) -Force | Out-Null
     Set-Content -LiteralPath $old -Value 'old-private'; Set-Content -LiteralPath "$old.pub" -Value 'old-public'

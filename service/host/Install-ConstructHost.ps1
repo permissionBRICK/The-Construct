@@ -1112,7 +1112,13 @@ function Install-ConstructBootstrapKey {
     } elseif (-not (Test-Path -LiteralPath $key)) {
         Invoke-ConstructSshKeygen -Path $key
     }
-    # The service's ssh runs as LocalSystem and refuses a private key another account owns.
+    # Win32 ssh-keygen writes a protected DACL granting the installing user Modify
+    # alongside SYSTEM and Administrators. The service's ssh runs as LocalSystem and
+    # refuses a private key another account owns or can access, so clear explicit
+    # ACEs to inherit the hardened data directory's SYSTEM + Administrators ACL,
+    # then give ownership to LocalSystem.
+    & icacls.exe $key /reset | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "icacls could not reset the bootstrap key ACL (exit $LASTEXITCODE)." }
     & icacls.exe $key /setowner '*S-1-5-18' | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "icacls could not give the bootstrap key to LocalSystem (exit $LASTEXITCODE)." }
     return "$key.pub"
