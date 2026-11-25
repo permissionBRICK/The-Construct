@@ -151,4 +151,52 @@ public sealed class CreateWithSettingsTests
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
         Assert.Null(await h.App.Vms.GetAsync("bad", default));
     }
+
+    [Fact]
+    public async Task Create_without_service_url_populates_the_engines_service_identity()
+    {
+        await using var h = await StartAsync();
+        // Mirrors the UI's New VM request: desired settings omit serviceUrl and serviceCaB64.
+        var response = await CreateAsync(h, "fresh", new { projects = Array.Empty<string>(), settings = new { t3Code = "true" } });
+        Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
+        var job = await h.Client.WaitForJobAsync((await response.ReadAsync<JobAcceptedResponse>()).JobId);
+        Assert.True(JobState.Succeeded == job.State, job.Error);
+
+        var provision = h.Ssh.Calls.Single(c => c.Command.Contains("bin/provision.sh", StringComparison.Ordinal));
+        Assert.Equal("https://buildbox.test:7462", FakeSshRunner.Variable(provision.Command, "CONSTRUCT_SERVICE_URL"));
+        Assert.Equal("fresh", FakeSshRunner.Variable(provision.Command, "CONSTRUCT_INSTANCE_NAME"));
+
+        var stored = await (await h.Client.GetAsync("/api/v1/vms/fresh/desired")).ReadAsync<VmDesiredStateResponse>();
+        Assert.Equal("https://buildbox.test:7462", stored.Desired!.Settings.ServiceUrl);
+        var status = await (await h.Client.GetAsync("/api/v1/vms/fresh/provision-status")).ReadAsync<ProvisionStatusResponse>();
+        Assert.False(status.SettingsChanged);
+    }
+
+    [Fact]
+    public async Task Reprovisioning_a_vm_missing_service_url_backfills_it_and_issues_a_vm_token()
+    {
+        await using var h = await StartAsync();
+        // Simulate a VM created before the fix whose stored desired state has no ServiceUrl.
+        var desiredStore = h.App.Service<IVmDesiredStateSource>();
+        var vm = (await h.App.Vms.GetAsync(ProvisionHarness.Vm, default))!;
+        var bare = new VmDesiredState(["web"], new ProvisionSettings { T3Code = "true" });
+        await desiredStore.SetDesiredAsync(vm.Name, new StoredDesiredState(bare, Constructd.Core.Logic.ProvisionScript.DesiredHash(bare), DateTimeOffset.UtcNow, "alice", vm.Created), default);
+        h.Ssh.Calls.Clear();
+
+        var job = await h.Client.WaitForJobAsync((await (await h.Client.PostJsonAsync($"/api/v1/vms/{vm.Name}/jobs",
+            new { kind = "provision", requestId = "backfill-1", commit = ProvisionHarness.Commit })).ReadAsync<VmJobAcceptedResponse>()).JobId);
+        Assert.True(JobState.Succeeded == job.State, job.Error);
+
+        var provision = h.Ssh.Calls.Single(c => c.Command.Contains("bin/provision.sh", StringComparison.Ordinal));
+        Assert.Equal("https://buildbox.test:7462", FakeSshRunner.Variable(provision.Command, "CONSTRUCT_SERVICE_URL"));
+        var stage = h.Ssh.Calls.Single(c => c.Command.StartsWith("umask 077; cat > /tmp/.construct-provision-secrets.", StringComparison.Ordinal));
+        Assert.Contains("CONSTRUCT_VM_TOKEN_B64=", stage.StandardInput, StringComparison.Ordinal);
+
+        // A second reprovision now has ServiceUrl stored and does not rotate the VM token again.
+        h.Ssh.Calls.Clear();
+        var second = await h.Client.WaitForJobAsync((await (await h.Client.PostJsonAsync($"/api/v1/vms/{vm.Name}/jobs",
+            new { kind = "provision", requestId = "backfill-2", commit = ProvisionHarness.Commit })).ReadAsync<VmJobAcceptedResponse>()).JobId);
+        Assert.True(JobState.Succeeded == second.State, second.Error);
+        Assert.DoesNotContain(h.Ssh.Calls, c => c.StandardInput?.Contains("CONSTRUCT_VM_TOKEN_B64=", StringComparison.Ordinal) == true);
+    }
 }

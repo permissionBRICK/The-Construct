@@ -46,6 +46,13 @@ public interface IDevicePlatform
     /// <summary>Install and update support for Construct's patched T3 Code Desktop app; null on platforms without it.</summary>
     IT3DesktopPlatform? T3Desktop => null;
 
+    /// <summary>
+    /// Trusts a VM's self-signed T3 Code HTTPS CA certificate (<c>/etc/construct/t3code-ca.crt</c>) on this device,
+    /// storing it under the T3 artifacts directory and importing it into the OS Root store when missing or rotated.
+    /// Best-effort: platforms without a local trust store do nothing.
+    /// </summary>
+    Task TrustT3CaAsync(string vmName, string pem, CancellationToken ct) => Task.CompletedTask;
+
     /// <summary>Whether the agent starts with the user's session; null when this platform cannot say.</summary>
     bool? StartWithOs { get; }
 

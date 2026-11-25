@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 <#
     Tests for the Hyper-V driver's own PowerShell, the files the service ships in its
     package (service/src/Constructd.Windows/HyperV/Scripts, copied to hyperv\ next to
@@ -138,11 +138,11 @@ function Set-VMProcessor { param($VMName, $VM, $ExposeVirtualizationExtensions, 
 function Set-VMFirmware { param($VMName, $EnableSecureBoot, $BootOrder, $ErrorAction) }
 function Get-VMNetworkAdapter { param($VMName, $VM, $ErrorAction) }
 $script:setVm = @()
-New-ConstructVm -Descriptor @{ Name = 'agent-vm'; MemoryGB = 4; DiskGB = 40; ProcessorCount = 2; Nested = $false; AutomaticStartAction = 'Nothing' } 6>$null
+New-ConstructVm -Descriptor @{ Name = 'agent-vm'; MemoryGB = 4; DiskGB = 40; ProcessorCount = 2; Nested = $false; AutomaticStartAction = 'Nothing'; VhdPath = (Join-Path ([IO.Path]::GetTempPath()) 'agent-vm.vhdx') } 6>$null
 ok "a primary is created with the descriptor's AutomaticStartAction" ($script:setVm.Count -eq 1 -and $script:setVm[0].AutomaticStartAction -eq 'Nothing')
 
 function Assert-ConstructChildHardware { param($h) }
-function Get-ConstructChildDiskPath { param($Name, $VhdPath) 'C:\vms\child.vhdx' }
+function Get-ConstructChildDiskPath { param($Name, $VhdPath) Join-Path ([IO.Path]::GetTempPath()) 'child.vhdx' }
 function Get-ConstructChildVmObject { param($Name) $null }
 function Get-VMSwitch { param($Name, $ErrorAction) [pscustomobject]@{ Name = $Name } }
 # Joined with Join-Path, which needs a drive this machine has.
@@ -158,6 +158,48 @@ New-ConstructChildVm -Descriptor ([pscustomobject]@{ name = 'child'; operationId
 ok "a child is created with AutomaticStartAction Nothing: a host boot never brings it back" (
     $script:setVm.Count -ge 1 -and @($script:setVm | Where-Object { $_.Name -eq 'child' -and $_.AutomaticStartAction -eq 'Nothing' }).Count -eq 1 -and
     @($script:setVm | Where-Object { $_.AutomaticStartAction -and $_.AutomaticStartAction -ne 'Nothing' }).Count -eq 0)
+
+# ── Storage relocation (Move-ConstructVmStorage) ─────────────────────────────
+Write-Host ""
+Write-Host "=== Storage relocation ===" -ForegroundColor Cyan
+& {
+    $movedCalls = New-Object 'System.Collections.Generic.List[object]'
+    $attachedDisk = 'C:\ProgramData\Microsoft\Windows\Virtual Hard Disks\ki-vm.vhdx'
+    $chainDisks = @($attachedDisk)
+    function Get-VM { param($Name, $ErrorAction) [pscustomobject]@{ Name = $Name; State = 'Off' } }
+    function Get-VMHardDiskDrive { param($VM, $ErrorAction) @([pscustomobject]@{ Path = $attachedDisk }) }
+    function Get-VhdChain { param($Path) $chainDisks }
+    function Get-VMSnapshot { param($VM, $ErrorAction) @() }
+    function Get-Volume { param($FilePath, $ErrorAction) throw 'not on Windows' }
+    function Test-Path { param([string]$LiteralPath) $LiteralPath -eq 'D:\VirtualHardDisks' }
+    function New-Item { param($ItemType, [switch]$Force, $Path, $ErrorAction) }
+    function Move-VMStorage {
+        param([string]$VMName, [hashtable[]]$VHDs, [string]$SnapshotFilePath, $ErrorAction)
+        $movedCalls.Add([pscustomobject]@{ VMName = $VMName; VHDs = $VHDs; SnapshotFilePath = $SnapshotFilePath })
+    }
+
+    # Plain disk (no checkpoint): SourceFilePath and DestinationFilePath are raw [string]s with matching leaf.
+    $res = Move-ConstructVmStorage -Name 'ki-vm' -DestinationDir 'D:\VirtualHardDisks'
+    ok "Move-ConstructVmStorage invokes Move-VMStorage once" ($movedCalls.Count -eq 1)
+    $entry = $movedCalls[0].VHDs[0]
+    ok "SourceFilePath and DestinationFilePath are raw .NET strings" (
+        $entry['SourceFilePath'].GetType().FullName -eq 'System.String' -and
+        $entry['DestinationFilePath'].GetType().FullName -eq 'System.String')
+    ok "DestinationFilePath keeps the source filename in the target directory" (
+        $entry['DestinationFilePath'] -eq 'D:\VirtualHardDisks\ki-vm.vhdx' -and
+        $res.Moved -eq $true -and $res.NewDiskPath -eq 'D:\VirtualHardDisks\ki-vm.vhdx')
+
+    # Checkpointed disk (.avhdx attached, .vhdx base): Move-VMStorage gets matching .avhdx leaf while result reports new base .vhdx.
+    $movedCalls.Clear()
+    $attachedDisk = 'C:\ProgramData\Microsoft\Windows\Virtual Hard Disks\ki-vm_ABCD.avhdx'
+    $chainDisks = @($attachedDisk, 'C:\ProgramData\Microsoft\Windows\Virtual Hard Disks\ki-vm.vhdx')
+    $resCkpt = Move-ConstructVmStorage -Name 'ki-vm' -DestinationDir 'D:\VirtualHardDisks'
+    $entryCkpt = $movedCalls[0].VHDs[0]
+    ok "checkpointed disk passes matching .avhdx filename to Move-VMStorage and returns base .vhdx" (
+        $entryCkpt['SourceFilePath'] -eq 'C:\ProgramData\Microsoft\Windows\Virtual Hard Disks\ki-vm_ABCD.avhdx' -and
+        $entryCkpt['DestinationFilePath'] -eq 'D:\VirtualHardDisks\ki-vm_ABCD.avhdx' -and
+        $resCkpt.NewDiskPath -eq 'D:\VirtualHardDisks\ki-vm.vhdx')
+}
 
 Write-Host ""
 Write-Host "hyperv-scripts: $($script:pass) passed, $($script:fail) failed"

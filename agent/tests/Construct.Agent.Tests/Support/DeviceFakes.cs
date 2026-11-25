@@ -60,6 +60,14 @@ public sealed class FakePlatform : IDevicePlatform, IAgentLauncher, IDisposable
         return Task.FromResult(T3Desktop);
     }
 
+    public ConcurrentQueue<(string VmName, string Pem)> TrustedT3Cas { get; } = new();
+
+    public Task TrustT3CaAsync(string vmName, string pem, CancellationToken ct)
+    {
+        TrustedT3Cas.Enqueue((vmName, pem));
+        return Task.CompletedTask;
+    }
+
     public bool? StartWithOs { get; private set; } = false;
 
     public void SetStartWithOs(bool on, string executable) => StartWithOs = on;
