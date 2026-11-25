@@ -273,6 +273,10 @@ public sealed class AgentSetup(ISetupPlatform platform, HttpClient web, HttpClie
         // The channel this install came from, unless the agent has its own settings already.
         var device = Path.Combine(platform.AgentHome, "device.json");
         if (!File.Exists(device)) WriteJson(device, json => json.WriteString("channel", channel));
+        // Stamp fresh installs so leftover or later files under %LOCALAPPDATA%\The-Construct never trigger legacy migration.
+        var bridge = Path.Combine(platform.AgentHome, "bridge.json");
+        if (!File.Exists(bridge) && !File.Exists(Path.Combine(platform.AgentHome, "state.json")) && !HasLegacyInstall())
+            WriteJson(bridge, json => json.WriteString("stage", "fresh"));
 
         // A move whose old install runs a VM on this PC installs the engine here: its package comes now, in this console,
         // so the window's first step only installs it (the agent's engine step reuses a file with the manifest's hash).
@@ -307,6 +311,30 @@ public sealed class AgentSetup(ISetupPlatform platform, HttpClient web, HttpClie
                 && !i.Name.StartsWith("construct-", StringComparison.OrdinalIgnoreCase)
                 && (Text(i.Value, "backend")?.ToLowerInvariant() ?? "hyperv-local") == "hyperv-local");
         }
+
+        try
+        {
+            return Directory.Exists(root) && Directory.EnumerateDirectories(root).SelectMany(Directory.EnumerateDirectories)
+                .Any(folder => File.Exists(Path.Combine(folder, ".construct-settings.json")));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return false; }
+    }
+
+    /// <summary>
+    /// True when anything of the old client exists on this PC (matching <c>LegacyState.Found</c>).
+    /// Artifacts written by the new agent under <c>%LOCALAPPDATA%\The-Construct\artifacts\</c> do not count.
+    /// </summary>
+    private bool HasLegacyInstall()
+    {
+        var root = Path.Combine(platform.LocalAppData, "The-Construct");
+        if (File.Exists(Path.Combine(platform.LocalAppData, "The-Construct-Vault", "vault.dat"))
+            || File.Exists(Path.Combine(root, "instances.json"))
+            || Directory.Exists(Path.Combine(root, "config"))
+            || Directory.Exists(Path.Combine(root, "backup"))
+            || Directory.Exists(Path.Combine(root, "instances"))
+            || Directory.Exists(Path.Combine(root, "remote"))
+            || Directory.Exists(Path.Combine(root, "companion")))
+            return true;
 
         try
         {
