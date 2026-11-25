@@ -73,6 +73,11 @@ public sealed class EngineSetupTests : IAsyncLifetime
         var script = Encoding.Unicode.GetString(Convert.FromBase64String(arguments[^1]));
         Assert.Contains("ResultFile = $p.resultFile", script, StringComparison.Ordinal);
         Assert.Contains("is a link; remove it", script, StringComparison.Ordinal);
+        Assert.Contains("Stop-Service -Name 'constructd' -Force", script, StringComparison.Ordinal);
+        Assert.True(script.IndexOf("Stop-Service -Name 'constructd' -Force", StringComparison.Ordinal) < script.IndexOf("Remove-Item -LiteralPath $dir -Recurse -Force", StringComparison.Ordinal),
+            "An already-running constructd must be stopped before replacing its directory.");
+        Assert.True(script.IndexOf("if ($hash -ne $p.sha256)", StringComparison.Ordinal) < script.IndexOf("Stop-Service -Name 'constructd' -Force", StringComparison.Ordinal),
+            "The package hash must be verified before stopping an existing service.");
         Assert.DoesNotContain("Read-Host", script, StringComparison.Ordinal);
         var payload = JsonNode.Parse(Encoding.UTF8.GetString(Convert.FromBase64String(
             System.Text.RegularExpressions.Regex.Match(script, @"FromBase64String\('([A-Za-z0-9+/=]+)'\)").Groups[1].Value)))!;

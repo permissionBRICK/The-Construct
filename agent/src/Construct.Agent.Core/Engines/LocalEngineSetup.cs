@@ -460,17 +460,27 @@ public sealed class LocalEngineSetup : IDisposable
         try {
             $root = Join-Path $env:ProgramData 'Construct'
             $dir = Join-Path $root 'host'
-            Protect-Directory $root
-            $old = Get-Item -LiteralPath $dir -Force -ErrorAction SilentlyContinue
-            if ($old -and ($old.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw "$dir is a link; remove it, then retry." }
-            if ($old) { Remove-Item -LiteralPath $dir -Recurse -Force }
-            Protect-Directory $dir
             Add-Type -AssemblyName System.IO.Compression, System.IO.Compression.FileSystem
             $stream = [IO.File]::Open($p.zip, 'Open', 'Read', 'Read')
             try {
                 $sha = [Security.Cryptography.SHA256]::Create()
                 $hash = ([BitConverter]::ToString($sha.ComputeHash($stream))).Replace('-', '').ToLowerInvariant()
                 if ($hash -ne $p.sha256) { throw 'The host package changed after it was checked.' }
+                Protect-Directory $root
+                $old = Get-Item -LiteralPath $dir -Force -ErrorAction SilentlyContinue
+                if ($old -and ($old.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw "$dir is a link; remove it, then retry." }
+                if ($old) {
+                    $svc = Get-Service -Name 'constructd' -ErrorAction SilentlyContinue
+                    if ($svc -and $svc.Status -ne 'Stopped') {
+                        Stop-Service -Name 'constructd' -Force
+                        $svc.WaitForStatus('Stopped', [TimeSpan]::FromSeconds(60))
+                    }
+                    for ($try = 1; $try -le 10; $try++) {
+                        try { Remove-Item -LiteralPath $dir -Recurse -Force; break }
+                        catch { if ($try -eq 10) { throw }; Start-Sleep -Milliseconds 500 }
+                    }
+                }
+                Protect-Directory $dir
                 $stream.Position = 0
                 $archive = New-Object IO.Compression.ZipArchive($stream, [IO.Compression.ZipArchiveMode]::Read, $true)
                 try { [IO.Compression.ZipFileExtensions]::ExtractToDirectory($archive, $dir) } finally { $archive.Dispose() }
