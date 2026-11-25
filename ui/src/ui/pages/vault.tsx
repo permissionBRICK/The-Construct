@@ -3,7 +3,7 @@ import { QrSquare, Icon } from '../icons';
 import { Btn, Confirm, Field, Head, NotYet, Page, Row, Sec, Seg, Switch, Table, Tabs, Tag } from '../kit';
 import { copy, na, useApp } from '../ctx';
 import type { Page as P } from '../../model/route';
-import type { Secret } from '../../backend/types';
+import type { RevealedSecret, Secret, SecretUpdate } from '../../backend/types';
 
 /* The key vault: secrets, access (leases), devices with pairing and revocation, history. */
 
@@ -12,45 +12,106 @@ function VaultTabs({ cur }: { cur: P }) {
   return <Tabs items={[['vault', 'Secrets'], ['access', 'Access'], ['devices', 'Devices'], ['history', 'History']]} value={cur} onChange={t => go({ page: t })} />;
 }
 
-/** A secret's value shown in place for half a minute, with copy; it lives only in this element's state. */
+/** A secret's value (and username, if set) shown in place for half a minute, with copy; it lives only in this element's state. */
 function RevealValue({ name }: { name: string }) {
   const { be, toast } = useApp();
-  const [value, setValue] = useState<string | null>(null);
+  const [revealed, setRevealed] = useState<RevealedSecret | null>(null);
   const [left, setLeft] = useState(0);
   // Each Show and each Hide starts a new turn; an answer that arrives for an older turn is dropped.
   const turn = useRef(0);
-  const hide = () => { turn.current++; setValue(null); };
+  const hide = () => { turn.current++; setRevealed(null); };
+  useEffect(() => () => { turn.current++; }, []);
   useEffect(() => {
-    if (value === null) return;
-    const t = setInterval(() => setLeft(l => { if (l <= 1) { setValue(null); return 0; } return l - 1; }), 1000);
+    if (revealed === null) return;
+    const t = setInterval(() => setLeft(l => { if (l <= 1) { setRevealed(null); return 0; } return l - 1; }), 1000);
     return () => clearInterval(t);
-  }, [value]);
-  if (value === null) return <Btn sm onClick={() => {
+  }, [revealed]);
+  if (revealed === null) return <Btn sm onClick={() => {
     const mine = ++turn.current;
-    void be.revealSecret(name).then(v => { if (turn.current === mine) { setValue(v); setLeft(30); } }, (e: Error) => toast(e.message));
+    void be.revealSecret(name).then(v => { if (turn.current === mine) { setRevealed(v); setLeft(30); } }, (e: Error) => toast(e.message));
   }}>Show</Btn>;
   return (
     <span class="confirm">
-      <code class="m sel reveal">{value}</code>
+      {revealed.username && (
+        <span class="reveal-part">
+          <span class="d">user</span>
+          <code class="m sel reveal-user">{revealed.username}</code>
+          <Btn sm icon="copy" title="Copy username" onClick={() => { copy(revealed.username); toast('Copied username'); }} />
+        </span>
+      )}
+      <span class="reveal-part">
+        <code class="m sel reveal">{revealed.value}</code>
+        <Btn sm icon="copy" title={revealed.username ? 'Copy value' : 'Copy'} onClick={() => { copy(revealed.value); toast(revealed.username ? 'Copied value' : 'Copied'); }} />
+      </span>
       <span class="d m">{left}s</span>
-      <Btn sm icon="copy" title="Copy" onClick={() => { copy(value); toast('Copied'); }} />
       <Btn sm onClick={hide}>Hide</Btn>
     </span>
   );
 }
 
-/** A new value for a secret, typed in place; the field is emptied when it closes. */
-function ReplaceValue({ name }: { name: string }) {
-  const { be } = useApp();
+/** Edits a secret's username and/or value in place; fields are emptied when it closes. */
+function EditSecret({ name, hasUsername }: { name: string; hasUsername: boolean }) {
+  const { be, toast } = useApp();
   const [open, setOpen] = useState(false);
+  const [u, setU] = useState('');
   const [v, setV] = useState('');
-  const close = () => { setOpen(false); setV(''); };
-  if (!open) return <Btn sm onClick={() => setOpen(true)}>Replace</Btn>;
+  const [initialU, setInitialU] = useState<string | null>(null);
+  const [touchedU, setTouchedU] = useState(false);
+  const [loadingU, setLoadingU] = useState(false);
+  const turn = useRef(0);
+  const touchedRef = useRef(false);
+  useEffect(() => () => { turn.current++; }, []);
+  const close = () => {
+    turn.current++;
+    touchedRef.current = false;
+    setOpen(false);
+    setU('');
+    setV('');
+    setInitialU(null);
+    setTouchedU(false);
+    setLoadingU(false);
+  };
+  const start = () => {
+    const mine = ++turn.current;
+    touchedRef.current = false;
+    setTouchedU(false);
+    setU('');
+    setV('');
+    setOpen(true);
+    if (!hasUsername) { setInitialU(''); setLoadingU(false); return; }
+    setInitialU(null);
+    setLoadingU(true);
+    void be.revealSecret(name).then(r => {
+      if (turn.current !== mine) return;
+      // Keep only the username for editing; discard the secret value immediately.
+      setInitialU(r.username);
+      setLoadingU(false);
+      if (!touchedRef.current) setU(r.username);
+    }, (e: Error) => {
+      if (turn.current !== mine) return;
+      setLoadingU(false);
+      toast(e.message);
+    });
+  };
+  const trimmedU = u.trim();
+  const uChanged = initialU !== null ? trimmedU !== initialU : touchedU;
+  const canSave = !loadingU && (!!v || uChanged);
+  const save = () => {
+    if (!canSave) return;
+    const change: SecretUpdate = {};
+    if (uChanged) change.username = trimmedU;
+    if (v) change.value = v;
+    be.updateSecret(name, change);
+    close();
+  };
+  if (!open) return <Btn sm onClick={start}>Edit</Btn>;
   return (
     <span class="confirm">
-      <Field type="password" value={v} onInput={setV} label={`New value of ${name}`} placeholder="New value" />
+      <Field value={u} onInput={val => { touchedRef.current = true; setTouchedU(true); setU(val); }}
+        label={`Username of ${name}`} placeholder={loadingU ? 'Loading username…' : 'Username (optional)'} mono onEnter={save} />
+      <Field type="password" value={v} onInput={setV} label={`New value of ${name}`} placeholder="New value (optional)" onEnter={save} />
       <Btn sm onClick={close}>Cancel</Btn>
-      <Btn sm kind="pri" disabled={!v} onClick={() => { be.replaceSecret(name, v); close(); }}>Save</Btn>
+      <Btn sm kind="pri" disabled={!canSave} onClick={save}>Save</Btn>
     </span>
   );
 }
@@ -59,10 +120,10 @@ export function Secrets() {
   const { s, be } = useApp();
   const [adding, setAdding] = useState(false);
   const [open, setOpen] = useState<string | null>(null);
-  const [n, setN] = useState(''), [note, setNote] = useState(''), [val, setVal] = useState('');
+  const [n, setN] = useState(''), [note, setNote] = useState(''), [user, setUser] = useState(''), [val, setVal] = useState('');
   const taken = s.secrets.some(x => x.name === n.trim());
-  const close = () => { setAdding(false); setN(''); setNote(''); setVal(''); };
-  const add = () => { be.addSecret(n, note, val); close(); };
+  const close = () => { setAdding(false); setN(''); setNote(''); setUser(''); setVal(''); };
+  const add = () => { be.addSecret(n, note, val, user); close(); };
   return (
     <Page>
       <Head title="Key vault" acts={!na(s, 'vault') && <Btn sm icon="plus" onClick={() => (adding ? close() : setAdding(true))}>Add</Btn>} />
@@ -71,6 +132,7 @@ export function Secrets() {
       {adding && (
         <div class="blk form">
           <div class="fr"><Field value={n} onInput={setN} label="Name" placeholder="name" mono /><Field value={note} onInput={setNote} label="Note" placeholder="Note" /></div>
+          <Field value={user} onInput={setUser} label="Username" placeholder="Username (optional)" mono wide />
           <Field type="password" value={val} onInput={setVal} label="Value" placeholder="Value" wide />
           <div class="bf">{taken ? <span class="badc">Exists already</span> : <span />}<Btn sm onClick={close}>Cancel</Btn><Btn sm kind="pri" disabled={!n.trim() || !val || taken} onClick={add}>Save</Btn></div>
         </div>
@@ -110,8 +172,13 @@ function SecretRow({ x, open, onToggle }: { x: Secret; open: boolean; onToggle: 
         <tr class="more-row">
           <td colSpan={6}>
             <div class="sx">
-              {x.note && <p class="note sel">{x.note}</p>}
-              <span class="acts"><RevealValue name={x.name} /> <ReplaceValue name={x.name} /> <Confirm label="Delete" onYes={() => be.deleteSecret(x.name)} /></span>
+              {(x.note || x.hasUsername) && (
+                <div class="smeta">
+                  {x.note && <p class="note sel">{x.note}</p>}
+                  {x.hasUsername && <Tag>with username</Tag>}
+                </div>
+              )}
+              <span class="acts"><RevealValue name={x.name} /> <EditSecret name={x.name} hasUsername={x.hasUsername} /> <Confirm label="Delete" onYes={() => be.deleteSecret(x.name)} /></span>
             </div>
           </td>
         </tr>

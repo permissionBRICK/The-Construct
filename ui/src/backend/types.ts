@@ -208,7 +208,9 @@ export interface VaultFile {
 }
 export type FileAction = 'keep' | 'redact' | 'delete';
 
-export interface Secret { name: string; note: string; usedBy: string[]; last: string; auto: boolean }
+export interface Secret { name: string; note: string; hasUsername: boolean; usedBy: string[]; last: string; auto: boolean }
+export interface RevealedSecret { username: string; value: string }
+export interface SecretUpdate { username?: string; value?: string }
 /** A host's vault mode: `available` holds the vault key and serves approved requests; `locked` waits for a device. */
 export interface VaultMode { hostId: string; hostName: string; mode: 'available' | 'locked' | null; problem?: string | null }
 export interface Lease { id: string; secret: string; vmName: string; reason: string; left: string }
@@ -606,15 +608,15 @@ export interface Backend {
   /** `ttlSeconds`: the span the user chose; undefined keeps the span the VM asked for. */
   answerLease(requestId: string, allow: boolean, ttlSeconds?: number): void;
   /** `value` null declines the request. */
-  enterSecret(requestId: string, value: string | null): void;
+  enterSecret(requestId: string, value: string | null, username?: string): void;
   /** Keep leaves the file as it is; redact replaces the secrets in it, delete removes it, on the VM's next scrub.
       Resolves true once the engine has the answer (or had one already), false when it failed and the file is back. */
   answerFile(fileId: string, action: FileAction): Promise<boolean>;
-  addSecret(name: string, note: string, value: string): void;
-  /** A new value for an existing secret. */
-  replaceSecret(name: string, value: string): void;
-  /** The value, for the page to show for a moment; the backend keeps no copy. */
-  revealSecret(name: string): Promise<string>;
+  addSecret(name: string, note: string, value: string, username?: string): void;
+  /** Changes a secret's username and/or value; omitted fields keep what they were, empty username clears it. */
+  updateSecret(name: string, change: SecretUpdate): void;
+  /** The username and value, for the page to show for a moment; the backend keeps no copy. */
+  revealSecret(name: string): Promise<RevealedSecret>;
   deleteSecret(name: string): void;
   setVaultMode(hostId: string, mode: 'available' | 'locked'): void;
   setAutoApprove(name: string, on: boolean): void;

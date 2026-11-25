@@ -602,7 +602,7 @@ export function left(ms: number, now: number): string {
 }
 
 export function toSecret(v: SecretView): Secret {
-  return { name: v.name, note: v.description, usedBy: [...new Set(v.leases.map(l => l.vm))], last: whenMs(v.updatedAt), auto: v.autoApprove };
+  return { name: v.name, note: v.description, hasUsername: v.hasUsername, usedBy: [...new Set(v.leases.map(l => l.vm))], last: whenMs(v.updatedAt), auto: v.autoApprove };
 }
 
 /** A lease's key is the engine that holds it and its id there, as the agent's take-back route names it. */

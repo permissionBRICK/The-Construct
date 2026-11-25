@@ -785,7 +785,7 @@ describe('ApiBackend key vault', () => {
 
   function vaultWorld(engines?: { id: string; name: string; url: string }[], requestPollMs?: number) {
     const w = world({ ...(engines ? { engines } : {}), requestPollMs });
-    w.on('GET', '/api/vault/secrets', { json: [secret('db', { leases: [{ engine: E1, engineName: 'orchard', vm: 'atlas', name: 'db', usesLeft: null, expiresAt: Date.now() + 3 * 3600e3 }] }), secret('npm', { autoApprove: true })] });
+    w.on('GET', '/api/vault/secrets', { json: [secret('db', { hasUsername: true, leases: [{ engine: E1, engineName: 'orchard', vm: 'atlas', name: 'db', usesLeft: null, expiresAt: Date.now() + 3 * 3600e3 }] }), secret('npm', { autoApprove: true })] });
     w.on('GET', '/api/vault/history', { json: [{ name: 'db', action: 'added', revision: 1, at: '2026-11-13T10:00:00Z', actor: 'device:d1', provenance: { kind: 'device', vm: null, engine: null, device: 'd1', requestId: null } }] });
     w.on('GET', '/api/vault/approvals', { json: { approvals: [], unreachable: [] } });
     w.on('GET', '/api/vault/entry-requests', { json: { requests: [], unreachable: [] } });
@@ -798,37 +798,43 @@ describe('ApiBackend key vault', () => {
     const { be } = vaultWorld();
     await be.start();
     const s = be.snapshot();
-    expect(s.secrets.map(x => [x.name, x.note, x.usedBy, x.auto])).toEqual([['db', 'note of db', ['atlas'], false], ['npm', 'note of npm', [], true]]);
+    expect(s.secrets.map(x => [x.name, x.note, x.hasUsername, x.usedBy, x.auto])).toEqual([['db', 'note of db', true, ['atlas'], false], ['npm', 'note of npm', false, [], true]]);
     expect(s.leases).toEqual([expect.objectContaining({ secret: 'db', vmName: 'atlas · orchard', left: '3 h' })]);
     expect(s.history).toEqual([{ at: '2026-11-13 10:00', vmName: 'laptop', secret: 'db', event: 'Added' }]);
     expect(s.vaultModes).toEqual([{ hostId: E1, hostName: 'orchard', mode: 'locked' }]);
   });
 
-  it('adds, replaces, reveals, deletes and switches auto-approve through the agent; a value stays out of the state', async () => {
+  it('adds, updates, reveals, deletes and switches auto-approve through the agent; values and usernames stay out of the state', async () => {
     const { be, calls, on, settle } = vaultWorld();
-    on('POST', '/api/vault/secrets', { json: secret('api') });
+    on('POST', '/api/vault/secrets', { json: secret('api', { hasUsername: true }) });
     on('PATCH', '/api/vault/secrets/db', { json: secret('db') });
-    on('POST', '/api/vault/secrets/db/reveal', { json: { name: 'db', username: '', value: 'hunter2-value' } });
+    on('POST', '/api/vault/secrets/db/reveal', { json: { name: 'db', username: 'db-user', value: 'hunter2-value' } });
     on('DELETE', '/api/vault/secrets/npm', { status: 204 });
     on('PUT', '/api/vault/secrets/db/auto-approve', { status: 204 });
     await be.start();
-    be.addSecret(' api ', 'the api', 'typed-value-1');
-    be.replaceSecret('db', 'typed-value-2');
-    expect(await be.revealSecret('db')).toBe('hunter2-value');
+    be.addSecret(' api ', 'the api', 'typed-value-1', ' api-user ');
+    be.addSecret('plain', 'no user', 'typed-value-plain', '   ');
+    be.updateSecret('db', { value: 'typed-value-2' });
+    be.updateSecret('db', { username: ' new-user ' });
+    be.updateSecret('db', { username: '' });
+    expect(await be.revealSecret('db')).toEqual({ username: 'db-user', value: 'hunter2-value' });
     be.deleteSecret('npm');
     be.setAutoApprove('db', true);
     await settle();
     const sent = posts(calls).map(c => [c.method, c.path, c.body]);
-    expect(sent.length).toBe(5);
+    expect(sent.length).toBe(8);
     expect(sent).toEqual(expect.arrayContaining([
-      ['POST', '/api/vault/secrets', { name: 'api', description: 'the api', value: 'typed-value-1', autoApprove: false }],
+      ['POST', '/api/vault/secrets', { name: 'api', description: 'the api', value: 'typed-value-1', username: 'api-user', autoApprove: false }],
+      ['POST', '/api/vault/secrets', { name: 'plain', description: 'no user', value: 'typed-value-plain', autoApprove: false }],
       ['PATCH', '/api/vault/secrets/db', { value: 'typed-value-2' }],
+      ['PATCH', '/api/vault/secrets/db', { username: 'new-user' }],
+      ['PATCH', '/api/vault/secrets/db', { username: '' }],
       ['POST', '/api/vault/secrets/db/reveal', undefined],
       ['DELETE', '/api/vault/secrets/npm', undefined],
       ['PUT', '/api/vault/secrets/db/auto-approve', { on: true }],
     ]));
     const all = JSON.stringify(be.snapshot());
-    for (const v of ['hunter2-value', 'typed-value-1', 'typed-value-2']) expect(all).not.toContain(v);
+    for (const v of ['hunter2-value', 'typed-value-1', 'typed-value-2', 'typed-value-plain', 'api-user', 'db-user', 'new-user']) expect(all).not.toContain(v);
   });
 
   it('shows each request with the VM and host its engine names, the agent\'s words apart, and answers it at that engine', async () => {
@@ -974,7 +980,7 @@ describe('ApiBackend key vault', () => {
     on('POST', `/api/vault/entry-requests/${E1}/e2`, { status: 409, json: { title: 'exists', status: 409, code: 'exists' } });
     on('POST', `/api/vault/entry-requests/${E1}/e3/decline`, { status: 204 });
     await be.start();
-    be.enterSecret(`${E1}/e1`, 'pasted-value-1');
+    be.enterSecret(`${E1}/e1`, 'pasted-value-1', ' stripe-user ');
     await settle();
     expect(be.snapshot().notice?.text).toBe('Saved stripe');
     be.enterSecret(`${E1}/e2`, 'pasted-value-2');
@@ -983,11 +989,12 @@ describe('ApiBackend key vault', () => {
     be.enterSecret(`${E1}/e3`, null);
     await settle();
     expect(posts(calls).map(c => [c.path, c.body])).toEqual([
-      [`/api/vault/entry-requests/${E1}/e1`, { value: 'pasted-value-1' }],
+      [`/api/vault/entry-requests/${E1}/e1`, { value: 'pasted-value-1', username: 'stripe-user' }],
       [`/api/vault/entry-requests/${E1}/e2`, { value: 'pasted-value-2' }],
       [`/api/vault/entry-requests/${E1}/e3/decline`, undefined],
     ]);
     expect(JSON.stringify(be.snapshot())).not.toContain('pasted-value');
+    expect(JSON.stringify(be.snapshot())).not.toContain('stripe-user');
   });
 
   it('keeps the requests of an engine that did not answer and says which', async () => {

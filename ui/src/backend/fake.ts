@@ -1,4 +1,4 @@
-import type { AgentId, Backend, CreateVmRequest, FileAction, FirstRun, FirstRunRequest, Host, HostProbe, HostUser, Job, JobKind, Prefs, Profile, ProfileSave, SettingsPatch, SignInInput, State, T3Thread, Upgrade, VaultFile, Vm } from './types';
+import type { AgentId, Backend, CreateVmRequest, FileAction, FirstRun, FirstRunRequest, Host, HostProbe, HostUser, Job, JobKind, Prefs, Profile, ProfileSave, RevealedSecret, SecretUpdate, SettingsPatch, SignInInput, State, T3Thread, Upgrade, VaultFile, Vm } from './types';
 import { NEXT_RELEASE, NIGHTLY_RELEASE, PAIR_WORDS, RECOVERY_CODE, REINSTALL_STEPS, REPROVISION_STEPS, SIGN_IN_BROWSER_TEXT, SIGN_IN_TEXT, sampleState } from './sample';
 import { activeJob, newer, vmUpdateTarget } from '../model/vm';
 import { AGENTS, agentSwitches, applies, applyPatch } from '../model/settings';
@@ -767,7 +767,7 @@ export class FakeBackend implements Backend {
     }, allow ? `Allowed for ${r.span}` : 'Denied');
   }
 
-  enterSecret(requestId: string, value: string | null) {
+  enterSecret(requestId: string, value: string | null, username?: string) {
     const r = this.s.vaultRequests.find(x => x.id === requestId);
     if (!r) return;
     if (value !== null && this.s.secrets.some(x => x.name === r.secret)) {
@@ -776,7 +776,7 @@ export class FakeBackend implements Backend {
     }
     this.set(d => {
       d.vaultRequests = d.vaultRequests.filter(x => x.id !== requestId);
-      if (value !== null) d.secrets.push({ name: r.secret, note: r.reason, usedBy: [], last: '–', auto: false });
+      if (value !== null) d.secrets.push({ name: r.secret, note: r.reason, hasUsername: !!username?.trim(), usedBy: [], last: '–', auto: false });
     }, value === null ? 'Skipped' : 'Saved in the vault');
   }
 
@@ -796,19 +796,28 @@ export class FakeBackend implements Backend {
     return Promise.resolve(true);
   }
 
-  addSecret(name: string, note: string, value: string) {
+  addSecret(name: string, note: string, value: string, username?: string) {
     const n = name.trim();
     if (!n || !value || this.s.secrets.some(x => x.name === n)) return;
-    this.set(d => { d.secrets.push({ name: n, note: note.trim(), usedBy: [], last: '–', auto: false }); }, 'Saved in the vault');
+    this.set(d => { d.secrets.push({ name: n, note: note.trim(), hasUsername: !!username?.trim(), usedBy: [], last: '–', auto: false }); }, 'Saved in the vault');
   }
 
-  replaceSecret(name: string, value: string) {
-    if (!value || !this.s.secrets.some(x => x.name === name)) return;
-    this.set(d => { d.leases = d.leases.filter(l => l.secret !== name); }, `Replaced ${name}`);
+  updateSecret(name: string, change: SecretUpdate) {
+    if (!this.s.secrets.some(x => x.name === name)) return;
+    const hasValue = !!change.value;
+    if (!hasValue && change.username === undefined) return;
+    this.set(d => {
+      const x = d.secrets.find(s => s.name === name);
+      if (x && change.username !== undefined) x.hasUsername = change.username.trim().length > 0;
+      if (hasValue) d.leases = d.leases.filter(l => l.secret !== name);
+    }, `Updated ${name}`);
   }
 
-  /** An invented value; the fake keeps none. */
-  async revealSecret(name: string): Promise<string> { return `${name}-sample-value`; }
+  /** An invented value (and username when the secret has one); the fake keeps none. */
+  async revealSecret(name: string): Promise<RevealedSecret> {
+    const hasUser = this.s.secrets.find(x => x.name === name)?.hasUsername ?? false;
+    return { username: hasUser ? `${name}-user` : '', value: `${name}-sample-value` };
+  }
 
   deleteSecret(name: string) { this.set(d => { d.secrets = d.secrets.filter(x => x.name !== name); }, `Deleted ${name}`); }
 
