@@ -129,6 +129,10 @@ internal static class HyperVScript
     public static string GetFacts(string vmName) =>
         Build($"$result = Get-ConstructVmFacts -Name {PowerShellLiteral.Quote(ArgumentGuard.VmName(vmName))}");
 
+    /// <summary>Relocates a VM's virtual hard disk(s) to <paramref name="destinationDirectory"/> via <c>Move-VMStorage</c>.</summary>
+    public static string MoveStorage(string vmName, string destinationDirectory) =>
+        Build($"$result = Move-ConstructVmStorage -Name {PowerShellLiteral.Quote(ArgumentGuard.VmName(vmName))} -DestinationDir {PowerShellLiteral.Quote(ArgumentGuard.WindowsPath(destinationDirectory, "destination path"))}");
+
     private static string Call(string function, string vmName) =>
         Build($"{function} -Name {PowerShellLiteral.Quote(ArgumentGuard.VmName(vmName))}");
 

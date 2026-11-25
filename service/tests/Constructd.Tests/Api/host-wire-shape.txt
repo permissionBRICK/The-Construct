@@ -123,6 +123,10 @@
 .repair.source:string
 .repair.updatedAt:null
 .repair:object
+.storage.source:string
+.storage.updatedAt:null
+.storage.vmStorageRoot:null
+.storage:object
 .updates.auto:bool
 .updates.channel:string
 .updates.drainTimeoutMinutes:number

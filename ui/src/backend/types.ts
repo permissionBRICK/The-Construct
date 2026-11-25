@@ -83,6 +83,8 @@ export interface Vm {
   usage: Usage;
   memTotalGb: number;
   diskTotalGb: number;
+  /** Current host path of this VM's virtual hard disk, when reported (Hyper-V). */
+  diskPath?: string | null;
   agents: Agent[];
   children: ChildVm[];
   projectsOn: string[];
@@ -114,7 +116,7 @@ export interface Profile {
   forwards: { port: number; label: string }[];
 }
 
-export type JobKind = 'reprovision' | 'reinstall' | 'update' | 'restore' | 'create';
+export type JobKind = 'reprovision' | 'reinstall' | 'update' | 'restore' | 'create' | 'move';
 export type JobState = 'running' | 'failed' | 'done' | 'stopped';
 
 /** A thread of a VM's T3 Code, as the engine names a repair's: T3 Desktop opens it by these ids, the web UI by its title. */
@@ -254,6 +256,8 @@ export interface HostVm {
   lease: string;
   shared: boolean;
   tokensToday: string;
+  /** Current host path of this VM's virtual hard disk, when reported (Hyper-V). */
+  diskPath?: string | null;
 }
 export interface HostMedia { name: string; owner: string; role: string; state: string; size: string; refs: number; created: string }
 /** `retry`: the engine retries this failed job (a provision or reinstall). */
@@ -304,6 +308,10 @@ export interface Host {
   repairAuto?: boolean;
   /** Admin only: the repair runs in Construct's chat instead of a T3 Code thread in the VM (`repair.chat`). Undefined: not read. */
   repairChat?: boolean;
+  /** Admin only: default directory for new VMs' virtual hard disks (`storage.vmStorageRoot`); null = Hyper-V default. */
+  vmStorageRoot?: string | null;
+  /** True when this host supports setting a VM disk path and moving VM disks (Hyper-V). */
+  storageMoveSupported?: boolean;
 }
 
 /** Shown once after adding a user: what that user's client needs. */
@@ -631,6 +639,10 @@ export interface Backend {
   setRepairAuto(hostId: string, on: boolean): void;
   /** The host setting `repair.chat`: the repair runs in Construct's chat instead of a T3 Code thread in the VM. */
   setRepairChat(hostId: string, on: boolean): void;
+  /** Sets the host's default VM disk directory (`storage.vmStorageRoot`; null resets to Hyper-V default), optionally moving all existing VMs there too. */
+  setHostStoragePath(hostId: string, path: string | null, moveAllVms?: boolean): void;
+  /** Moves one VM's virtual hard disk to `destinationPath` (null = host's current default directory). */
+  moveVmStorage(hostId: string, vmName: string, destinationPath: string | null): void;
   addUser(hostId: string, user: { name: string; role: 'admin' | 'user'; maxVms: number; hostForwards: HostUser['hostForwards'] }): void;
   saveUser(hostId: string, user: HostUser): void;
   removeUser(hostId: string, name: string): void;

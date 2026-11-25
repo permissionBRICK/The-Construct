@@ -31,4 +31,7 @@ public sealed record HttpsConfig(int? SharedPort = null, bool StartOnRequest = t
 /// </summary>
 public sealed record BackupsConfig(bool Enabled = true, int IntervalHours = 24, int Keep = 4, int MaxKeep = 10,
     int PinDays = 14, int RetainDeletedDays = 14, long MinFreeBytes = 5L << 30, long? MaxBytesPerVm = null);
+/// <summary>Host VM storage defaults (Hyper-V). <c>VmStorageRoot</c>: folder new VMs' VHDX files are created in;
+/// null falls back to the startup option <c>Constructd:VmStorageRoot</c>, or Hyper-V's default folder.</summary>
+public sealed record StorageConfig(string? VmStorageRoot = null);
 public sealed record MaintenanceMarker(MaintenanceState State, string? UpdateId, DateTimeOffset Since);

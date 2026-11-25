@@ -187,6 +187,7 @@ public static class ServiceComposition
         services.AddSingleton<IVmMemoryDriver>(sp => sp.GetRequiredService<FakeHypervisorDriver>());
         services.AddSingleton<IVmMemoryFloorDriver>(sp => sp.GetRequiredService<FakeHypervisorDriver>());
         services.AddSingleton<IVmFactsDriver>(sp => sp.GetRequiredService<FakeHypervisorDriver>());
+        services.AddSingleton<IVmStorageDriver>(sp => sp.GetRequiredService<FakeHypervisorDriver>());
         services.AddSingleton<InMemoryLanAccess>();
         services.AddSingleton<ILanAccess>(sp => sp.GetRequiredService<InMemoryLanAccess>());
 
@@ -283,6 +284,7 @@ public static class ServiceComposition
         services.AddSingleton<IVmCpuDriver>(sp => (HyperVDriver)sp.GetRequiredService<IHypervisorDriver>());
         services.AddSingleton<IVmMemoryDriver>(sp => (HyperVDriver)sp.GetRequiredService<IHypervisorDriver>());
         services.AddSingleton<IVmFactsDriver>(sp => (HyperVDriver)sp.GetRequiredService<IHypervisorDriver>());
+        services.AddSingleton<IVmStorageDriver>(sp => (HyperVDriver)sp.GetRequiredService<IHypervisorDriver>());
         services.AddSingleton<IPortForwardManager, NetshPortForwardManager>();
         services.AddSingleton<ILanAccess, FirewallLanAccess>();
 

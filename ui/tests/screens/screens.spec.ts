@@ -628,3 +628,74 @@ test('projects page links a remote config repo, imports a profile, and removes t
   await expect(page.getByText('Link a git repository to import and sync shared project profiles.')).toBeVisible();
   await expect(page.getByRole('cell', { name: 'billing', exact: true })).toBeVisible();
 });
+
+test('host default disk path prompts to auto-move existing VMs, and individual VMs can be moved', async ({ page }) => {
+  await open(page, 'win', 'calm', 'dark', 'host/pc/config');
+  const input = page.getByLabel('Default VM disk path');
+  await expect(input).toBeVisible();
+  await input.fill('D:\\ConstructVMs');
+  await page.getByRole('button', { name: 'Save' }).click();
+
+  // Popup asks whether to move all existing VMs to the new default path.
+  const dialog = page.getByRole('dialog', { name: 'Move existing VMs?' });
+  await expect(dialog).toBeVisible();
+  await expect(dialog).toContainText('D:\\ConstructVMs');
+  await expect(dialog).toContainText('3 existing VMs');
+
+  // Choosing "Move all VMs" saves the path and updates every VM's disk path.
+  await dialog.getByRole('button', { name: 'Move all VMs' }).click();
+  await expect(dialog).toHaveCount(0);
+
+  // Check on VM Settings -> Resources that atlas now shows the moved path, then move atlas individually.
+  await page.getByRole('button', { name: 'Settings' }).click();
+  await expect(page.getByText('D:\\ConstructVMs\\atlas.vhdx')).toBeVisible();
+  await page.getByRole('button', { name: 'Move' }).click();
+  const dest = page.getByLabel('Destination folder for atlas');
+  await dest.fill('E:\\SingleAtlas');
+  await page.getByRole('button', { name: 'Move' }).click();
+  await expect(page.getByText('E:\\SingleAtlas\\atlas.vhdx')).toBeVisible();
+
+  // Changing host path and clicking "Only new VMs" leaves existing VMs where they are.
+  await page.getByRole('button', { name: 'Hosts' }).click();
+  await page.getByRole('cell', { name: 'This PC' }).click();
+  await page.getByRole('tab', { name: 'Configuration' }).click();
+  await page.getByLabel('Default VM disk path').fill('F:\\FutureOnly');
+  await page.getByRole('button', { name: 'Save' }).click();
+  const dialog2 = page.getByRole('dialog', { name: 'Move existing VMs?' });
+  await expect(dialog2).toBeVisible();
+  await dialog2.getByRole('button', { name: 'Only new VMs' }).click();
+  await expect(dialog2).toHaveCount(0);
+
+  // atlas stays at E:\SingleAtlas\atlas.vhdx.
+  await page.getByRole('tab', { name: 'VMs' }).click();
+  await page.locator('tbody tr', { hasText: 'atlas' }).getByRole('button', { name: 'Settings' }).click();
+  await expect(page.getByText('E:\\SingleAtlas\\atlas.vhdx')).toBeVisible();
+});
+
+test('host configuration uses full GUI controls with validation instead of raw JSON', async ({ page }) => {
+  await open(page, 'win', 'calm', 'dark', 'host/orchard/config');
+  // No raw JSON config editor textareas for known sections.
+  await expect(page.locator('textarea.code.edit')).toHaveCount(0);
+
+  // Capacity GUI section: switch admission mode and update headroom, then save.
+  const capacity = page.locator('section.sec', { has: page.locator('.cap > span', { hasText: /^Capacity$/ }) });
+  await expect(capacity).toBeVisible();
+  await capacity.getByRole('radio', { name: 'Observe' }).click();
+  await capacity.getByLabel('RAM headroom').fill('8');
+  await expect(capacity.getByText('unsaved')).toBeVisible();
+  await capacity.getByRole('button', { name: 'Save' }).click();
+  await expect(capacity.getByText('unsaved')).toHaveCount(0);
+  await expect(capacity.getByRole('radio', { name: 'Observe' })).toHaveAttribute('aria-checked', 'true');
+
+  // Memory pressure validates low < high inline before saving.
+  const pressure = page.locator('section.sec', { has: page.locator('.cap > span', { hasText: /^Memory pressure$/ }) });
+  await pressure.getByLabel('Low water').fill('95');
+  await pressure.getByRole('button', { name: 'Save' }).click();
+  await expect(pressure.getByText(/lower than high water/i)).toBeVisible();
+  await pressure.getByRole('button', { name: 'Reset' }).click();
+  await expect(pressure.getByLabel('Low water')).toHaveValue('80');
+
+  // Proxmox-only fields appear on orchard (Proxmox) and stay hidden on This PC (Hyper-V).
+  const network = page.locator('section.sec', { has: page.locator('.cap > span', { hasText: /^Network$/ }) });
+  await expect(network.getByRole('radiogroup', { name: 'Default VM mode' })).toBeVisible();
+});

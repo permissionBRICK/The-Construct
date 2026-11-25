@@ -7,8 +7,9 @@ import { AGENTS } from '../model/settings';
 import { linkParts, lostSignIns } from '../model/signin';
 import { filesByVm } from '../model/vault';
 import { openExternal } from './shell';
+import { DEFAULT_WINDOWS_DISK_DIR, dirOfWindowsPath, sameWindowsDir, windowsDirError } from '../model/storage';
 import { Icon } from './icons';
-import { Bar, Btn, Confirm, Field, Pip, Switch, Tag, UpTag, useFollow } from './kit';
+import { Bar, Btn, Confirm, Field, Pip, Row, Switch, Tag, UpTag, useFollow } from './kit';
 import { copy, na, useApp } from './ctx';
 
 /* The blocks that sit on the stack, in the pop-out, the window's overview and the phone. */
@@ -242,7 +243,7 @@ export function JobBlock({ job, vm }: { job: Job; vm: Vm }) {
   return (
     <div class="blk job" aria-label={`${word} ${vm.name}`}>
       <div class="bh">
-        <Icon n={job.kind === 'update' ? 'up' : job.kind === 'reinstall' ? 'wipe' : 'repro'} />
+        <Icon n={job.kind === 'update' ? 'up' : job.kind === 'reinstall' ? 'wipe' : job.kind === 'move' ? 'folder' : 'repro'} />
         <b>{word}</b>
         <span class="m">{job.pending ? '' : job.kind === 'update' && job.from && job.to ? `${shortVersion(job.from, ch)} → ${shortVersion(job.to, ch)}` : `${job.pct}%`}</span>
       </div>
@@ -425,3 +426,55 @@ export function PowerBtn({ vm }: { vm: Vm }) {
 
 /** What a VM that does not run says on the actions that need it running. */
 export const NEEDS_RUNNING = 'Start the VM first';
+
+/** Displays a VM's current virtual disk path and an inline control to move it to another folder on the Hyper-V host. */
+export function MoveDiskRow({ hostId, vmName, diskPath, hostDefaultPath, disabled }: {
+  hostId: string; vmName: string; diskPath?: string | null; hostDefaultPath?: string | null; disabled?: boolean;
+}) {
+  const { be } = useApp();
+  const [open, setOpen] = useState(false);
+  const currentDir = dirOfWindowsPath(diskPath);
+  const defaultTarget = hostDefaultPath || DEFAULT_WINDOWS_DISK_DIR;
+  const initialDest = currentDir && !sameWindowsDir(currentDir, defaultTarget) ? defaultTarget : currentDir ?? defaultTarget;
+  const [dest, setDest] = useState(initialDest);
+  const [err, setErr] = useState<string | null>(null);
+
+  const openEditor = () => {
+    setDest(initialDest);
+    setErr(null);
+    setOpen(true);
+  };
+
+  const submit = () => {
+    const bad = windowsDirError(dest, false);
+    if (bad) { setErr(bad); return; }
+    if (currentDir && sameWindowsDir(currentDir, dest)) {
+      setErr('Disk is already in that folder.');
+      return;
+    }
+    setErr(null);
+    setOpen(false);
+    be.moveVmStorage(hostId, vmName, dest.trim());
+  };
+
+  return (
+    <>
+      <Row l="Disk path">
+        <span class="confirm">
+          <code class="m path-val sel" title={diskPath ?? undefined}>{diskPath ?? '–'}</code>
+          {!open && <Btn sm icon="folder" disabled={disabled} onClick={openEditor}>Move</Btn>}
+        </span>
+      </Row>
+      {open && (
+        <div class="storage-form">
+          <div class="storage-row">
+            <Field value={dest} onInput={v => { setDest(v); setErr(null); }} label={`Destination folder for ${vmName}`} placeholder={defaultTarget} mono wide onEnter={submit} />
+            <Btn sm onClick={() => { setOpen(false); setErr(null); }}>Cancel</Btn>
+            <Btn sm kind="pri" icon="folder" disabled={!dest.trim()} onClick={submit}>Move</Btn>
+          </div>
+          {err && <div class="badc">{err}</div>}
+        </div>
+      )}
+    </>
+  );
+}

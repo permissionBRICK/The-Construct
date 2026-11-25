@@ -9,8 +9,36 @@ namespace Constructd.Fakes;
 /// so the API, the creation job and the idle engine can be tested on Linux. The real driver (B7)
 /// implements the same interface by invoking PowerShell.
 /// </summary>
-public sealed class FakeHypervisorDriver : IHypervisorDriver, IVmCpuDriver, IVmMemoryDriver, IGuestNetworkConfigurator, IVmNestedDriver, IVmMemoryFloorDriver, IVmFactsDriver, IVmHostStartDriver, IStateReadSettling
+public sealed class FakeHypervisorDriver : IHypervisorDriver, IVmCpuDriver, IVmMemoryDriver, IGuestNetworkConfigurator, IVmNestedDriver, IVmMemoryFloorDriver, IVmFactsDriver, IVmHostStartDriver, IVmStorageDriver, IStateReadSettling
 {
+    /// <summary>Current VHDX path per VM; populated on create or move.</summary>
+    public ConcurrentDictionary<string, string> DiskPaths { get; } = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Set to make <see cref="MoveStorageAsync"/> throw.</summary>
+    public Exception? MoveStorageFailure { get; set; }
+
+    public Task<VmStorageMoveResult> MoveStorageAsync(string name, string destinationDirectory, IProgress<string>? progress, CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+        Calls.Enqueue($"move-storage:{name}:{destinationDirectory}");
+        if (MoveStorageFailure is not null) return Task.FromException<VmStorageMoveResult>(MoveStorageFailure);
+        if (StateOf(name) == VmState.Saved) throw new InvalidOperationException("Turn off or start the VM before moving its disk.");
+        var dest = Constructd.Core.Logic.StoragePathRules.NormalizeDirectory(destinationDirectory);
+        var current = DiskPaths.GetValueOrDefault(name) ?? $@"{Constructd.Core.Logic.StoragePathRules.DefaultPrimaryRoot}\{name}.vhdx";
+        var currentDir = Constructd.Core.Logic.StoragePathRules.DirectoryOf(current);
+        var fileName = Path.GetFileName(current.Replace('\\', '/'));
+        var next = dest.EndsWith('\\') ? dest + fileName : dest + "\\" + fileName;
+        var volume = Constructd.Core.Logic.StoragePathRules.VolumeRoot(dest);
+        if (Constructd.Core.Logic.StoragePathRules.SameDirectory(currentDir, dest))
+        {
+            progress?.Report($"Disk for {name} is already in {dest}");
+            return Task.FromResult(new VmStorageMoveResult(current, current, volume, false));
+        }
+        progress?.Report($"Moving virtual disk for {name} to {dest}");
+        DiskPaths[name] = next;
+        progress?.Report($"Moved virtual disk to {next}");
+        return Task.FromResult(new VmStorageMoveResult(current, next, volume, true));
+    }
     /// <summary>The fake answers at once: a read that stays Unknown is given up on soon, a few Unknown answers are read past.</summary>
     public TimeSpan SettleWindow { get; set; } = TimeSpan.FromMilliseconds(500);
 

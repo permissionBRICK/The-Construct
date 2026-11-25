@@ -8,8 +8,8 @@ public sealed class HostConfigSchemaTests
     /// <summary>Settings of the new stack the old clients' forms (frozen, design 15) do not show; a PUT may omit them.</summary>
     private static readonly string[] NewStackOnly = ["updates.auto"];
 
-    /// <summary>Whole sections of the new stack the old clients' forms do not show (the repair agent, design 11.5).</summary>
-    private static readonly string[] NewStackSections = ["repair"];
+    /// <summary>Whole sections of the new stack the old clients' forms do not show (the repair agent, design 11.5; VM storage path).</summary>
+    private static readonly string[] NewStackSections = ["repair", "storage"];
 
     [Fact]
     public void FormFixtureCoversRecordsAndDefaults()

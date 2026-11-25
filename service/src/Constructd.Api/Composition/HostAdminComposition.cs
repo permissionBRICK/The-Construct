@@ -43,6 +43,7 @@ public static class HostAdminComposition
         services.AddCapacityPlatform(options);
         services.AddChildVmPlatform(options);
         services.AddSingleton<Constructd.Api.Jobs.PrimaryVmJobs>();
+        services.AddSingleton<Constructd.Api.Jobs.VmStorageMoveJobs>();
         services.AddSingleton<Constructd.Api.Jobs.LifecycleStart>();
         services.AddSingleton<Constructd.Api.Jobs.PrimaryCpuSettings>();
         services.AddSingleton<Constructd.Api.Jobs.PrimaryMemorySettings>();

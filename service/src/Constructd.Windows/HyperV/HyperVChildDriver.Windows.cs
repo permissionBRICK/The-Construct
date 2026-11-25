@@ -8,19 +8,21 @@ public sealed partial class HyperVChildDriver
     public async Task ParkWindowsAsync(string name, string incarnation, CancellationToken ct)
     {
         WindowsIdentity(name, incarnation);
+        var vhdPath = await DiskPathAsync(name, ct);
         await RunAsync("windows-allocation-clear", "Clear-ConstructLicenseAllocation", "-Name $inputData.name -Incarnation $inputData.incarnation -VhdPath $inputData.vhdPath",
-            new { name, incarnation, vhdPath = DiskPath(name) }, ct, TimeSpan.FromMinutes(30));
+            new { name, incarnation, vhdPath }, ct, TimeSpan.FromMinutes(30));
         await RunAsync("windows-park", "Save-ConstructLicenseMachine", "-Name $inputData.name -Incarnation $inputData.incarnation -VhdPath $inputData.vhdPath",
-            new { name, incarnation, vhdPath = DiskPath(name) }, ct, TimeSpan.FromMinutes(30));
+            new { name, incarnation, vhdPath }, ct, TimeSpan.FromMinutes(30));
     }
     public async Task ReuseWindowsAsync(WindowsLicenseMachine machine, ChildVmDescriptor descriptor, string operationId, CancellationToken ct)
     {
         ValidateDescriptor(descriptor);
+        var poolRoot = await StorageRootAsync(ct) ?? string.Empty;
         await RunAsync("windows-reuse", "Restore-ConstructLicenseMachine", "-Incarnation $inputData.incarnation -Descriptor $inputData.descriptor -OperationId $inputData.operationId -PoolRoot $inputData.poolRoot",
-            new { incarnation = machine.Incarnation, descriptor, operationId, poolRoot = options.VmStorageRoot }, ct, TimeSpan.FromMinutes(30));
+            new { incarnation = machine.Incarnation, descriptor, operationId, poolRoot }, ct, TimeSpan.FromMinutes(30));
     }
     public async Task RetireWindowsAsync(string incarnation, CancellationToken ct) =>
-        await RunAsync("windows-retire", "Remove-ConstructLicenseMachine", "-Incarnation $inputData.incarnation -PoolRoot $inputData.poolRoot", new { incarnation, poolRoot = options.VmStorageRoot }, ct);
+        await RunAsync("windows-retire", "Remove-ConstructLicenseMachine", "-Incarnation $inputData.incarnation -PoolRoot $inputData.poolRoot", new { incarnation, poolRoot = await StorageRootAsync(ct) ?? string.Empty }, ct);
     public async Task DeliverActivationAsync(string name, string incarnation, WindowsActivationCommand command, CancellationToken ct)
     {
         WindowsIdentity(name, incarnation);

@@ -62,6 +62,7 @@ public static class JobKinds
     public const string Reinstall = "reinstall";
     public const string Restore = "restore";
     public const string UpdateAgents = "update-agents";
+    public const string MoveStorage = "move-storage";
 }
 
 /// <summary>
@@ -82,6 +83,9 @@ public sealed record JobOutcome(object? Result, string? OneTimeSecret = null);
 
 /// <summary>Result of a <see cref="JobKinds.RemoveVm"/> job.</summary>
 public sealed record VmRemoveResult(string Name, int ReleasedForwards);
+
+/// <summary>Result of a <see cref="JobKinds.MoveStorage"/> job.</summary>
+public sealed record VmMoveStorageResult(string Name, string OldDiskPath, string NewDiskPath, bool Moved);
 
 /// <summary>Kind of event pushed to an SSE subscriber.</summary>
 public enum JobEventKind

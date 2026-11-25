@@ -62,6 +62,36 @@ public sealed partial class SqliteCapacityLedger(SqliteDatabase database, IClock
     { await using var tx = await BeginMutationAsync(ct); tx.ConfirmInTransaction(ids, observed); tx.Commit(); }
     public async Task ReleaseAsync(IReadOnlyList<string> ids, VmState observed, string reason, CancellationToken ct)
     { await using var tx = await BeginMutationAsync(ct); tx.ReleaseInTransaction(ids, observed, reason); tx.Commit(); }
+    public async Task RelocateDiskAsync(string vmName, string oldDiskPath, string newDiskPath, string newVolume, CancellationToken ct)
+    {
+        await using var tx = await BeginMutationAsync(ct);
+        var oldKey = CapacityMath.Key("disk:" + oldDiskPath);
+        var newArtifact = "disk:" + newDiskPath;
+        var newKey = CapacityMath.Key(newArtifact);
+        var unresolvedKey = CapacityMath.Key("unresolved-primary-disk:" + vmName);
+        var vm = tx.Vms.FirstOrDefault(v => Ownership.SameName(v.Name, vmName));
+        var matched = tx.Rows.Where(r => r.Resource == ReservationResource.Storage && !ReservationRules.SavedState(r) &&
+            Ownership.SameName(r.VmName, vmName) && r.Artifact is not null &&
+            (CapacityMath.Key(r.Artifact) == oldKey || CapacityMath.Key(r.Artifact) == newKey || CapacityMath.Key(r.Artifact) == unresolvedKey)).ToArray();
+        var owner = matched.FirstOrDefault()?.ScopeOwner ?? vm?.Owner ?? "system";
+        var amount = matched.Length > 0 ? matched.Max(r => r.Amount) : (vm is not null ? (long)vm.DiskGb << 30 : 0L);
+        var created = matched.Length > 0 ? matched.Min(r => r.Created) : _clock.UtcNow;
+        foreach (var row in matched) tx.Delete(row.Id);
+        if (amount > 0)
+        {
+            tx.Put(new(Guid.NewGuid().ToString("n"), ReservationResource.Storage, owner, vmName, newArtifact, newVolume, amount,
+                ReservationPhase.Held, ReservationOrigin.Api, null, created, null, _clock.UtcNow));
+        }
+        using (var cmd = tx.Connection.CreateCommand())
+        {
+            cmd.Transaction = tx.Sql;
+            cmd.CommandText = "UPDATE vms SET observed_storage_problem=NULL WHERE name=@name COLLATE NOCASE AND observed_storage_problem='artifact-unreadable-or-missing'";
+            cmd.With("@name", vmName);
+            cmd.ExecuteNonQuery();
+        }
+        tx.Audit("capacity.relocate", owner, vmName, newVolume);
+        tx.Commit();
+    }
     public async Task TrimAsync(string id, long amount, CancellationToken ct)
     {
         await using var tx = await BeginMutationAsync(ct);

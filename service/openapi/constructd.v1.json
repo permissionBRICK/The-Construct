@@ -683,6 +683,108 @@
         }
       }
     },
+    "/api/v1/vms/{name}/storage/move": {
+      "post": {
+        "tags": [
+          "VmStorageEndpoints"
+        ],
+        "operationId": "MoveVmStorage",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/MoveVmStorageRequest"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobAcceptedResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error, as a Problem document.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/host/vms/storage/move": {
+      "post": {
+        "tags": [
+          "VmStorageEndpoints"
+        ],
+        "operationId": "MoveAllVmStorage",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/MoveAllVmStorageRequest"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoveAllVmStorageResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error, as a Problem document.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/vm-defaults": {
       "get": {
         "tags": [
@@ -11358,7 +11460,8 @@
           "vault",
           "https",
           "backups",
-          "repair"
+          "repair",
+          "storage"
         ],
         "type": "object",
         "properties": {
@@ -11496,6 +11599,16 @@
             "allOf": [
               {
                 "$ref": "#/components/schemas/RepairConfig"
+              },
+              {
+                "$ref": "#/components/schemas/HostConfigSectionMeta"
+              }
+            ]
+          },
+          "storage": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/StorageConfig"
               },
               {
                 "$ref": "#/components/schemas/HostConfigSectionMeta"
@@ -11741,6 +11854,10 @@
           },
           "https": {
             "$ref": "#/components/schemas/HostHttpsPolicy"
+          },
+          "storageMove": {
+            "type": "boolean",
+            "default": false
           }
         }
       },
@@ -13454,6 +13571,46 @@
           }
         }
       },
+      "MoveAllVmStorageRequest": {
+        "type": "object",
+        "properties": {
+          "destinationPath": {
+            "type": [
+              "null",
+              "string"
+            ]
+          }
+        }
+      },
+      "MoveAllVmStorageResponse": {
+        "required": [
+          "vms",
+          "destinationPath"
+        ],
+        "type": "object",
+        "properties": {
+          "vms": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "destinationPath": {
+            "type": "string"
+          }
+        }
+      },
+      "MoveVmStorageRequest": {
+        "type": "object",
+        "properties": {
+          "destinationPath": {
+            "type": [
+              "null",
+              "string"
+            ]
+          }
+        }
+      },
       "NetworkCapabilities": {
         "required": [
           "clientForward",
@@ -14573,6 +14730,17 @@
           "port": {
             "type": "integer",
             "format": "int32"
+          }
+        }
+      },
+      "StorageConfig": {
+        "type": "object",
+        "properties": {
+          "vmStorageRoot": {
+            "type": [
+              "null",
+              "string"
+            ]
           }
         }
       },
@@ -17596,6 +17764,12 @@
                 "$ref": "#/components/schemas/TokenUsageVmFigures"
               }
             ]
+          },
+          "diskPath": {
+            "type": [
+              "null",
+              "string"
+            ]
           }
         }
       },
@@ -18343,6 +18517,9 @@
     },
     {
       "name": "VmEndpoints"
+    },
+    {
+      "name": "VmStorageEndpoints"
     },
     {
       "name": "Constructd.Api"

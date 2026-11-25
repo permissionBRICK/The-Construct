@@ -33,6 +33,7 @@ const JOB_WORD: Record<Job['kind'], string> = {
   update: 'Updating',
   restore: 'Restoring',
   create: 'Creating',
+  move: 'Moving disk',
 };
 
 const DONE_WORD: Record<Job['kind'], string> = {
@@ -41,6 +42,7 @@ const DONE_WORD: Record<Job['kind'], string> = {
   update: 'Updated',
   restore: 'Restored',
   create: 'Created',
+  move: 'Moved',
 };
 
 export const doneWord = (job: Job) => DONE_WORD[job.kind];

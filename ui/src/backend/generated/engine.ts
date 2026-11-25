@@ -164,6 +164,38 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/vms/{name}/storage/move": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["MoveVmStorage"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/host/vms/storage/move": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["MoveAllVmStorage"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/vm-defaults": {
         parameters: {
             query?: never;
@@ -4838,6 +4870,7 @@ export interface components {
             https: components["schemas"]["HttpsConfig"] & components["schemas"]["HostConfigSectionMeta"];
             backups: components["schemas"]["BackupsConfig"] & components["schemas"]["HostConfigSectionMeta"];
             repair: components["schemas"]["RepairConfig"] & components["schemas"]["HostConfigSectionMeta"];
+            storage: components["schemas"]["StorageConfig"] & components["schemas"]["HostConfigSectionMeta"];
         };
         HostConfigSectionMeta: {
             /**
@@ -4902,6 +4935,8 @@ export interface components {
             capacityMode: components["schemas"]["CapacityMode"];
             memoryPressure: components["schemas"]["MemoryPressureConfig"];
             https: components["schemas"]["HostHttpsPolicy"];
+            /** @default false */
+            storageMove: boolean;
         };
         HostRamAdmission: {
             enforced: boolean;
@@ -5327,6 +5362,16 @@ export interface components {
             usedPercent?: null | number;
             detail?: null | string;
         };
+        MoveAllVmStorageRequest: {
+            destinationPath?: null | string;
+        };
+        MoveAllVmStorageResponse: {
+            vms: string[];
+            destinationPath: string;
+        };
+        MoveVmStorageRequest: {
+            destinationPath?: null | string;
+        };
         NetworkCapabilities: {
             clientForward: components["schemas"]["CapabilityLevel"];
             hostForwardPrimary: components["schemas"]["CapabilityLevel"];
@@ -5603,6 +5648,9 @@ export interface components {
             host: string;
             /** Format: int32 */
             port: number;
+        };
+        StorageConfig: {
+            vmStorageRoot?: null | string;
         };
         StoredRecord: {
             id: string;
@@ -6327,6 +6375,7 @@ export interface components {
             network?: null | components["schemas"]["VmNetworkSettingsView"];
             savedBy?: null | string;
             tokenUsage?: null | components["schemas"]["TokenUsageVmFigures"];
+            diskPath?: null | string;
         };
         /** @enum {string} */
         VmState: "unknown" | "running" | "off" | "paused" | "saved" | "absent";
@@ -7038,6 +7087,74 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["EndpointResponse"];
+                };
+            };
+            /** @description An error, as a Problem document. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    MoveVmStorage: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": null | components["schemas"]["MoveVmStorageRequest"];
+            };
+        };
+        responses: {
+            /** @description Accepted */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobAcceptedResponse"];
+                };
+            };
+            /** @description An error, as a Problem document. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    MoveAllVmStorage: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": null | components["schemas"]["MoveAllVmStorageRequest"];
+            };
+        };
+        responses: {
+            /** @description Accepted */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MoveAllVmStorageResponse"];
                 };
             };
             /** @description An error, as a Problem document. */

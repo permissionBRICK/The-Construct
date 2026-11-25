@@ -368,7 +368,7 @@ export class FakeBackend implements Backend {
   }
 
   private onDone(j: Job) {
-    const verb = { reprovision: 'Reprovisioned', reinstall: 'Reinstalled', update: 'Updated', restore: 'Restored', create: 'Created' }[j.kind];
+    const verb = { reprovision: 'Reprovisioned', reinstall: 'Reinstalled', update: 'Updated', restore: 'Restored', create: 'Created', move: 'Moved' }[j.kind];
     this.set(() => {}, `${verb} ${this.vmName(j.vmId)}`);
     this.drain();
   }
@@ -1011,6 +1011,47 @@ export class FakeBackend implements Backend {
     this.hostSet(hostId, x => { x.repairChat = on; }, on ? 'The repair runs in Construct\'s chat' : 'The repair runs in T3 Code');
   }
 
+  setHostStoragePath(hostId: string, path: string | null, moveAllVms = false) {
+    const next = path?.trim() ? path.trim().replace(/\//g, '\\').replace(/\\+$/, '') : null;
+    const dest = next ?? 'C:\\ProgramData\\Microsoft\\Windows\\Virtual Hard Disks';
+    const norm = dest.endsWith(':') ? dest + '\\' : dest;
+    const join = (file: string) => (norm.endsWith('\\') ? `${norm}${file}` : `${norm}\\${file}`);
+    let movedCount = 0;
+    this.hostSet(hostId, (x, d) => {
+      x.vmStorageRoot = next;
+      const sec = x.config.find(c => c.name === 'storage');
+      if (sec) { sec.json = JSON.stringify({ vmStorageRoot: next }, null, 2); sec.updated = 'now'; }
+      x.audit.unshift({ at: 'now', actor: 'alex', action: 'config.save', target: 'storage' });
+      if (moveAllVms) {
+        for (const v of x.vms) {
+          const target = join(`${v.name}.vhdx`);
+          if (v.diskPath?.toLowerCase() === target.toLowerCase()) continue;
+          v.diskPath = target;
+          const mine = d.vms.find(m => m.hostId === hostId && m.name === v.name);
+          if (mine) mine.diskPath = target;
+          movedCount++;
+        }
+        x.audit.unshift({ at: 'now', actor: 'alex', action: 'vm.storage.move.all', target: 'host' });
+      }
+    }, moveAllVms ? (movedCount > 0 ? `Saved default path; moving ${movedCount} ${movedCount === 1 ? 'VM' : 'VMs'}` : 'Saved default disk path; all VMs are already there') : next ? 'Saved default disk path' : 'Reset default disk path to Hyper-V default');
+  }
+
+  moveVmStorage(hostId: string, vmName: string, destinationPath: string | null) {
+    const host = this.s.hosts.find(h => h.id === hostId);
+    const raw = destinationPath?.trim() || host?.vmStorageRoot || 'C:\\ProgramData\\Microsoft\\Windows\\Virtual Hard Disks';
+    const norm = raw.replace(/\//g, '\\').replace(/\\+$/, '');
+    const base = norm.endsWith(':') ? norm + '\\' : norm;
+    const target = base.endsWith('\\') ? `${base}${vmName}.vhdx` : `${base}\\${vmName}.vhdx`;
+    this.hostSet(hostId, (x, d) => {
+      const hv = x.vms.find(v => v.name === vmName);
+      if (hv) hv.diskPath = target;
+      const mine = d.vms.find(v => v.hostId === hostId && v.name === vmName);
+      if (mine) mine.diskPath = target;
+      x.jobs.unshift({ id: 'j-' + this.seq++, kind: 'move-storage', vm: vmName, owner: hv?.owner ?? 'alex', state: 'done', phase: 'finish', created: 'now' });
+      x.audit.unshift({ at: 'now', actor: 'alex', action: 'vm.storage.move', target: vmName });
+    }, `Moving ${vmName}`);
+  }
+
   saveConfig(hostId: string, section: string, json: string): string | null {
     try { JSON.parse(json); } catch (e) { return (e as Error).message; }
     this.hostSet(hostId, x => { const c = x.config.find(y => y.name === section); if (c) { c.json = json; c.updated = 'now'; } x.audit.unshift({ at: 'now', actor: 'alex', action: 'config.save', target: section }); }, `Saved ${section}`);
@@ -1081,8 +1122,9 @@ export class FakeBackend implements Backend {
 const UPDATE_STEPS = ['Download', 'This device', 'Host', 'Reprovision'];
 const CREATE_STEPS = ['Reserving', 'Installing Ubuntu', 'Installing tools', 'Projects', 'Services'];
 const RESTORE_STEPS = ['Fetching the backup', 'Restoring', 'Reprovision'];
+const MOVE_STEPS = ['Moving disk', 'Updating storage'];
 const START_STEP = 'Starting the VM';
-const stepsOf = (k: JobKind) => (k === 'reinstall' ? REINSTALL_STEPS : k === 'update' ? UPDATE_STEPS : k === 'create' ? CREATE_STEPS : k === 'restore' ? RESTORE_STEPS : REPROVISION_STEPS);
+const stepsOf = (k: JobKind) => (k === 'reinstall' ? REINSTALL_STEPS : k === 'update' ? UPDATE_STEPS : k === 'create' ? CREATE_STEPS : k === 'restore' ? RESTORE_STEPS : k === 'move' ? MOVE_STEPS : REPROVISION_STEPS);
 
 const REPAIR_SCRIPT = [
   'Reading the log of "Installing tools".',

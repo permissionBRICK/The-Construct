@@ -178,6 +178,7 @@ export function toVm(id: string, engine: string, r: VmResponse, all: VmResponse[
     },
     memTotalGb: r.ramGb,
     diskTotalGb: r.diskGb,
+    diskPath: r.diskPath ?? null,
     agents: toAgents(p.agents),
     children: all.filter(c => c.kind === 'child' && c.parent === r.name).map(c => ({
       name: c.name, os: '', left: c.lease?.expiresAt ? when(c.lease.expiresAt) : '–', power: power(c.state),
@@ -216,15 +217,18 @@ const AGENT_UPDATE_STEPS: [string, string][] = [
   ['claude', 'Updating Claude Code'], ['codex', 'Updating Codex'], ['opencode', 'Updating OpenCode'],
   ['antigravity', 'Updating Antigravity'], ['t3', 'Updating T3 Code'], ['report', 'Checking agents'],
 ];
+const MOVE_STORAGE_STEPS: [string, string][] = [
+  ['move', 'Moving disk'], ['finish', 'Updating storage'],
+];
 const STEPS: Record<string, [string, string][]> = {
-  provision: PROVISION_STEPS, reinstall: REINSTALL_STEPS, restore: RESTORE_STEPS, 'update-agents': AGENT_UPDATE_STEPS,
+  provision: PROVISION_STEPS, reinstall: REINSTALL_STEPS, restore: RESTORE_STEPS, 'update-agents': AGENT_UPDATE_STEPS, 'move-storage': MOVE_STORAGE_STEPS,
 };
 /** A provision the user asked for starts a VM that is off first (ProvisionStart.Step). It comes before the first step and
     stays out of the list, so the bar of an engine that sends no whole-job percentage is the same as before. */
 const START_STEP: [string, string] = ['start', 'Starting the VM'];
 
 const JOB_KINDS: Record<string, JobKind> = {
-  provision: 'reprovision', 'create-vm': 'create', reinstall: 'reinstall', restore: 'restore', 'update-agents': 'update',
+  provision: 'reprovision', 'create-vm': 'create', reinstall: 'reinstall', restore: 'restore', 'update-agents': 'update', 'move-storage': 'move',
 };
 /** Engine job kinds the VM pages show. */
 export const VM_JOB_KINDS = Object.keys(JOB_KINDS);
@@ -313,6 +317,7 @@ export function toHostVm(r: VmResponse): HostVm {
     // `shared` is the caller's access to someone else's VM; the VM's own setting is its sharing scope.
     shared: r.sharing === 'host',
     tokensToday: String(r.tokenUsage?.today.tokens ?? 0),
+    diskPath: r.diskPath ?? null,
   };
 }
 
