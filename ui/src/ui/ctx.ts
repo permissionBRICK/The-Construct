@@ -14,6 +14,8 @@ export interface Shell {
   fit?(height: number): void;
   /** Runs when the desktop shell hides the floating surface; returns an unsubscribe function. */
   onHide?(fn: () => void): () => void;
+  /** Runs when the desktop shell shows the floating surface; returns an unsubscribe function. */
+  onShow?(fn: () => void): () => void;
 }
 
 export interface Ctx {

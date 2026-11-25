@@ -22,6 +22,7 @@ internal sealed class TrayShell : ApplicationContext, IAgentShell
     private readonly System.Windows.Forms.Timer _clickTimer = new() { Interval = SystemInformation.DoubleClickTime };
     private readonly System.Windows.Forms.Timer _vaultTimer = new() { Interval = IdleVaultPollMs };
     private readonly System.Windows.Forms.Timer _placeTimer = new() { Interval = 2_000 };
+    private readonly System.Windows.Forms.Timer _warmTimer = new() { Interval = 1_500 };
     private readonly PopupGesture _gesture = new();
     private readonly Dictionary<string, AgentWindow> _windows = [];
     // The content height each floating surface last reported (CSS pixels): it opens at that size (finding 7).
@@ -90,6 +91,12 @@ internal sealed class TrayShell : ApplicationContext, IAgentShell
         };
         _vaultTimer.Tick += async (_, _) => await PollVaultAsync();
         _vaultTimer.Start();
+        _warmTimer.Tick += (_, _) =>
+        {
+            _warmTimer.Stop();
+            WarmPopOut();
+        };
+        _warmTimer.Start();
         DrawIcon();
     }
 
@@ -113,18 +120,36 @@ internal sealed class TrayShell : ApplicationContext, IAgentShell
         return new[] { "win", "pop", "alone" }.Where(Visible).ToArray();
     }
 
+    private AgentWindow GetOrCreate(string surface)
+    {
+        if (_windows.TryGetValue(surface, out var window)) return window;
+        window = new AgentWindow(surface, _origin, _token, _runtime, Open, _log);
+        if (surface == "pop") window.FocusLost += () => _gesture.FocusLost((Control.MouseButtons & MouseButtons.Left) != 0 && _trayHitArea is { } area && area.Contains(Cursor.Position));
+        if (surface is "pop" or "alone") window.ContentHeight += css => Fit(surface, window, css);
+        _windows[surface] = window;
+        return window;
+    }
+
+    /// <summary>
+    /// Pre-warms the pop-out's WebView2 and page in the background after startup or an automatic update,
+    /// so the user's first tray click opens immediately with the VMs already loaded.
+    /// </summary>
+    private void WarmPopOut()
+    {
+        if (_windows.ContainsKey("pop")) return;
+        var window = GetOrCreate("pop");
+        var (width, height) = TrayModel.PopupSize(_iconDpi);
+        if (_contentHeight.TryGetValue("pop", out var css)) height = TrayModel.FittedHeight(css, _iconDpi, window.Zoom);
+        window.Bounds = PopupBounds(width, height);
+        window.WarmUp();
+    }
+
     private void Show(string surface, string? route)
     {
         // A new release shows when the pop-out opens, not only after the six-hourly check (finding 16).
         if (surface == "pop") _device.Updater.CheckIfStale();
         Renew(surface);
-        if (!_windows.TryGetValue(surface, out var window))
-        {
-            window = new AgentWindow(surface, _origin, _token, _runtime, Open, _log);
-            if (surface == "pop") window.FocusLost += () => _gesture.FocusLost((Control.MouseButtons & MouseButtons.Left) != 0 && _trayHitArea is { } area && area.Contains(Cursor.Position));
-            if (surface is "pop" or "alone") window.ContentHeight += css => Fit(surface, window, css);
-            _windows[surface] = window;
-        }
+        var window = GetOrCreate(surface);
 
         if (surface is "pop" or "alone")
         {
@@ -161,6 +186,7 @@ internal sealed class TrayShell : ApplicationContext, IAgentShell
             foreach (var window in _windows.Values.ToArray()) Drop(window);
             _windows.Clear();
             _runtime.Reset();
+            if (surface != "pop") _warmTimer.Start();
         }
         else if (_windows.TryGetValue(surface, out var window) && window.Broken)
         {
@@ -373,6 +399,7 @@ internal sealed class TrayShell : ApplicationContext, IAgentShell
     {
         _vaultTimer.Stop();
         _placeTimer.Stop();
+        _warmTimer.Stop();
         _tray.Visible = false;
         foreach (var window in _windows.Values) window.Shutdown();
         base.ExitThreadCore();
@@ -389,6 +416,7 @@ internal sealed class TrayShell : ApplicationContext, IAgentShell
             _clickTimer.Dispose();
             _vaultTimer.Dispose();
             _placeTimer.Dispose();
+            _warmTimer.Dispose();
             _dispatcher.Dispose();
         }
 

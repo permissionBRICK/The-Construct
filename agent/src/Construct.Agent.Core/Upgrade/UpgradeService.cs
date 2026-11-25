@@ -179,7 +179,9 @@ public sealed class UpgradeService
             items = _running == "convert" ? [.. _live] : bridge.Items;
         }
 
-        return new UpgradeView(legacy is not null, bridge.Stage, steps, legacy is null ? null : Found(legacy, bridge.Stage != BridgeState.Converted), bridge.StoreEngine ?? _agent.StoreEngineId,
+        return new UpgradeView(legacy is not null, bridge.Stage, steps,
+            legacy is null || bridge.Stage == BridgeState.Converted ? null : Found(legacy, probe: true),
+            bridge.StoreEngine ?? _agent.StoreEngineId,
             bridge.LocalEngine, items, !bridge.NotesRead && bridge.NotesAccount is { } owner && owner == _agent.Account ? bridge.Notes : [], writers, _running is not null,
             error, bridge.OldHosts, progress);
 

@@ -41,7 +41,7 @@ function VmMenu() {
 export function Stack({ footer }: { footer: boolean }) {
   const { s, be, vm, shell } = useApp();
   const [wipe, setWipe] = useState(false);
-  if (!vm) return <div class="stack"><VaultCards /><SignInCards /><NoVm /></div>;
+  if (!vm) return <div class="stack"><VaultCards /><SignInCards />{s.loading ? <LoadingVm /> : <NoVm />}</div>;
   const job = activeJob(s, vm.id);
   const warned = job ? null : warnedJob(s, vm.id);
   const host = s.hosts.find(h => h.id === vm.hostId);
@@ -83,12 +83,35 @@ export function Stack({ footer }: { footer: boolean }) {
   );
 }
 
-function NoVm() {
-  const { surf, shell, go } = useApp();
+function LoadingVm() {
   return (
-    <div class="blk">
-      <Btn kind="pri" icon="plus" onClick={() => (surf === 'pop' ? shell.openWindow({ page: 'create' }) : go({ page: 'create' }))}>New VM</Btn>
+    <div class="blk" role="status" aria-live="polite">
+      <span class="d">Loading…</span>
     </div>
+  );
+}
+
+function NoVm() {
+  const { s, surf, shell, go } = useApp();
+  const unreachable = s.hosts.filter(h => h.problem);
+  const allDown = s.hosts.length > 0 && unreachable.length === s.hosts.length;
+  return (
+    <>
+      {unreachable.length > 0 && (
+        <div class="blk warn" role="status">
+          <div class="bh"><b>Host unreachable</b></div>
+          {unreachable.map(h => <div class="msg">{h.name}: {h.problem}</div>)}
+          {allDown && (
+            <Btn kind="pri" icon="gear" onClick={() => (surf === 'pop' ? shell.openWindow({ page: 'hosts' }) : go({ page: 'hosts' }))}>Hosts</Btn>
+          )}
+        </div>
+      )}
+      {!allDown && (
+        <div class="blk">
+          <Btn kind="pri" icon="plus" onClick={() => (surf === 'pop' ? shell.openWindow({ page: 'create' }) : go({ page: 'create' }))}>New VM</Btn>
+        </div>
+      )}
+    </>
   );
 }
 
@@ -112,7 +135,7 @@ function useFit() {
     if (!el) return;
     let last = 0;
     let ro: ResizeObserver | null = null;
-    const measure = () => {
+    const measure = (force = false) => {
       if (!shell.fit) return;
       const top = el.getBoundingClientRect().top;
       let h = el.getBoundingClientRect().height;
@@ -122,16 +145,21 @@ function useFit() {
         h = Math.max(h, m.getBoundingClientRect().bottom - top + 12);
       }
       h = Math.ceil(h);
-      if (h > 0 && h !== last) { last = h; shell.fit(h); }
+      if (h > 0 && (force || h !== last)) { last = h; shell.fit(h); }
     };
+    const onToggle = () => measure();
     if (shell.fit && typeof ResizeObserver !== 'undefined') {
-      ro = new ResizeObserver(measure);
+      ro = new ResizeObserver(() => measure());
       ro.observe(el);
-      el.addEventListener('toggle', measure, true);
+      el.addEventListener('toggle', onToggle, true);
       measure();
     }
     const closeMenus = () => { if (closeOpenMenus(el)) measure(); };
-    const onVisibility = () => { if (document.hidden) closeMenus(); };
+    const onShow = () => {
+      measure(true);
+      if (typeof requestAnimationFrame === 'function') requestAnimationFrame(() => measure());
+    };
+    const onVisibility = () => { if (document.hidden) closeMenus(); else onShow(); };
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') closeMenus(); };
     // Capture-phase pointerup also dismisses when clicking disabled controls (which suppress click);
     // the toggle event updates the fitted height afterwards so click delivery is unaffected.
@@ -143,9 +171,10 @@ function useFit() {
     document.addEventListener('pointerup', onOutside, true);
     document.addEventListener('click', onOutside);
     const offHide = shell.onHide?.(closeMenus);
+    const offShow = shell.onShow?.(onShow);
     return () => {
       ro?.disconnect();
-      el.removeEventListener('toggle', measure, true);
+      el.removeEventListener('toggle', onToggle, true);
       removeEventListener('blur', closeMenus);
       removeEventListener('pagehide', closeMenus);
       removeEventListener('keydown', onKey);
@@ -153,6 +182,7 @@ function useFit() {
       document.removeEventListener('pointerup', onOutside, true);
       document.removeEventListener('click', onOutside);
       offHide?.();
+      offShow?.();
     };
   }, [shell]);
   return ref;

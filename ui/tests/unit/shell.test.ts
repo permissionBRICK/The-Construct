@@ -53,7 +53,7 @@ describe('makeShell', () => {
     expect(w.location.href).toBe('http://127.0.0.1:5000/?surf=win#/vault');
   });
 
-  it('forwards desktop shell hide messages and unsubscribes cleanly', () => {
+  it('forwards desktop shell hide and show messages and unsubscribes cleanly', () => {
     const listeners = new Set<(e: { data?: unknown }) => void>();
     const webview = {
       postMessage() {},
@@ -61,19 +61,25 @@ describe('makeShell', () => {
       removeEventListener(type: string, fn: (e: { data?: unknown }) => void) { if (type === 'message') listeners.delete(fn); },
     };
     const w = { location: { href: 'http://127.0.0.1:5000/?surf=pop#/' }, chrome: { webview } } as unknown as Window;
-    let hidden = 0;
-    const off = makeShell(w).onHide!(() => { hidden++; });
+    const sh = makeShell(w);
+    let hidden = 0, shown = 0;
+    const offHide = sh.onHide!(() => { hidden++; });
+    const offShow = sh.onShow!(() => { shown++; });
     for (const fn of listeners) {
       fn({ data: { type: 'other' } });
       fn({ data: 'hide' });
       fn({ data: null });
       fn({ data: { type: 'hide' } });
+      fn({ data: { type: 'show' } });
     }
     expect(hidden).toBe(1);
-    off();
+    expect(shown).toBe(1);
+    offHide();
+    offShow();
     expect(listeners.size).toBe(0);
     // Safe no-op without WebView2 event methods.
     expect(() => makeShell(win('http://127.0.0.1:5000/?surf=pop#/')).onHide!(() => {})()).not.toThrow();
+    expect(() => makeShell(win('http://127.0.0.1:5000/?surf=pop#/')).onShow!(() => {})()).not.toThrow();
   });
 });
 

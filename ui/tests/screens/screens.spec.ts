@@ -481,3 +481,126 @@ test('the lone vault card of a VM\'s files stays until each file is answered, th
   await card.getByRole('button', { name: 'Redact', exact: true }).click();
   await expect.poll(closes).toBe(1);
 });
+
+test('pop-out shows Loading instead of New VM while initial VMs load, and re-posts height on shell show', async ({ page }) => {
+  let releaseVms!: () => void;
+  const vmsGate = new Promise<void>(r => { releaseVms = r; });
+  await page.addInitScript(() => {
+    const sent: unknown[] = [];
+    const listeners = new Set<(e: { data?: unknown }) => void>();
+    (window as unknown as { __sent: unknown[]; __emitShell: (data: unknown) => void }).__sent = sent;
+    (window as unknown as { __emitShell: (data: unknown) => void }).__emitShell = (data: unknown) => {
+      for (const fn of listeners) fn({ data });
+    };
+    (window as unknown as { chrome: unknown }).chrome = {
+      webview: {
+        postMessage: (m: unknown) => { sent.push(m); },
+        addEventListener: (type: string, fn: (e: { data?: unknown }) => void) => { if (type === 'message') listeners.add(fn); },
+        removeEventListener: (type: string, fn: (e: { data?: unknown }) => void) => { if (type === 'message') listeners.delete(fn); },
+      },
+    };
+  });
+  const e1 = 'engine1';
+  await page.route('**/api/**', async route => {
+    const url = new URL(route.request().url());
+    const p = url.pathname;
+    if (p === '/api/events') { await route.fulfill({ status: 200, contentType: 'text/event-stream', body: ': connected\n\n' }); return; }
+    if (p === '/api/health') { await route.fulfill({ json: { status: 'ok', version: '3.1.0', pid: 1, startedAt: '2026-11-24T00:00:00Z' } }); return; }
+    if (p === '/api/state') { await route.fulfill({ json: { device: { id: 'd1', name: 'pc', account: 'a1', registered: true, storeEngine: e1, protection: 'dpapi', protectionWeak: false, recoveryUnconfirmed: false }, engines: [{ id: e1, name: 'orchard', url: 'https://orchard.test:8443', pin: 'AB', engineId: 'x', enrolled: true, signedIn: false, store: true }], pairing: null } }); return; }
+    if (p === '/api/upgrade') { await route.fulfill({ json: { legacy: true, stage: 'converted', steps: [], found: null, storeEngine: e1, localEngine: null, items: [], notes: [], oldWriters: [], running: false, error: null, oldHosts: [] } }); return; }
+    if (p === `/api/engines/${e1}/api/v1/whoami`) { await route.fulfill({ json: { name: 'alex', kind: 'user', scheme: 'Device', known: true, role: 'admin', maxVms: 5, allowHostForwards: true } }); return; }
+    if (p === `/api/engines/${e1}/api/v1/vms`) {
+      await vmsGate;
+      await route.fulfill({ json: [{ name: 'atlas', owner: 'alex', cpu: 4, ramGb: 8, diskGb: 60, created: '2026-11-01T10:00:00Z', state: 'running', sshForwardPort: 2201, publicHost: 'host.test', deleting: false, idlePolicy: { timeoutMinutes: 30, action: 'save', maxTimeoutMinutes: 0, clamped: false }, forwards: [], kind: 'primary', parent: null, sharing: 'private', shared: false, resourceUsage: { observedAt: null, stale: false, state: null, cpuUsagePercent: 12, memoryAssignedBytes: 4 * 1024 ** 3, memoryDemandBytes: null, diskFileBytes: 20 * 1024 ** 3, uptimeSeconds: 1 }, pendingCpu: null, pendingRamGb: null }] });
+      return;
+    }
+    if (p === `/api/engines/${e1}/api/v1/host/status`) {
+      // Simulate a slow admin endpoint: must never hold back showing the VM.
+      await new Promise(() => {});
+    }
+    if (p.endsWith('/jobs') || p === '/api/devices' || p === '/api/notices/dismissed' || p === '/api/connections' || p.endsWith('/profiles') || p.endsWith('/profile-conflicts') || p === '/api/vault/secrets' || p === '/api/vault/history') {
+      await route.fulfill({ json: [] }); return;
+    }
+    if (p === '/api/vault/approvals') { await route.fulfill({ json: { approvals: [], unreachable: [] } }); return; }
+    if (p === '/api/vault/entry-requests') { await route.fulfill({ json: { requests: [], unreachable: [] } }); return; }
+    if (p === '/api/vault/files') { await route.fulfill({ json: { files: [], unreachable: [] } }); return; }
+    if (p === '/api/update') { await route.fulfill({ json: { version: '3.1.0', channel: 'stable', available: null, state: 'idle', error: null, installed: true, checkedAt: null } }); return; }
+    if (p === '/api/device/settings') { await route.fulfill({ json: { channel: 'stable', autoUpdate: true, startWithOs: true } }); return; }
+    if (p === '/api/device/features') { await route.fulfill({ json: { platform: 'windows', notifications: true, microphone: true, share: true, startWithOs: true, shell: true, engineHost: true } }); return; }
+    if (p === '/api/device/ssh-key') { await route.fulfill({ json: { publicKey: 'ssh-ed25519 AAAA', path: 'k' } }); return; }
+    if (p === '/api/update/everything') { await route.fulfill({ json: { running: false, parts: [] } }); return; }
+    if (p === `/api/engines/${e1}/api/v1/health`) { await route.fulfill({ json: { status: 'ok', schemaVersion: 1, schemaMinReadableBy: 0, apiFeatures: [], maintenance: null, commit: 'c'.repeat(40), packageVersion: '3.1.0' } }); return; }
+    if (p === `/api/engines/${e1}/api/v1/me/updates`) { await route.fulfill({ json: { autoReprovision: true } }); return; }
+    await route.fulfill({ status: 404, json: { title: 'not found', status: 404 } });
+  });
+
+  await page.setViewportSize(SIZE.pop);
+  await page.goto('index.html?surf=pop&theme=dark#agent-token=test-token');
+  await expect(page.getByRole('status')).toHaveText('Loading…');
+  await expect(page.getByRole('button', { name: 'New VM' })).toHaveCount(0);
+
+  releaseVms();
+  await expect(page.getByRole('button', { name: 'Control panel' })).toBeVisible();
+  await expect(page.locator('.who summary')).toContainText('atlas');
+
+  const before = await page.evaluate(() => (window as unknown as { __sent: { type: string }[] }).__sent.filter(m => m.type === 'size').length);
+  await page.evaluate(() => (window as unknown as { __emitShell: (d: unknown) => void }).__emitShell({ type: 'show' }));
+  await expect.poll(() => page.evaluate(() => (window as unknown as { __sent: { type: string }[] }).__sent.filter(m => m.type === 'size').length)).toBeGreaterThan(before);
+});
+
+test('pop-out shows Host unreachable instead of New VM when all hosts fail, and recovers on shell show', async ({ page }) => {
+  await page.addInitScript(() => {
+    const listeners = new Set<(e: { data?: unknown }) => void>();
+    (window as unknown as { __emitShell: (data: unknown) => void }).__emitShell = (data: unknown) => {
+      for (const fn of listeners) fn({ data });
+    };
+    (window as unknown as { chrome: unknown }).chrome = {
+      webview: {
+        postMessage: () => {},
+        addEventListener: (type: string, fn: (e: { data?: unknown }) => void) => { if (type === 'message') listeners.add(fn); },
+        removeEventListener: (type: string, fn: (e: { data?: unknown }) => void) => { if (type === 'message') listeners.delete(fn); },
+      },
+    };
+  });
+  const e1 = 'engine1';
+  let reachable = false;
+  await page.route('**/api/**', async route => {
+    const p = new URL(route.request().url()).pathname;
+    if (p === '/api/events') { await route.fulfill({ status: 200, contentType: 'text/event-stream', body: ': connected\n\n' }); return; }
+    if (p === '/api/health') { await route.fulfill({ json: { status: 'ok', version: '3.1.0', pid: 1, startedAt: '2026-11-24T00:00:00Z' } }); return; }
+    if (p === '/api/state') { await route.fulfill({ json: { device: { id: 'd1', name: 'pc', account: 'a1', registered: true, storeEngine: e1, protection: 'dpapi', protectionWeak: false, recoveryUnconfirmed: false }, engines: [{ id: e1, name: 'orchard', url: 'https://orchard.test:8443', pin: 'AB', engineId: 'x', enrolled: true, signedIn: false, store: true }], pairing: null } }); return; }
+    if (p === '/api/upgrade') { await route.fulfill({ json: { legacy: false, stage: 'none', steps: [], found: null, storeEngine: e1, localEngine: null, items: [], notes: [], oldWriters: [], running: false, error: null, oldHosts: [] } }); return; }
+    if (p === `/api/engines/${e1}/api/v1/whoami`) {
+      if (!reachable) { await route.fulfill({ status: 502, json: { title: 'The engine did not answer', status: 502, code: 'engine-unreachable' } }); return; }
+      await route.fulfill({ json: { name: 'alex', kind: 'user', scheme: 'Device', known: true, role: 'user', maxVms: 5, allowHostForwards: true } }); return;
+    }
+    if (p === `/api/engines/${e1}/api/v1/vms`) {
+      await route.fulfill({ json: [{ name: 'atlas', owner: 'alex', cpu: 4, ramGb: 8, diskGb: 60, created: '2026-11-01T10:00:00Z', state: 'running', sshForwardPort: 2201, publicHost: 'host.test', deleting: false, idlePolicy: { timeoutMinutes: 30, action: 'save', maxTimeoutMinutes: 0, clamped: false }, forwards: [], kind: 'primary', parent: null, sharing: 'private', shared: false, resourceUsage: { observedAt: null, stale: false, state: null, cpuUsagePercent: 12, memoryAssignedBytes: 4 * 1024 ** 3, memoryDemandBytes: null, diskFileBytes: 20 * 1024 ** 3, uptimeSeconds: 1 }, pendingCpu: null, pendingRamGb: null }] }); return;
+    }
+    if (p.endsWith('/jobs') || p === '/api/devices' || p === '/api/notices/dismissed' || p === '/api/connections' || p.endsWith('/profiles') || p.endsWith('/profile-conflicts') || p === '/api/vault/secrets' || p === '/api/vault/history') {
+      await route.fulfill({ json: [] }); return;
+    }
+    if (p === '/api/vault/approvals') { await route.fulfill({ json: { approvals: [], unreachable: [] } }); return; }
+    if (p === '/api/vault/entry-requests') { await route.fulfill({ json: { requests: [], unreachable: [] } }); return; }
+    if (p === '/api/vault/files') { await route.fulfill({ json: { files: [], unreachable: [] } }); return; }
+    if (p === '/api/update') { await route.fulfill({ json: { version: '3.1.0', channel: 'stable', available: null, state: 'idle', error: null, installed: true, checkedAt: null } }); return; }
+    if (p === '/api/device/settings') { await route.fulfill({ json: { channel: 'stable', autoUpdate: true, startWithOs: true } }); return; }
+    if (p === '/api/device/features') { await route.fulfill({ json: { platform: 'windows', notifications: true, microphone: true, share: true, startWithOs: true, shell: true, engineHost: true } }); return; }
+    if (p === '/api/device/ssh-key') { await route.fulfill({ json: { publicKey: 'ssh-ed25519 AAAA', path: 'k' } }); return; }
+    if (p === '/api/update/everything') { await route.fulfill({ json: { running: false, parts: [] } }); return; }
+    if (p === `/api/engines/${e1}/api/v1/health`) { await route.fulfill({ json: { status: 'ok', schemaVersion: 1, schemaMinReadableBy: 0, apiFeatures: [], maintenance: null, commit: 'c'.repeat(40), packageVersion: '3.1.0' } }); return; }
+    if (p === `/api/engines/${e1}/api/v1/me/updates`) { await route.fulfill({ json: { autoReprovision: true } }); return; }
+    await route.fulfill({ status: 404, json: { title: 'not found', status: 404 } });
+  });
+
+  await page.setViewportSize(SIZE.pop);
+  await page.goto('index.html?surf=pop&theme=dark#agent-token=test-token');
+  await expect(page.getByText('Host unreachable')).toBeVisible();
+  await expect(page.getByText('orchard: The engine did not answer')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'New VM' })).toHaveCount(0);
+
+  reachable = true;
+  await page.evaluate(() => (window as unknown as { __emitShell: (d: unknown) => void }).__emitShell({ type: 'show' }));
+  await expect(page.getByRole('button', { name: 'Control panel' })).toBeVisible();
+  await expect(page.locator('.who summary')).toContainText('atlas');
+});

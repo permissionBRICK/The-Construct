@@ -88,6 +88,8 @@ interface Slice {
   usageWindow: Host['usage']['window'];
   kind: string;
   problem: string | null;
+  /** True once this engine's initial VM list read has answered (or failed), so empty-VM states do not flash early. */
+  vmsLoaded: boolean;
   /** The latest repair session of each of the user's VMs, keyed by the VM's name in lower case. */
   repairs: Map<string, RepairRead>;
   /** Failed jobs whose VM was asked for its repair session once. */
@@ -99,7 +101,7 @@ interface Slice {
 
 const newSlice = (view: EngineView): Slice => ({
   view, me: null, health: null, all: [], mine: [], parts: new Map(), jobs: [], ended: new Map(), lost: new Set(), admin: null, autoReprovision: null,
-  usageWindow: 'month', kind: '', problem: null, repairs: new Map(), repairChecked: new Set(), repairStarting: new Set(), replying: new Set(),
+  usageWindow: 'month', kind: '', problem: null, vmsLoaded: false, repairs: new Map(), repairChecked: new Set(), repairStarting: new Set(), replying: new Set(),
 });
 
 class ApiError extends Error {
@@ -207,6 +209,7 @@ export class ApiBackend implements Backend {
   private writersTimer: ReturnType<typeof setTimeout> | null = null;
   private requestsTimer: ReturnType<typeof setTimeout> | null = null;
   private stopFocusRefresh: (() => void) | null = null;
+  private loaded = false;
   private disposed = false;
   constructor(private opts: ApiOptions) {
     this.fetchImpl = opts.fetch ?? ((...a: Parameters<typeof fetch>) => fetch(...a));
@@ -217,7 +220,7 @@ export class ApiBackend implements Backend {
       device: { name: '' }, version: '', release: null, vms: [], hosts: [], projects: [], sync: { when: '–', remote: '', rev: '' }, jobs: [],
       vaultRequests: [], vaultFiles: [], secrets: [], leases: [], devices: [], history: [], vaultModes: [], problems: {}, pairing: null, revocation: null, handout: null,
       prefs: { channel: 'stable', theme: p.theme ?? 'auto', scheme: p.scheme ?? 'green', autoUpdate: false, startWithOs: false, notifications: false },
-      upgrade: null, movedNotes: [], notice: null, na: API_GAPS, firstRun: null, everything: null, signIn: null, upstream: null,
+      upgrade: null, movedNotes: [], notice: null, na: API_GAPS, firstRun: null, everything: null, signIn: null, upstream: null, loading: true,
     };
   }
 
@@ -233,19 +236,32 @@ export class ApiBackend implements Backend {
       });
     }
     if (typeof document !== 'undefined' && typeof window !== 'undefined') {
-      const refreshOnShow = () => {
-        if (this.disposed || !this.registered || !this.s.vaultRequests.length) return;
-        if (document.visibilityState === 'visible') void this.loadRequests();
+      const onVisible = () => {
+        if (document.visibilityState === 'visible') this.refreshOnShow();
       };
-      document.addEventListener('visibilitychange', refreshOnShow);
-      window.addEventListener('focus', refreshOnShow);
+      const onFocus = () => this.refreshOnShow();
+      document.addEventListener('visibilitychange', onVisible);
+      window.addEventListener('focus', onFocus);
       this.stopFocusRefresh = () => {
-        document.removeEventListener('visibilitychange', refreshOnShow);
-        window.removeEventListener('focus', refreshOnShow);
+        document.removeEventListener('visibilitychange', onVisible);
+        window.removeEventListener('focus', onFocus);
       };
     }
     await this.load();
     this.schedule();
+  }
+
+  /** Called when the surface becomes visible or focused again (tray re-open, wake from sleep): retries a failed initial
+      load, re-checks any engine that failed or has not loaded VMs yet, and refreshes pending vault requests. */
+  refreshOnShow() {
+    if (this.disposed) return;
+    if (!this.loaded) { void this.load(); return; }
+    if (!this.registered) return;
+    if (this.s.vaultRequests.length) void this.loadRequests();
+    const empty = this.s.vms.length === 0;
+    for (const [id, sl] of this.slices) {
+      if (sl.problem !== null || !sl.vmsLoaded || empty) void this.refreshEngine(id);
+    }
   }
 
   dispose() {
@@ -310,6 +326,16 @@ export class ApiBackend implements Backend {
 
   /* --- loading --- */
 
+  /** True while the first read from the agent or its engines has neither produced a VM nor finished checking them. */
+  private isLoading(): boolean {
+    if (!this.loaded) return true;
+    if (!this.registered || this.s.upgrade || this.s.firstRun) return false;
+    if (this.slices.size === 0) return false;
+    for (const sl of this.slices.values()) if (sl.mine.length > 0) return false;
+    for (const sl of this.slices.values()) if (!sl.vmsLoaded) return true;
+    return false;
+  }
+
   private async load() {
     try {
       const [health, st] = await Promise.all([ok(this.agent.GET('/api/health')), ok(this.agent.GET('/api/state'))]);
@@ -317,14 +343,17 @@ export class ApiBackend implements Backend {
       this.registered = st.device.registered;
       this.storeEngine = st.device.storeEngine;
       // An old install not converted yet: the upgrade dialog is the only screen until its last step.
-      if (await this.loadUpgrade()) return;
+      if (await this.loadUpgrade()) { this.loaded = true; this.emit({ loading: false }); return; }
       // Set up, but the code was never confirmed as kept (a reload while it was on screen): shown again, newly issued.
       if (st.device.registered && st.device.recoveryUnconfirmed) {
+        this.loaded = true;
         const fr = this.s.firstRun;
         if (!(fr && (fr.busy || (fr.step === 'code' && fr.code)))) await this.reissueFirstRunCode(st.device.account ?? null);
+        this.emit({ loading: false });
         return;
       }
       if (!st.device.registered) {
+        this.loaded = true;
         await this.loadPlatform();
         if (!this.s.firstRun) {
           let local: string | null = null, known: string | null = null;
@@ -346,10 +375,13 @@ export class ApiBackend implements Backend {
             } catch { /* offered as not started */ }
           }
           this.emit({ firstRun: { step: st.pairing && st.pairing.state === 'waiting' ? 'pairing' : 'start', localAddress: local, thisPc, restart, busy: false, problem: null, code: null,
-            pairing: st.pairing && st.pairing.state === 'waiting' ? { code: st.pairing.pairingId, words: st.pairing.words, expiresAt: st.pairing.expiresAt } : null } });
+            pairing: st.pairing && st.pairing.state === 'waiting' ? { code: st.pairing.pairingId, words: st.pairing.words, expiresAt: st.pairing.expiresAt } : null }, loading: false });
+        } else {
+          this.emit({ loading: false });
         }
         return;
       }
+      this.loaded = true;
       // The agent reports the new identity before setup answers with the code: the first run stays while a
       // step runs and while the code is on screen.
       if (this.s.firstRun && !this.s.firstRun.busy && this.s.firstRun.step !== 'code') this.emit({ firstRun: null });
@@ -366,6 +398,7 @@ export class ApiBackend implements Backend {
       // After the VMs, so a request names the VM the screens know.
       await this.loadRequests();
     } catch (e) {
+      this.emit({ loading: false });
       this.note(errText(e));
     }
   }
@@ -388,6 +421,7 @@ export class ApiBackend implements Backend {
   }
 
   private async refreshAll() {
+    if (!this.loaded) { await this.load(); return; }
     // Vault requests arrive as events; the slow read catches an engine that was not reachable when one was filed.
     await Promise.all([this.loadDevices(), ...[...this.slices.keys()].map(id => this.refreshEngine(id)), this.loadVault(), this.loadProfiles(), this.loadUpstream(), this.loadRequests(), this.loadConnections()]);
   }
@@ -597,6 +631,7 @@ export class ApiBackend implements Backend {
       sl.me = await ok(c.GET('/api/v1/whoami'));
     } catch (e) {
       sl.problem = errText(e);
+      sl.vmsLoaded = true;
       this.compose();
       return;
     }
@@ -610,29 +645,35 @@ export class ApiBackend implements Backend {
     if (upd.status === 'fulfilled') sl.autoReprovision = upd.value.autoReprovision;
     const me = sl.me.name.toLowerCase();
     sl.mine = sl.all.filter(v => v.kind !== 'child' && v.owner.toLowerCase() === me && !v.deleting);
-    await Promise.all(sl.mine.map(async v => {
-      const path = { params: { path: { name: v.name } } };
-      const [status, update, backups, settings, desired, agents] = await Promise.allSettled([
-        ok(c.GET('/api/v1/vms/{name}/provision-status', path)), ok(c.GET('/api/v1/vms/{name}/update', path)),
-        ok(c.GET('/api/v1/vms/{name}/backups', path)), ok(c.GET('/api/v1/vms/{name}/backups/settings', path)),
-        ok(c.GET('/api/v1/vms/{name}/desired', path)), ok(c.GET('/api/v1/vms/{name}/agents', path)),
-      ]);
-      const old = sl.parts.get(v.name) ?? {};
-      const problems: Vm['problems'] = {};
-      if (status.status === 'rejected') problems.status = errText(status.reason);
-      if (backups.status === 'rejected') problems.backups = errText(backups.reason);
-      if (desired.status === 'rejected') problems.settings = errText(desired.reason);
-      if (agents.status === 'rejected') problems.agents = errText(agents.reason);
-      sl.parts.set(v.name, {
-        status: status.status === 'fulfilled' ? status.value : old.status,
-        update: update.status === 'fulfilled' ? update.value : old.update,
-        backups: backups.status === 'fulfilled' ? backups.value.backups : old.backups,
-        backupSettings: settings.status === 'fulfilled' ? settings.value : old.backupSettings,
-        desired: desired.status === 'fulfilled' ? desired.value : old.desired,
-        agents: agents.status === 'fulfilled' ? agents.value : old.agents,
-        problems,
-      });
-    }));
+    sl.vmsLoaded = true;
+    // Publish the VMs as soon as their list arrives so the pop-out and overview never wait on per-VM and admin calls.
+    this.compose();
+    await Promise.all([
+      ...sl.mine.map(async v => {
+        const path = { params: { path: { name: v.name } } };
+        const [status, update, backups, settings, desired, agents] = await Promise.allSettled([
+          ok(c.GET('/api/v1/vms/{name}/provision-status', path)), ok(c.GET('/api/v1/vms/{name}/update', path)),
+          ok(c.GET('/api/v1/vms/{name}/backups', path)), ok(c.GET('/api/v1/vms/{name}/backups/settings', path)),
+          ok(c.GET('/api/v1/vms/{name}/desired', path)), ok(c.GET('/api/v1/vms/{name}/agents', path)),
+        ]);
+        const old = sl.parts.get(v.name) ?? {};
+        const problems: Vm['problems'] = {};
+        if (status.status === 'rejected') problems.status = errText(status.reason);
+        if (backups.status === 'rejected') problems.backups = errText(backups.reason);
+        if (desired.status === 'rejected') problems.settings = errText(desired.reason);
+        if (agents.status === 'rejected') problems.agents = errText(agents.reason);
+        sl.parts.set(v.name, {
+          status: status.status === 'fulfilled' ? status.value : old.status,
+          update: update.status === 'fulfilled' ? update.value : old.update,
+          backups: backups.status === 'fulfilled' ? backups.value.backups : old.backups,
+          backupSettings: settings.status === 'fulfilled' ? settings.value : old.backupSettings,
+          desired: desired.status === 'fulfilled' ? desired.value : old.desired,
+          agents: agents.status === 'fulfilled' ? agents.value : old.agents,
+          problems,
+        });
+      }),
+      !sl.kind ? ok(c.GET('/api/v1/host/capabilities')).then(cap => { sl.kind = hostKind(cap as HostCapabilities); }, () => { /* shown without its kind */ }) : Promise.resolve(),
+    ]);
     // A failed job's VM (or one whose job has warnings) is asked once for its repair session, which may have run
     // before this page opened; events follow it from there.
     for (const v of sl.mine) {
@@ -642,16 +683,18 @@ export class ApiBackend implements Backend {
         void this.readRepair(id, v.name);
       }
     }
-    if (!sl.kind) {
-      try { sl.kind = hostKind(await ok(c.GET('/api/v1/host/capabilities')) as HostCapabilities); } catch { /* shown without its kind */ }
+    if (sl.me.role === 'admin') {
+      this.compose();
+      sl.admin = await this.readAdmin(c, sl);
+    } else {
+      sl.admin = null;
     }
-    sl.admin = sl.me.role === 'admin' ? await this.readAdmin(c, sl) : null;
     this.compose();
   }
 
   private async readAdmin(c: EngineClient, sl: Slice): Promise<AdminData> {
     const prev = sl.admin;
-    const [users, status, updates, media, audit, usage, config, https, windows, isos] = await Promise.allSettled([
+    const [users, status, updates, media, audit, usage, config, https, windows, isos, lanRes] = await Promise.allSettled([
       ok(c.GET('/api/v1/users')),
       ok(c.GET('/api/v1/host/status')) as Promise<HostStatus>,
       ok(c.GET('/api/v1/host/updates/status')),
@@ -662,10 +705,10 @@ export class ApiBackend implements Backend {
       ok(c.GET('/api/v1/host/https')),
       ok(c.GET('/api/v1/host/windows')) as Promise<HostWindows>,
       ok(c.GET('/api/v1/host/iso-catalog')) as Promise<IsoCatalog>,
+      // Only a solo install's engine has the LAN switch; any other answers 409.
+      ok(c.GET('/api/v1/host/lan-access')),
     ]);
-    // Only a solo install's engine has the LAN switch; any other answers 409.
-    let lan: boolean | undefined;
-    try { lan = (await ok(c.GET('/api/v1/host/lan-access'))).enabled; } catch { lan = undefined; }
+    const lan = lanRes.status === 'fulfilled' ? lanRes.value.enabled : undefined;
     let hostUsers = prev?.users ?? [];
     if (users.status === 'fulfilled') {
       hostUsers = await Promise.all((users.value as UserDetail[]).map(async u => {
@@ -745,6 +788,7 @@ export class ApiBackend implements Backend {
     const hostAuto = [...this.slices.values()].filter(s => s.me?.role === 'admin' && s.admin?.updates).map(s => s.admin!.updates!.auto);
     this.emit({
       vms, hosts, jobs: jobs.map(({ at: _at, ...j }) => j),
+      loading: this.isLoading(),
       // On only when this device, every engine's reprovision of the user's VMs and every host the user administers
       // update by themselves; the switch sets all of them.
       prefs: { ...this.s.prefs, autoUpdate: this.deviceAutoUpdate && auto.every(Boolean) && hostAuto.every(Boolean) },

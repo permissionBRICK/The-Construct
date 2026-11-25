@@ -2250,3 +2250,68 @@ describe('ApiBackend agent sign-in output before the start\'s answer', () => {
     expect(be.snapshot().signIn).toMatchObject({ state: 'running', text: 'code ABCD' });
   });
 });
+
+describe('ApiBackend initial loading and progressive VM delivery', () => {
+  const P = `/api/engines/${E1}/api/v1`;
+
+  it('stays loading until the VM list arrives, then publishes VMs before slow per-VM and admin calls finish', async () => {
+    const { be, on, settle } = world();
+    expect(be.snapshot().loading).toBe(true);
+
+    let releaseVms!: () => void;
+    let releaseAdmin!: () => void;
+    const vmsGate = new Promise<void>(r => { releaseVms = r; });
+    const adminGate = new Promise<void>(r => { releaseAdmin = r; });
+
+    on('GET', `${P}/vms`, async () => {
+      await vmsGate;
+      return { json: [vmResponse('atlas', 'alex')] };
+    });
+    on('GET', `${P}/host/status`, async () => {
+      await adminGate;
+      return { json: { health: { hypervisor: 'ok', database: 'ok', media: 'ok', inventory: 'ok' }, capacity: { ram: { totalBytes: 64 * 1024 ** 3, committedBytes: 16 * 1024 ** 3 }, cpu: { logical: 16, active: 8 }, volumes: [] }, capacityMode: 'observe' } };
+    });
+
+    const start = be.start();
+    await settle();
+    // Before /api/v1/vms answers: still loading, so the UI must not flash "New VM".
+    expect(be.snapshot().loading).toBe(true);
+    expect(be.snapshot().vms).toEqual([]);
+
+    // Once /api/v1/vms answers, the VM appears immediately even though slow admin endpoints are still in flight.
+    releaseVms();
+    await settle();
+    expect(be.snapshot().loading).toBe(false);
+    expect(be.snapshot().vms.map(v => v.name)).toEqual(['atlas']);
+
+    releaseAdmin();
+    await start;
+    expect(be.snapshot().loading).toBe(false);
+    expect(be.snapshot().hosts[0].capacity.ram).toEqual([16, 64]);
+  });
+
+  it('clears loading once an engine genuinely returns zero VMs', async () => {
+    const { be, on } = world();
+    on('GET', `${P}/vms`, { json: [] });
+    await be.start();
+    expect(be.snapshot().loading).toBe(false);
+    expect(be.snapshot().vms).toEqual([]);
+  });
+
+  it('retries failed initial load or failed engine read when the surface is shown again', async () => {
+    const { be, on, settle } = world();
+    let failState = true;
+    on('GET', '/api/state', () => failState
+      ? { status: 503, json: { title: 'starting', status: 503 } }
+      : { json: { device: { id: 'd1', name: 'laptop', account: 'acct1', registered: true, storeEngine: E1, protection: 'file', protectionWeak: true, recoveryUnconfirmed: false }, engines: [{ id: E1, name: 'orchard', url: 'https://orchard.test:8443', pin: 'AB', engineId: 'x', enrolled: true, signedIn: false, store: true }], pairing: null } });
+
+    await be.start();
+    expect(be.snapshot().loading).toBe(false);
+    expect(be.snapshot().vms).toEqual([]);
+
+    failState = false;
+    be.refreshOnShow();
+    await settle();
+    expect(be.snapshot().vms.map(v => v.name)).toEqual(['atlas']);
+  });
+});

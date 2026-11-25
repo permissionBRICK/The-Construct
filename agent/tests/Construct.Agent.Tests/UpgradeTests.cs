@@ -539,14 +539,24 @@ public sealed class UpgradeRunTests
         rig.Fixture.Write(Path.Combine("The-Construct", "config", "projects", "late.json"), """{"name":"late","repos":[]}""");
         Assert.Equal(["api", "web"], Profiles(await rig.Agent.GetAsync("api/upgrade")));
 
+        // A new agent run reads the old repository afresh while the upgrade is still open.
+        await rig.RestartAsync();
+        Assert.Equal(["api", "late", "web"], Profiles(await rig.Agent.GetAsync("api/upgrade")));
+
+        rig.Fixture.Write(Path.Combine("The-Construct", "config", "projects", "later.json"), """{"name":"later","repos":[]}""");
+        Assert.Equal(["api", "late", "web"], Profiles(await rig.Agent.GetAsync("api/upgrade")));
+
         await rig.EngineStepAsync();
         await rig.SetupAsync();
         Assert.Equal("converted", (await rig.ConvertAsync())["stage"]!.GetValue<string>());
         var engine = rig.Agent.Host.Upgrade.Bridge.Read().LocalEngine!;
-        await rig.Agent.GetAsync($"api/engines/{engine}/api/v1/profiles/late");
+        await rig.Agent.GetAsync($"api/engines/{engine}/api/v1/profiles/later");
 
+        // Once converted, the agent no longer re-scans the old repository on startup.
         await rig.RestartAsync();
-        Assert.Equal(["api", "late", "web"], Profiles(await rig.Agent.GetAsync("api/upgrade")));
+        var after = await rig.Agent.GetAsync("api/upgrade");
+        Assert.Equal("converted", after["stage"]!.GetValue<string>());
+        Assert.Null(after["found"]);
     }
 
     [Fact]
@@ -928,6 +938,7 @@ public sealed class UpgradeOldHostTests
         await rig.SetupAsync();
         var view = await rig.ConvertAsync();
         Assert.Equal("converted", view["stage"]!.GetValue<string>());
+        Assert.Null(view["found"]);
         Assert.True(old.Staged);
         string Message(string prefix) => view["items"]!.AsArray().Single(i => i!["id"]!.GetValue<string>().StartsWith(prefix, StringComparison.Ordinal))!["message"]!.GetValue<string>();
         Assert.Equal("Old Construct; moves next", Message("host:"));
