@@ -25,7 +25,8 @@ internal sealed class WebViewRuntime(string profile)
     /// <summary>A newer runtime is installed; the shell starts over with it when no surface shows.</summary>
     public bool Stale { get; private set; }
 
-    public Task<CoreWebView2Environment> EnvironmentAsync() => _environment ??= CreateAsync();
+    public Task<CoreWebView2Environment> EnvironmentAsync() =>
+        _environment is { IsFaulted: false, IsCanceled: false } ? _environment : _environment = CreateAsync();
 
     private async Task<CoreWebView2Environment> CreateAsync()
     {
@@ -62,6 +63,23 @@ internal sealed class AgentWindow : Form
     private bool _exiting;
     private string? _pendingRoute;
 
+    [DllImport("user32.dll")]
+    private static extern bool SetForegroundWindow(IntPtr hWnd);
+
+    private static Color InitialBackColor()
+    {
+        try
+        {
+            using var key = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize");
+            if (key?.GetValue("AppsUseLightTheme") is int light && light != 0) return Color.FromArgb(0xF3, 0xF6, 0xF2);
+        }
+        catch
+        {
+        }
+
+        return Color.FromArgb(0x0B, 0x16, 0x10);
+    }
+
     /// <param name="open">Opens another surface (<c>win</c> with a route) at the shell's request.</param>
     public AgentWindow(string surface, Uri origin, string token, WebViewRuntime runtime, Action<string, string?> open, Action<Exception> log)
     {
@@ -74,6 +92,9 @@ internal sealed class AgentWindow : Form
         Text = "Construct";
         Icon = WindowIcon.Value;
         AutoScaleMode = AutoScaleMode.Dpi;
+        var bg = _surface == "alone" ? Color.Transparent : InitialBackColor();
+        if (_surface != "alone") BackColor = bg;
+        _web.DefaultBackgroundColor = bg;
         if (Floating)
         {
             FormBorderStyle = FormBorderStyle.None;
@@ -121,6 +142,21 @@ internal sealed class AgentWindow : Form
 
     private bool Floating => _surface is "pop" or "alone";
 
+    /// <summary>
+    /// Starts WebView2 and loads the page in the background before the surface is shown, so the first tray click
+    /// opens with the page already rendered and its data loaded instead of a cold-starting blank frame.
+    /// </summary>
+    public void WarmUp()
+    {
+        if (_initialized || _exiting || IsDisposed) return;
+        _initialized = true;
+        PerformLayout();
+        // Force handle creation without showing the Form (CreateControl is a no-op while Visible is false).
+        _ = Handle;
+        _ = _web.Handle;
+        _ = InitializeAsync();
+    }
+
     /// <summary>Shows the surface; a route (<c>#/vault</c>) moves the window's page there.</summary>
     public void Present(string? route = null)
     {
@@ -133,6 +169,8 @@ internal sealed class AgentWindow : Form
         if (WindowState == FormWindowState.Minimized) WindowState = FormWindowState.Normal;
         Show();
         Activate();
+        SetForegroundWindow(Handle);
+        NotifyShell("show");
     }
 
     public new void Hide()
@@ -140,14 +178,17 @@ internal sealed class AgentWindow : Form
         if (Floating && Visible)
         {
             FocusLost?.Invoke();
-            if (!Broken && !_web.IsDisposed)
-            {
-                try { _web.CoreWebView2?.PostWebMessageAsJson("{\"type\":\"hide\"}"); }
-                catch (Exception ex) when (ex is ObjectDisposedException or InvalidOperationException or COMException) { _log(ex); }
-            }
+            NotifyShell("hide");
         }
 
         base.Hide();
+    }
+
+    private void NotifyShell(string type)
+    {
+        if (!Floating || Broken || _web.IsDisposed) return;
+        try { _web.CoreWebView2?.PostWebMessageAsJson($"{{\"type\":\"{type}\"}}"); }
+        catch (Exception ex) when (ex is ObjectDisposedException or InvalidOperationException or COMException) { _log(ex); }
     }
 
     private bool Own(string? uri) =>
@@ -216,11 +257,25 @@ internal sealed class AgentWindow : Form
                 {
                 }
             };
+            core.ProcessFailed += (_, e) =>
+            {
+                if (e.ProcessFailedKind is CoreWebView2ProcessFailedKind.BrowserProcessExited
+                    or CoreWebView2ProcessFailedKind.RenderProcessExited
+                    or CoreWebView2ProcessFailedKind.RenderProcessUnresponsive)
+                {
+                    Broken = true;
+                }
+            };
             core.NavigationCompleted += (_, e) =>
             {
-                if (!e.IsSuccess || _pendingRoute is not { } route) return;
-                _pendingRoute = null;
-                _ = core.ExecuteScriptAsync("location.hash = " + JsonSerializer.Serialize(route));
+                if (!e.IsSuccess) return;
+                if (_pendingRoute is { } route)
+                {
+                    _pendingRoute = null;
+                    _ = core.ExecuteScriptAsync("location.hash = " + JsonSerializer.Serialize(route));
+                }
+
+                if (Visible) NotifyShell("show");
             };
 
             // The token travels in the fragment, which never reaches a server; the UI takes it out at once.

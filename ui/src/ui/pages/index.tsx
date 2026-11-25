@@ -16,7 +16,7 @@ export function PageView() {
   // overview has its own.
   const asks = p !== 'home' && (s.vaultRequests.length > 0 || s.vaultFiles.length > 0 || lostSignIns(s.vms).length > 0) ? <div class="pg asks"><VaultCards /><SignInCards /></div> : null;
   const needVm = ['home', 'projects', 'project', 'file', 'connections', 'backups', 'settings'].includes(p);
-  if (needVm && !vm) return <CreateVm />;
+  if (needVm && !vm) return s.loading ? <div class="pg"><div class="blk" role="status" aria-live="polite"><span class="d">Loading…</span></div></div> : <CreateVm />;
   const body = (() => {
     switch (p) {
       case 'home': return <Overview vm={vm!} />;

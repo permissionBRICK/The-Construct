@@ -441,6 +441,8 @@ export interface State {
   signIn?: SignIn | null;
   /** Upstream config repos shared profiles come from (design 9.7); null when none is linked. */
   upstream?: Upstream | null;
+  /** True while the first read from the agent and its engines has not produced VMs or finished yet. */
+  loading?: boolean;
 }
 
 /** The linked upstream config repos as the last refresh found them. */

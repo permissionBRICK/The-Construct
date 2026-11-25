@@ -33,10 +33,15 @@ function agentToken(): string | null {
 const q = new URLSearchParams(location.search);
 const surfParam = q.get('surf');
 const surf: Surface = surfParam === 'pop' || surfParam === 'win' || surfParam === 'phone' || surfParam === 'alone' ? surfParam : innerWidth < 700 ? 'phone' : 'win';
+// In the Windows shell the page runs in WebView2: closing and opening the window are the shell's, asked through
+// its host object. In a browser the pop-out opens the window by navigating, and there is nothing to close.
+const shell = makeShell(window);
+
 const token = agentToken();
 let be: Backend;
 if (token) {
   const api = new ApiBackend({ base: location.origin, token });
+  shell.onShow?.(() => api.refreshOnShow());
   void api.start();
   be = api;
 } else {
@@ -47,10 +52,6 @@ const scheme = q.get('scheme');
 if (scheme === 'green' || scheme === 'blue' || scheme === 'copper' || scheme === 'mono') be.setPrefs({ scheme: scheme as Scheme });
 const theme = q.get('theme');
 if (theme === 'light' || theme === 'dark') be.setPrefs({ theme });
-
-// In the Windows shell the page runs in WebView2: closing and opening the window are the shell's, asked through
-// its host object. In a browser the pop-out opens the window by navigating, and there is nothing to close.
-const shell = makeShell(window);
 
 document.documentElement.dataset.surf = surf;
 render(<App be={be} surf={surf} shell={shell} hashRouting />, document.getElementById('app')!);

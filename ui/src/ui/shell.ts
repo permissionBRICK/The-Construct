@@ -50,6 +50,15 @@ export function makeShell(w: Win): Shell {
       h.addEventListener('message', onMessage);
       return () => h.removeEventListener!('message', onMessage);
     },
+    onShow(fn: () => void) {
+      const h = w.chrome?.webview;
+      if (!h || typeof h.addEventListener !== 'function' || typeof h.removeEventListener !== 'function') return () => {};
+      const onMessage = (e: { data?: unknown }) => {
+        if (e.data && typeof e.data === 'object' && (e.data as { type?: unknown }).type === 'show') fn();
+      };
+      h.addEventListener('message', onMessage);
+      return () => h.removeEventListener!('message', onMessage);
+    },
   };
 }
 
