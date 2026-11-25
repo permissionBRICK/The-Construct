@@ -191,7 +191,7 @@ function useFit() {
 export function PopOut() {
   const { s } = useApp();
   const fit = useFit();
-  return <div class="pop" ref={fit}>{s.firstRun ? <PageView /> : <Stack footer />}</div>;
+  return <div class="pop" ref={fit}>{s.upgrade || s.firstRun ? <PageView /> : <Stack footer />}</div>;
 }
 
 /** A card alone, popped from the tray while Construct is closed: the vault's (a request, else a VM's files that still

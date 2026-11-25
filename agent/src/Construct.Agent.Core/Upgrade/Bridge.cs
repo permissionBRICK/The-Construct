@@ -1,19 +1,32 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace Construct.Agent.Upgrade;
 
 /// <summary>
 /// <c>bridge.json</c> in the agent's directory: where the one-time upgrade stands (11.6, 13.2). <c>stage</c> is
-/// <c>converted</c> only once everything was copied; until then the steps say what is done. <c>done</c> lists
+/// <c>converted</c> only once everything was copied, or <c>fresh</c> for a fresh new-Construct install that never
+/// upgrades from the old client; until then the steps say what is done. <c>done</c> lists
 /// the items the converter already copied, so a second run leaves them alone even if they were changed since.
 /// No secret is ever written here.
 /// </summary>
 public sealed record BridgeState
 {
     public const string Converted = "converted";
+    public const string Fresh = "fresh";
 
-    /// <summary><c>new</c>, <c>converting</c> or <c>converted</c>.</summary>
+    /// <summary><c>new</c>, <c>converting</c>, <c>converted</c> or <c>fresh</c>.</summary>
     public string Stage { get; init; } = "new";
+
+    /// <summary>True once a legacy upgrade has progressed past the untouched initial state.</summary>
+    [JsonIgnore]
+    public bool HasStarted =>
+        Stage != "new"
+        || Engine is not null
+        || LocalEngine is not null
+        || StoreEngine is not null
+        || Done.Count > 0
+        || Items.Count > 0;
 
     /// <summary>The previous install folder the converter read.</summary>
     public string? From { get; init; }

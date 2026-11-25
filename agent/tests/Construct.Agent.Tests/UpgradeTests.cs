@@ -1562,6 +1562,46 @@ public sealed class UpgradeMovedHostTests
         var view = await rig.Agent.GetAsync("api/upgrade");
         Assert.False(view["legacy"]!.GetValue<bool>());
     }
+
+    [Fact]
+    public async Task Fresh_install_marked_fresh_never_offers_legacy_migration_even_when_legacy_files_appear()
+    {
+        await using var rig = await UpgradeRig.CreateAsync(f =>
+        {
+            Directory.CreateDirectory(f.Root);
+            File.WriteAllText(Path.Combine(f.Root, "instances.json"), """{"version":1,"instances":{"agent-vm":{}}}""");
+        });
+        rig.Agent.Host.Upgrade.Bridge.Update(b => b with { Stage = BridgeState.Fresh });
+
+        var view = await rig.Agent.GetAsync("api/upgrade");
+        Assert.False(view["legacy"]!.GetValue<bool>());
+        Assert.Equal(BridgeState.Fresh, view["stage"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public async Task Already_registered_fresh_install_skips_legacy_migration_and_stamps_bridge_as_fresh()
+    {
+        await using var rig = await UpgradeRig.CreateAsync(_ => { });
+        // Register the device directly (normal first-run setup without touching bridge.json).
+        var added = await rig.Agent.PostAsync("api/engines", new { address = rig.Local.Url, pin = rig.Local.Pin, userToken = rig.AdminToken });
+        var engineId = added["id"]!.GetValue<string>();
+        var setup = await rig.Agent.PostAsync("api/device/setup", new { engine = engineId, deviceName = "pc", vaultMode = "available" });
+        await rig.Agent.PostAsync("api/device/recovery-code/kept", new { issue = setup["issue"]!.GetValue<long>() }, HttpStatusCode.NoContent);
+
+        // Even if legacy-looking files exist or show up later, a registered fresh install must not be hijacked into migration.
+        Directory.CreateDirectory(rig.Fixture.Root);
+        File.WriteAllText(Path.Combine(rig.Fixture.Root, "instances.json"), """{"version":1,"instances":{"agent-vm":{}}}""");
+
+        var view = await rig.Agent.GetAsync("api/upgrade");
+        Assert.False(view["legacy"]!.GetValue<bool>());
+        Assert.Equal(BridgeState.Fresh, view["stage"]!.GetValue<string>());
+        Assert.Equal(BridgeState.Fresh, rig.Agent.Host.Upgrade.Bridge.Read().Stage);
+
+        await rig.RestartAsync();
+        var afterRestart = await rig.Agent.GetAsync("api/upgrade");
+        Assert.False(afterRestart["legacy"]!.GetValue<bool>());
+        Assert.Equal(BridgeState.Fresh, afterRestart["stage"]!.GetValue<string>());
+    }
 }
 
 /// <summary>One upgrade under test: the old install, this PC's engine (fake Hyper-V and a guest that adopts), the agent.</summary>

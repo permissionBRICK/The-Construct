@@ -259,11 +259,14 @@ public sealed class SetupTests : IDisposable
     {
         await Setup().RunAsync("nightly");
         Assert.DoesNotContain(_web.Requests, r => r.Url == EngineUrl);
+        Assert.Equal("fresh", JsonDocument.Parse(File.ReadAllText(Path.Combine(AgentHome, "bridge.json"))).RootElement.GetProperty("stage").GetString());
 
+        File.Delete(Path.Combine(AgentHome, "bridge.json"));
         OldInstall("""{"version":1,"instances":{"work":{"backend":"hyperv-remote"}}}""");
         await Setup().RunAsync("nightly");
         Assert.DoesNotContain(_web.Requests, r => r.Url == EngineUrl);
         Assert.False(File.Exists(Path.Combine(AgentHome, AgentSetup.EnginePackageFile)));
+        Assert.False(File.Exists(Path.Combine(AgentHome, "bridge.json")));
     }
 
     [Fact]

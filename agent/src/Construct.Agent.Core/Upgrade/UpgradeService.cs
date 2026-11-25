@@ -115,9 +115,20 @@ public sealed class UpgradeService
         return state.Found ? state : null;
     }
 
+    /// <summary>
+    /// True when this device was installed fresh on the new Construct rather than upgrading from an old client:
+    /// either explicitly marked <see cref="BridgeState.Fresh"/> (by fresh setup or first registration), or already
+    /// registered while <c>bridge.json</c> has never started an upgrade. In the real upgrade wizard the engine step
+    /// writes <c>bridge.json</c> before the recovery step registers the device.
+    /// </summary>
+    private bool IsFreshInstall(BridgeState bridge) =>
+        bridge.Stage == BridgeState.Fresh
+        || (_agent.IsRegistered && !bridge.HasStarted);
+
     private byte[]? SetupVaultKey()
     {
-        if (Bridge.Read().Stage == BridgeState.Converted || Legacy() is not { HasVault: true } legacy) return null;
+        var bridge = Bridge.Read();
+        if (bridge.Stage is BridgeState.Converted or BridgeState.Fresh || IsFreshInstall(bridge) || Legacy() is not { HasVault: true } legacy) return null;
         return legacy.ReadVault().Key;
     }
 
@@ -153,13 +164,20 @@ public sealed class UpgradeService
         ReopenStaleConversion();
         ReopenOldStoreHost();
         var bridge = Bridge.Read();
-        LegacyState? legacy;
+        var fresh = IsFreshInstall(bridge);
+        if (fresh && bridge.Stage != BridgeState.Fresh)
+            bridge = Bridge.Update(b => b.HasStarted ? b : b with { Stage = BridgeState.Fresh });
+
+        LegacyState? legacy = null;
         string? error;
         lock (_gate) error = _error;
-        try { legacy = Legacy(); }
-        catch (AgentFailure failure) { legacy = null; error ??= failure.Message; }
+        if (!fresh)
+        {
+            try { legacy = Legacy(); }
+            catch (AgentFailure failure) { legacy = null; error ??= failure.Message; }
+        }
 
-        var writers = bridge.Stage == BridgeState.Converted ? [] : OldWriters();
+        var writers = bridge.Stage is BridgeState.Converted or BridgeState.Fresh ? [] : OldWriters();
         var setup = _setup.View();
         var steps = new List<UpgradeStep>
         {
@@ -410,7 +428,10 @@ public sealed class UpgradeService
     /// </summary>
     public void Start()
     {
-        if (Bridge.Read().Stage == BridgeState.Converted) ProtectScripts();
+        var bridge = Bridge.Read();
+        if (bridge.Stage == BridgeState.Converted) ProtectScripts();
+        else if (bridge.Stage != BridgeState.Fresh && IsFreshInstall(bridge))
+            Bridge.Update(b => b.HasStarted ? b : b with { Stage = BridgeState.Fresh });
     }
 
     /// <summary>
