@@ -154,6 +154,30 @@ public sealed class HttpsGatewayTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task An_unknown_or_absent_vm_is_not_reported_as_starting()
+    {
+        await AddVmAsync("work-vm");
+        var forward = await AddHttpsForwardAsync("work-vm", ClosedPort());
+
+        _driver.State = VmState.Unknown;
+        var (_, unknown) = await RequestAsync(forward.PublicPort!.Value, "work-vm.vms.test", "work-vm.vms.test");
+        Assert.Contains("503 Service Unavailable", unknown);
+        Assert.Contains("<title>Unavailable</title>", unknown);
+        Assert.Contains("state on the host is unknown", unknown);
+        Assert.Contains("http-equiv=\"refresh\"", unknown);
+        Assert.DoesNotContain("Starting work-vm", unknown);
+        Assert.Equal(0, _driver.Starts);
+
+        _driver.State = VmState.Absent;
+        var (_, absent) = await RequestAsync(forward.PublicPort.Value, "work-vm.vms.test", "work-vm.vms.test");
+        Assert.Contains("503 Service Unavailable", absent);
+        Assert.Contains("<title>Unavailable</title>", absent);
+        Assert.Contains("not present on this host", absent);
+        Assert.DoesNotContain("http-equiv=\"refresh\"", absent);
+        Assert.Equal(0, _driver.Starts);
+    }
+
+    [Fact]
     public async Task The_shared_port_routes_by_server_name_to_the_main_forward_and_the_vault()
     {
         await AddVmAsync("work-vm");
@@ -313,13 +337,15 @@ public sealed class HttpsGatewayTests : IAsyncLifetime
     private sealed class StaticDriver : IHypervisorDriver
     {
         public int Port { get; set; } = 22;
+        public VmState State { get; set; } = VmState.Running;
+        public int Starts { get; private set; }
         public DriverCapabilities Capabilities { get; } = new(false, true, DriverConsole.None);
         public Task CreateVmAsync(VmDescriptor descriptor, IProgress<string>? progress, CancellationToken cancellationToken) => Task.CompletedTask;
         public Task RemoveVmAsync(string name, IProgress<string>? progress, CancellationToken cancellationToken) => Task.CompletedTask;
-        public Task StartAsync(string name, CancellationToken cancellationToken) => Task.CompletedTask;
+        public Task StartAsync(string name, CancellationToken cancellationToken) { Starts++; return Task.CompletedTask; }
         public Task StopAsync(string name, CancellationToken cancellationToken) => Task.CompletedTask;
         public Task SaveAsync(string name, CancellationToken cancellationToken) => Task.CompletedTask;
-        public Task<VmState> GetStateAsync(string name, CancellationToken cancellationToken) => Task.FromResult(VmState.Running);
+        public Task<VmState> GetStateAsync(string name, CancellationToken cancellationToken) => Task.FromResult(State);
         public Task<Endpoint?> GetEndpointAsync(string name, CancellationToken cancellationToken) => Task.FromResult<Endpoint?>(new Endpoint("127.0.0.1", Port));
         public Task<bool> WaitReachableAsync(string name, TimeSpan timeout, IProgress<string>? progress, CancellationToken cancellationToken) => Task.FromResult(true);
         public Task DetachInstallMediaAsync(string name, CancellationToken cancellationToken) => Task.CompletedTask;

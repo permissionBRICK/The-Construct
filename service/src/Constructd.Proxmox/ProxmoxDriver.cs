@@ -53,6 +53,13 @@ public sealed class ProxmoxDriver : IHypervisorDriver, IVmCpuDriver, IVmMemoryDr
 
     private static readonly TimeSpan RemoveTimeout = TimeSpan.FromMinutes(15);
 
+    /// <summary>
+    /// Suspending a VM to disk or resuming from disk: writing multi-gigabyte guest RAM while the host is
+    /// swapping can run well past five minutes, and killing <c>qm suspend</c> mid-save leaves Proxmox's
+    /// <c>suspending</c> lock behind.
+    /// </summary>
+    private static readonly TimeSpan SaveTimeout = TimeSpan.FromMinutes(30);
+
     /// <summary>A power change (a graceful shutdown waits up to two minutes) or a configuration write.</summary>
     private static readonly TimeSpan ShortTimeout = TimeSpan.FromMinutes(5);
 
@@ -241,7 +248,7 @@ public sealed class ProxmoxDriver : IHypervisorDriver, IVmCpuDriver, IVmMemoryDr
     {
         var (vmName, id, vmId) = await RequireVmWithIdAsync("start-vm", name, cancellationToken).ConfigureAwait(false);
         var resuming = await ReadStateAsync(vmName, vmId, cancellationToken).ConfigureAwait(false) == VmState.Saved;
-        await RunQmAsync("start-vm", vmName, ["start", id], ShortTimeout, null, cancellationToken)
+        await RunQmAsync("start-vm", vmName, ["start", id], resuming ? SaveTimeout : ShortTimeout, null, cancellationToken)
             .ConfigureAwait(false);
         // Only after a successful start: `onboot` mirrors the intended power state (see CreateVmAsync) of
         // a VM that may start with the host; for any other the start clears it, whatever it was before.
@@ -294,7 +301,7 @@ public sealed class ProxmoxDriver : IHypervisorDriver, IVmCpuDriver, IVmMemoryDr
                 .ConfigureAwait(false);
         }
 
-        await RunQmAsync("save-vm", vmName, ["suspend", id, "--todisk", "1"], ShortTimeout, null, cancellationToken)
+        await RunQmAsync("save-vm", vmName, ["suspend", id, "--todisk", "1"], SaveTimeout, null, cancellationToken)
             .ConfigureAwait(false);
     }
 
@@ -346,9 +353,10 @@ public sealed class ProxmoxDriver : IHypervisorDriver, IVmCpuDriver, IVmMemoryDr
     }
 
     /// <summary>
-    /// The contract's state, from <c>status/current</c>: a suspend-to-disk lock is <c>saved</c>,
-    /// a running VM whose QMP status is paused is <c>paused</c>, otherwise running/stopped map
-    /// straight across and anything else is <see cref="VmState.Unknown"/>.
+    /// The contract's state, from <c>status/current</c>: a completed suspend-to-disk lock (<c>suspended</c>)
+    /// is <c>saved</c>; an in-progress or interrupted suspend (<c>suspending</c>) is <see cref="VmState.Unknown"/>
+    /// because the VM still holds host RAM and cannot be started; a running VM whose QMP status is paused is
+    /// <c>paused</c>; otherwise running/stopped map straight across and anything else is <see cref="VmState.Unknown"/>.
     /// </summary>
     public static VmState MapState(JsonElement status)
     {
@@ -358,9 +366,14 @@ public sealed class ProxmoxDriver : IHypervisorDriver, IVmCpuDriver, IVmMemoryDr
         }
 
         var lockText = ReadString(status, "lock");
-        if (lockText is "suspended" or "suspending")
+        if (lockText == "suspended")
         {
             return VmState.Saved;
+        }
+
+        if (lockText == "suspending")
+        {
+            return VmState.Unknown;
         }
 
         return ReadString(status, "status") switch

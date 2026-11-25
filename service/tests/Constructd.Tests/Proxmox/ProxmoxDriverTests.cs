@@ -457,6 +457,39 @@ public sealed class ProxmoxDriverTests
         Assert.Equal(VmState.Off, await driver.GetStateAsync("work-vm", CancellationToken.None));
     }
 
+    [Theory]
+    [InlineData("""{"status":"running","lock":"suspending","qmpstatus":"finish-migrate"}""", VmState.Unknown)]
+    [InlineData("""{"status":"running","lock":"suspending"}""", VmState.Unknown)]
+    [InlineData("""{"status":"stopped","lock":"suspending"}""", VmState.Unknown)]
+    [InlineData("""{"status":"stopped","lock":"suspended"}""", VmState.Saved)]
+    public void Suspending_lock_maps_to_unknown_not_saved(string json, VmState expected)
+    {
+        using var document = JsonDocument.Parse(json);
+        Assert.Equal(expected, ProxmoxDriver.MapState(document.RootElement));
+    }
+
+    [Fact]
+    public async Task Save_and_resume_use_the_long_save_timeout_while_cold_start_keeps_the_short_one()
+    {
+        var (driver, runner, _) = Driver(new RecordingProcessRunner()
+            .RespondStdout(Resources).RespondStdout("")                                                      // save
+            .RespondStdout(Resources).RespondStdout("""{"status":"stopped","lock":"suspended"}""")           // resume state
+            .RespondStdout("").RespondStdout("").RespondStdout("").RespondStdout("""{"exitcode":0,"exited":1}""") // resume start + onboot + clock sync
+            .RespondStdout(Resources).RespondStdout("""{"status":"stopped"}""")                              // cold start state
+            .RespondStdout("").RespondStdout(""));                                                           // cold start + onboot
+
+        await driver.SaveAsync("work-vm", CancellationToken.None);
+        await driver.StartAsync("work-vm", CancellationToken.None);
+        await driver.StartAsync("work-vm", CancellationToken.None);
+
+        var suspend = Assert.Single(runner.Calls, c => c.FileName == "qm" && c.Arguments[0] == "suspend");
+        var starts = runner.Calls.Where(c => c.FileName == "qm" && c.Arguments[0] == "start").ToArray();
+        Assert.Equal(TimeSpan.FromMinutes(30), suspend.Timeout);
+        Assert.Equal(2, starts.Length);
+        Assert.Equal(TimeSpan.FromMinutes(30), starts[0].Timeout); // resume from saved state
+        Assert.Equal(TimeSpan.FromMinutes(5), starts[1].Timeout);  // cold start
+    }
+
     [Fact]
     public async Task A_vm_of_the_same_name_on_another_node_is_not_ours()
     {

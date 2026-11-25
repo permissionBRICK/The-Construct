@@ -58,11 +58,14 @@ public sealed class HttpsGateway : IHttpsForwardHost, IHostedService, IAsyncDisp
     private readonly ILogger<HttpsGateway> _logger;
     private readonly IPAddress _listenAddress;
 
+    private sealed record StartAttempt(DateTimeOffset At, bool InFlight, string? Error);
+
     private readonly ConcurrentDictionary<string, Listener> _forwardListeners = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, string> _forwardErrors = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, StrongBox> _connections = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, (IPAddress Address, DateTimeOffset Expires)> _addressCache = new(StringComparer.OrdinalIgnoreCase);
-    private readonly ConcurrentDictionary<string, DateTimeOffset> _startRequested = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, StartAttempt> _startAttempts = new(StringComparer.OrdinalIgnoreCase);
+    private readonly object _startGate = new();
     private readonly SemaphoreSlim _sharedGate = new(1, 1);
     private readonly SemaphoreSlim _routeGate = new(1, 1);
     private readonly CancellationTokenSource _stop = new();
@@ -320,6 +323,7 @@ public sealed class HttpsGateway : IHttpsForwardHost, IHostedService, IAsyncDisp
                     return;
                 }
 
+                if (route.VmName is { } connectedVm) ClearStartError(connectedVm);
                 await PumpAsync(tls, upstream).ConfigureAwait(false);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
@@ -525,36 +529,97 @@ public sealed class HttpsGateway : IHttpsForwardHost, IHostedService, IAsyncDisp
         }
 
         var state = await _driver.GetStateAsync(vm.Name, _stop.Token).ConfigureAwait(false);
+        var title = "Starting";
+        var refresh = true;
         string message;
         if (state == VmState.Running && noTls)
         {
+            ClearStartError(vm.Name);
             // Still a refreshing page: a service that is starting can accept a connection before it answers.
             message = $"{vm.Name} answers on port {forward.VmPort}, but not with TLS, and this forward says the port speaks TLS. " +
                       "If it serves plain HTTP, open the forward again with construct expose --upstream-plain.";
         }
         else if (state == VmState.Running)
         {
+            ClearStartError(vm.Name);
             message = $"{vm.Name} is running, but nothing answers on port {forward.VmPort} yet.";
+        }
+        else if (state == VmState.Unknown)
+        {
+            title = "Unavailable";
+            message = $"{vm.Name} cannot be started right now because its state on the host is unknown (it may be locked or busy).";
+        }
+        else if (state == VmState.Absent)
+        {
+            title = "Unavailable";
+            refresh = false;
+            message = $"{vm.Name} is not present on this host.";
         }
         else if ((await ConfigAsync(_stop.Token).ConfigureAwait(false)).StartOnRequest)
         {
-            RequestStart(vm.Name);
-            message = $"Starting {vm.Name}. This takes a moment.";
+            var attempt = RequestStart(vm.Name);
+            if (attempt.InFlight || attempt.Error is null)
+            {
+                message = $"Starting {vm.Name}. This takes a moment.";
+            }
+            else if (attempt.Error == "operation-in-progress")
+            {
+                message = $"{vm.Name} is busy with another operation. Waiting to start it.";
+            }
+            else if (attempt.Error == "capacity-exhausted")
+            {
+                title = "Start failed";
+                message = $"Could not start {vm.Name}: the host does not have enough free capacity right now.";
+            }
+            else if (attempt.Error == "capacity-unavailable")
+            {
+                title = "Start failed";
+                message = $"Could not start {vm.Name}: host capacity could not be checked right now.";
+            }
+            else
+            {
+                title = "Start failed";
+                message = $"Could not start {vm.Name} ({attempt.Error}). Check the host or try again shortly.";
+            }
         }
         else
         {
+            title = "Unavailable";
             message = $"{vm.Name} is {state.ToString().ToLowerInvariant()}. Start it to use this address.";
         }
 
-        await RespondAsync(client, 503, "Starting", message, refresh: true).ConfigureAwait(false);
+        await RespondAsync(client, 503, title, message, refresh).ConfigureAwait(false);
     }
 
-    /// <summary>Starts the VM in the background, at most once per <see cref="StartThrottle"/>.</summary>
-    private void RequestStart(string vmName)
+    private void ClearStartError(string vmName)
+    {
+        if (!_startAttempts.TryGetValue(vmName, out var existing) || existing.InFlight || existing.Error is null) return;
+        lock (_startGate)
+        {
+            if (_startAttempts.TryGetValue(vmName, out var current) && !current.InFlight && current.Error is not null)
+            {
+                _startAttempts[vmName] = current with { Error = null };
+            }
+        }
+    }
+
+    /// <summary>Starts the VM in the background, at most once per <see cref="StartThrottle"/> after the previous attempt ends.</summary>
+    private StartAttempt RequestStart(string vmName)
     {
         var now = _clock.UtcNow;
-        if (_startRequested.TryGetValue(vmName, out var last) && now - last < StartThrottle) return;
-        _startRequested[vmName] = now;
+        StartAttempt current;
+        lock (_startGate)
+        {
+            if (_startAttempts.TryGetValue(vmName, out var existing) &&
+                (existing.InFlight || now - existing.At < StartThrottle))
+            {
+                return existing;
+            }
+
+            current = new StartAttempt(now, InFlight: true, Error: null);
+            _startAttempts[vmName] = current;
+        }
+
         _ = Task.Run(async () =>
         {
             string outcome;
@@ -562,16 +627,31 @@ public sealed class HttpsGateway : IHttpsForwardHost, IHostedService, IAsyncDisp
             {
                 outcome = await StartVmAsync(vmName, _stop.Token).ConfigureAwait(false) ?? "started";
             }
-            catch (Exception ex) when (ex is not OperationCanceledException)
+            catch (OperationCanceledException)
+            {
+                outcome = "cancelled";
+            }
+            catch (Exception ex)
             {
                 outcome = SafeError.Describe(ex);
             }
+
+            var error = outcome is "started" or "already-running" ? null : outcome;
+            lock (_startGate)
+            {
+                if (_startAttempts.TryGetValue(vmName, out var active) && ReferenceEquals(active, current))
+                {
+                    _startAttempts[vmName] = new StartAttempt(_clock.UtcNow, InFlight: false, Error: error);
+                }
+            }
+
+            if (outcome == "cancelled") return;
 
             _logger.LogInformation("HTTPS start-on-request for {Vm}: {Outcome}", vmName, outcome);
             try
             {
                 await _services.GetRequiredService<IAuditLog>().AppendAsync(new AuditEntry(_clock.UtcNow, "system", "vm.power", vmName,
-                    outcome == "started" ? AuditOutcome.Success : AuditOutcome.Failure, $"action=start, initiator=https-start-on-request, outcome={outcome}"),
+                    error is null ? AuditOutcome.Success : AuditOutcome.Failure, $"action=start, initiator=https-start-on-request, outcome={outcome}"),
                     CancellationToken.None).ConfigureAwait(false);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
@@ -579,6 +659,7 @@ public sealed class HttpsGateway : IHttpsForwardHost, IHostedService, IAsyncDisp
                 _logger.LogWarning("Could not audit an HTTPS start-on-request: {Error}", SafeError.Describe(ex));
             }
         });
+        return current;
     }
 
     /// <summary>The primary power start of <c>POST /vms/{name}/power</c>, on the owner's behalf. Null when started.</summary>
@@ -599,7 +680,7 @@ public sealed class HttpsGateway : IHttpsForwardHost, IHostedService, IAsyncDisp
         }
         catch (LifecycleException ex)
         {
-            return ex.Capacity is not null ? "capacity" : ex.Code;
+            return ex.Code;
         }
     }
 

@@ -129,8 +129,9 @@ covers (for example `https://vault.vms.example`) to give phones a trusted approv
 Host setting `https.startOnRequest` (on by default). When the guest does not answer, the browser
 gets a small page that reloads itself every few seconds. If the VM is stopped or saved, the host
 starts it on the owner's behalf first (audited as `vm.power` with
-`initiator=https-start-on-request`, at most once a minute per VM). A running VM whose service is
-not up yet just gets the waiting page.
+`initiator=https-start-on-request`, at most once a minute per VM). If the start fails or the VM's
+state on the host is unknown, the waiting page reports that instead of staying on "Starting". A
+running VM whose service is not up yet just gets the waiting page.
 
 ## 2. Guest: publish a port
 

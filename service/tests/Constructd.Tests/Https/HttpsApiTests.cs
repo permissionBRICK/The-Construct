@@ -7,6 +7,7 @@ using Constructd.Api.Contracts;
 using Constructd.Api.Https;
 using Constructd.Core.Abstractions;
 using Constructd.Core.Domain;
+using Constructd.Fakes;
 using Constructd.Tests.Support;
 
 namespace Constructd.Tests.Https;
@@ -390,6 +391,112 @@ public sealed class HttpsApiTests
                 Assert.True(DateTime.UtcNow < deadlineAudit, "no audit entry");
                 await Task.Delay(50);
             }
+        }
+        finally
+        {
+            await gateway.StopAsync(forward.Id);
+        }
+    }
+
+    [Fact]
+    public async Task A_failed_start_on_request_surfaces_the_error_instead_of_staying_on_starting()
+    {
+        var (app, admin, vm) = await SetupAsync();
+        using var _ = app;
+        var issued = TestCertificates.SelfSigned(["buildbox.test"]);
+        app.Service<HttpsCertificateStore>().Import(issued.ChainPem, issued.KeyPem);
+        app.Driver.EndpointHostSuffix = ".invalid";
+        var forward = await (await vm.PostJsonAsync("/api/v1/vms/work-vm/forwards", new { vmPort = 5178, https = true, upstreamTls = false })).ReadAsync<ForwardResponse>();
+        Assert.Equal(HttpStatusCode.OK, (await admin.PostJsonAsync("/api/v1/vms/work-vm/power", new { action = "save" })).StatusCode);
+        Assert.Equal(VmState.Saved, app.Driver.StateOf("work-vm"));
+        app.Driver.PowerFailure = new InvalidOperationException("locked");
+
+        var stored = (await app.Service<IForwardStore>().GetAsync(forward.Id, CancellationToken.None))!;
+        var gateway = app.Service<HttpsGateway>();
+        gateway.Ensure(stored);
+        try
+        {
+            var first = await GetAsync(forward.PublicPort!.Value);
+            Assert.Contains("503 Service Unavailable", first);
+            Assert.Contains("Starting work-vm", first);
+
+            var audit = app.Service<IAuditLog>();
+            var deadline = DateTime.UtcNow.AddSeconds(10);
+            while (!(await audit.QueryAsync(50, CancellationToken.None)).Any(e =>
+                e.Action == "vm.power" && e.Outcome == AuditOutcome.Failure && e.Detail!.Contains("https-start-on-request")))
+            {
+                Assert.True(DateTime.UtcNow < deadline, "failed start-on-request was not audited");
+                await Task.Delay(50);
+            }
+
+            var failed = await GetAsync(forward.PublicPort.Value);
+            Assert.Contains("503 Service Unavailable", failed);
+            Assert.Contains("<title>Start failed</title>", failed);
+            Assert.Contains("Could not start work-vm (start-failed)", failed);
+            Assert.DoesNotContain("Starting work-vm", failed);
+
+            // Once the host issue clears and the throttle window elapses, the next reload retries and succeeds.
+            app.Driver.PowerFailure = null;
+            app.Clock.Advance(TimeSpan.FromSeconds(61));
+            var retry = await GetAsync(forward.PublicPort.Value);
+            Assert.Contains("503 Service Unavailable", retry);
+
+            var startDeadline = DateTime.UtcNow.AddSeconds(15);
+            while (app.Driver.StateOf("work-vm") != VmState.Running)
+            {
+                Assert.True(DateTime.UtcNow < startDeadline, "the retry did not start the VM");
+                await Task.Delay(50);
+            }
+
+            var running = await GetAsync(forward.PublicPort.Value);
+            Assert.Contains("work-vm is running, but nothing answers on port", running);
+            Assert.DoesNotContain("Start failed", running);
+        }
+        finally
+        {
+            await gateway.StopAsync(forward.Id);
+        }
+    }
+
+    [Theory]
+    [InlineData(true, "capacity-exhausted", "not have enough free capacity")]
+    [InlineData(false, "capacity-unavailable", "capacity could not be checked")]
+    public async Task A_capacity_refusal_distinguishes_shortage_from_unavailable_inventory(bool complete, string expectedCode, string expectedText)
+    {
+        var (app, admin, vm) = await SetupAsync();
+        using var _ = app;
+        var issued = TestCertificates.SelfSigned(["buildbox.test"]);
+        app.Service<HttpsCertificateStore>().Import(issued.ChainPem, issued.KeyPem);
+        app.Driver.EndpointHostSuffix = ".invalid";
+        var forward = await (await vm.PostJsonAsync("/api/v1/vms/work-vm/forwards", new { vmPort = 5178, https = true, upstreamTls = false })).ReadAsync<ForwardResponse>();
+        Assert.Equal(HttpStatusCode.OK, (await admin.PostJsonAsync("/api/v1/vms/work-vm/power", new { action = "save" })).StatusCode);
+        Assert.Equal(VmState.Saved, app.Driver.StateOf("work-vm"));
+
+        var ledger = app.Service<InMemoryCapacityLedger>();
+        ledger.Mode = CapacityMode.Enforce;
+        ledger.Inventory = ledger.Inventory with { Complete = complete, CpuLogical = 8, CpuBudget = 0 };
+
+        var stored = (await app.Service<IForwardStore>().GetAsync(forward.Id, CancellationToken.None))!;
+        var gateway = app.Service<HttpsGateway>();
+        gateway.Ensure(stored);
+        try
+        {
+            var first = await GetAsync(forward.PublicPort!.Value);
+            Assert.Contains("Starting work-vm", first);
+
+            var audit = app.Service<IAuditLog>();
+            var deadline = DateTime.UtcNow.AddSeconds(10);
+            while (!(await audit.QueryAsync(50, CancellationToken.None)).Any(e =>
+                e.Action == "vm.power" && e.Outcome == AuditOutcome.Failure && e.Detail!.Contains($"outcome={expectedCode}")))
+            {
+                Assert.True(DateTime.UtcNow < deadline, $"expected audit outcome={expectedCode}");
+                await Task.Delay(50);
+            }
+
+            var failed = await GetAsync(forward.PublicPort.Value);
+            Assert.Contains("503 Service Unavailable", failed);
+            Assert.Contains("<title>Start failed</title>", failed);
+            Assert.Contains(expectedText, failed);
         }
         finally
         {
