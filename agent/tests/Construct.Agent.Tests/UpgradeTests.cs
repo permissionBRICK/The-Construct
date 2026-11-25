@@ -1545,6 +1545,23 @@ public sealed class UpgradeMovedHostTests
         Assert.Contains("Profile web", output.ToString(), StringComparison.Ordinal);
         Assert.Equal("converted", rig.Agent.Host.Upgrade.Bridge.Read().Stage);
     }
+
+    [Fact]
+    public async Task T3_desktop_artifacts_under_The_Construct_do_not_trigger_the_legacy_upgrade()
+    {
+        await using var rig = await UpgradeRig.CreateAsync(f =>
+        {
+            var artifacts = Path.Combine(f.Root, "artifacts", "t3code");
+            Directory.CreateDirectory(artifacts);
+            File.WriteAllText(Path.Combine(artifacts, "installed.json"), """{"t3Version":"0.0.1"}""");
+        });
+
+        var state = LegacyState.Open(rig.Fixture.LocalAppData, null, rig.Fixture.Home, rig.Platform.LegacyProtection);
+        Assert.False(state.Found);
+
+        var view = await rig.Agent.GetAsync("api/upgrade");
+        Assert.False(view["legacy"]!.GetValue<bool>());
+    }
 }
 
 /// <summary>One upgrade under test: the old install, this PC's engine (fake Hyper-V and a guest that adopts), the agent.</summary>

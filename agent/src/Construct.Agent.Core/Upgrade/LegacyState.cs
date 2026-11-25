@@ -61,8 +61,19 @@ public sealed class LegacyState
 
     public IReadOnlyList<string> Problems { get; private init; } = [];
 
-    /// <summary>True when anything of the old client is on this PC.</summary>
-    public bool Found => Directory.Exists(Root) || File.Exists(VaultFile);
+    /// <summary>
+    /// True when anything of the old client is on this PC. The new agent also writes T3 Code Desktop artifacts under
+    /// <c>%LOCALAPPDATA%\The-Construct\artifacts\</c>, so the root folder existing on its own is not enough.
+    /// </summary>
+    public bool Found =>
+        InstallFolder is not null
+        || File.Exists(VaultFile)
+        || File.Exists(Path.Combine(Root, "instances.json"))
+        || Directory.Exists(ConfigRepository)
+        || Directory.Exists(BackupDirectory)
+        || Directory.Exists(Path.Combine(Root, "instances"))
+        || Directory.Exists(Path.Combine(Root, "remote"))
+        || Directory.Exists(Path.Combine(Root, "companion"));
 
     /// <summary>
     /// Opens the old state under <paramref name="localAppData"/>. <paramref name="from"/> names the previous
