@@ -1,9 +1,9 @@
 import { useState } from 'preact/hooks';
-import type { Agent, Profile, SettingsPatch, Upstream, Vm, VmSettings } from '../../backend/types';
+import type { Agent, Profile, SettingsPatch, Upstream, UpstreamRepoFiles, Vm, VmSettings } from '../../backend/types';
 import { activeJob, running, vmDot, vmWord, newer, vmUpdateTarget, warnedJob } from '../../model/vm';
 import { AGENTS, groupApplies, hwChange, swapSize } from '../../model/settings';
 import { profileError } from '../../model/profile';
-import { aliasWritten } from '../../backend/api/map';
+import { aliasWritten, UPSTREAM_SAYS } from '../../backend/api/map';
 import { Icon } from '../icons';
 import { Btn, Confirm, Dot, Field, Head, KV, NotYet, Page, Row, Sec, Seg, Switch, Table, Tabs, Tag, UpTag } from '../kit';
 import { copy, na, useApp } from '../ctx';
@@ -126,7 +126,6 @@ export function Projects({ vm }: { vm: Vm }) {
       )}
       <div class="line"><span>Synced {s.sync.when}</span><code>{s.sync.remote}</code>{s.sync.rev && <code>{s.sync.rev}</code>}</div>
       {s.problems.projects && <div class="line badc">{s.problems.projects}</div>}
-      {s.upstream && <UpstreamLine u={s.upstream} />}
       <Sec>
         <Table
           cols={[{ h: 'Project' }, { h: 'Repos', cls: 'x m' }, { h: 'SDKs', cls: 'x m' }, { h: 'MCP', cls: 'x m' }, { h: na(s, 'project-on') ? '' : `On ${vm.name}`, cls: 'e' }]}
@@ -137,23 +136,212 @@ export function Projects({ vm }: { vm: Vm }) {
           onRow={i => go({ page: 'project', arg: s.projects[i].name })}
         />
       </Sec>
+      <UpstreamRepos u={s.upstream ?? null} />
     </Page>
   );
 }
 
-/** Shared profiles from upstream config repos (design 9.7): where from, when last checked, and a check now. */
-function UpstreamLine({ u }: { u: Upstream }) {
-  const { be } = useApp();
-  const shared = u.repos.reduce((n, r) => n + r.files.length, 0);
+/** Suggests a free local profile name when an upstream file collides with an existing local profile. */
+function freeName(base: string, existing: Set<string>): string {
+  for (let i = 2; i < 100; i++) {
+    const next = `${base}-${i}`;
+    if (!existing.has(next.toLowerCase())) return next;
+  }
+  return `${base}-imported`;
+}
+
+/** Remote upstream config repos (design 9.7): add/remove git URLs, import profiles, and check for updates. */
+function UpstreamRepos({ u }: { u: Upstream | null }) {
+  const { s, be } = useApp();
+  const [adding, setAdding] = useState(false);
+  const [url, setUrl] = useState('');
+  const [ref, setRef] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [loadingId, setLoadingId] = useState<string | null>(null);
+  const [picker, setPicker] = useState<UpstreamRepoFiles | null>(null);
+  const [picked, setPicked] = useState<Record<string, boolean>>({});
+  const [rename, setRename] = useState<Record<string, string>>({});
+  const [importing, setImporting] = useState(false);
+  const [importErr, setImportErr] = useState<string | null>(null);
+
+  const openPicker = (res: UpstreamRepoFiles) => {
+    const existing = new Set(s.projects.map(p => p.name.toLowerCase()));
+    const names: Record<string, string> = {};
+    for (const f of res.files) {
+      if (f.existsLocally && !f.tracked) names[f.path] = freeName(f.name, existing);
+    }
+    setPicker(res);
+    setPicked({});
+    setRename(names);
+    setImportErr(null);
+  };
+
+  const closeAdd = () => { setAdding(false); setUrl(''); setRef(''); setErr(null); };
+  const closePicker = () => { setPicker(null); setPicked({}); setRename({}); setImportErr(null); };
+
+  const addRepo = async () => {
+    if (!url.trim() || busy) return;
+    setBusy(true);
+    setErr(null);
+    try {
+      const res = await be.addUpstreamRepo(url.trim(), ref.trim() || undefined);
+      setAdding(false);
+      setUrl('');
+      setRef('');
+      openPicker(res);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const openImport = async (id: string) => {
+    if (loadingId) return;
+    setLoadingId(id);
+    setErr(null);
+    try {
+      openPicker(await be.listUpstreamFiles(id));
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoadingId(null);
+    }
+  };
+
+  const removeRepo = async (id: string) => {
+    if (picker?.id === id) closePicker();
+    try {
+      await be.removeUpstreamRepo(id);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  const selectable = picker ? picker.files.filter(f => f.valid && !f.tracked) : [];
+  const selected = selectable.filter(f => picked[f.path]);
+  const allSelected = selectable.length > 0 && selected.length === selectable.length;
+
+  const toggleAll = () => {
+    const next: Record<string, boolean> = {};
+    if (!allSelected) for (const f of selectable) next[f.path] = true;
+    setPicked(next);
+  };
+
+  const doImport = async () => {
+    if (!picker || !selected.length || importing) return;
+    setImporting(true);
+    setImportErr(null);
+    try {
+      const req = selected.map(f => ({ path: f.path, as: f.existsLocally ? (rename[f.path] ?? '').trim() || undefined : undefined }));
+      const res = await be.importUpstreamFiles(picker.id, req);
+      const bad = res.results.filter(r => !['merged', 'up-to-date', 'conflict', 'waiting'].includes(r.state));
+      if (bad.length) {
+        setImportErr(bad.map(r => `${r.profile}: ${r.message ?? r.state}`).join('; '));
+        const refreshed = await be.listUpstreamFiles(picker.id).catch(() => null);
+        if (refreshed) openPicker(refreshed);
+      } else {
+        closePicker();
+      }
+    } catch (e) {
+      setImportErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setImporting(false);
+    }
+  };
+
+  const repos = u?.repos ?? [];
   return (
-    <>
-      <div class="line">
-        <span>{shared} shared {shared === 1 ? 'profile' : 'profiles'} from</span>{u.repos.length === 1 ? <code>{u.repos[0].url}</code> : <span>{u.repos.length} upstream repos</span>}
-        <span class="d">{u.running ? 'Checking…' : u.when ? `checked ${u.when}` : 'not checked yet'}</span>
-        <Btn sm icon="repro" onClick={() => be.refreshUpstream()} disabled={u.running}>Check now</Btn>
-      </div>
-      {u.problem && <div class="line badc">{u.problem}</div>}
-    </>
+    <Sec
+      title="Remote repos"
+      right={
+        <span class="acts">
+          {repos.length > 0 && <Btn sm icon="repro" onClick={() => be.refreshUpstream()} disabled={u?.running}>{u?.running ? 'Checking…' : 'Check now'}</Btn>}
+          <Btn sm icon="link" onClick={() => { if (adding) closeAdd(); else { closePicker(); setAdding(true); } }}>Add repo</Btn>
+        </span>
+      }
+    >
+      {adding && (
+        <div class="upform">
+          <Field value={url} onInput={setUrl} label="Git repository URL" placeholder="https://git.example.com/team/configs.git" mono wide onEnter={() => void addRepo()} />
+          <div class="fr">
+            <Field value={ref} onInput={setRef} label="Branch or ref (optional)" placeholder="Branch (default)" mono onEnter={() => void addRepo()} />
+            <span class="grow" />
+            <Btn sm onClick={closeAdd} disabled={busy}>Cancel</Btn>
+            <Btn sm kind="pri" onClick={() => void addRepo()} disabled={!url.trim() || busy}>{busy ? 'Fetching…' : 'Fetch profiles'}</Btn>
+          </div>
+          {err && <div class="line"><span class="badc">{err}</span></div>}
+        </div>
+      )}
+      {!adding && err && <div class="line"><span class="badc">{err}</span></div>}
+      {picker && (
+        <div class="upform">
+          <div class="line">
+            <span class="upurl"><span>Import from</span><code title={picker.url}>{picker.url}</code></span>
+            <span class="grow" />
+            {selectable.length > 1 && <Btn sm onClick={toggleAll} disabled={importing}>{allSelected ? 'Select none' : 'Select all'}</Btn>}
+            <Btn sm onClick={closePicker} disabled={importing}>Close</Btn>
+          </div>
+          {picker.files.length === 0 ? (
+            <div class="line">No profile JSON files found in <code>projects/</code> or the repository root.</div>
+          ) : (
+            <div class="uplist">
+              {picker.files.map(f => {
+                const canPick = f.valid && !f.tracked;
+                const checked = Boolean(picked[f.path]);
+                return (
+                  <div class="r" key={f.path}>
+                    <label class={`rl uppick ${canPick ? '' : 'd'}`}>
+                      <input type="checkbox" checked={checked} disabled={!canPick || importing}
+                        onChange={e => setPicked({ ...picked, [f.path]: e.currentTarget.checked })} />
+                      <span class="m">{f.name}</span>
+                      <span class="d m">{f.path}</span>
+                    </label>
+                    <span class="rr">
+                      {!f.valid && <><Tag warn>invalid</Tag><span class="badc">{f.error}</span></>}
+                      {f.valid && f.tracked && <Tag>{f.trackedAs && f.trackedAs !== f.name ? `tracked as ${f.trackedAs}` : 'tracked'}</Tag>}
+                      {f.valid && !f.tracked && f.existsLocally && (
+                        <>
+                          <Tag warn>exists locally</Tag>
+                          <Field value={rename[f.path] ?? ''} onInput={v => setRename({ ...rename, [f.path]: v })} label={`Import ${f.name} as`} placeholder="import as" mono />
+                        </>
+                      )}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+          {importErr && <div class="line"><span class="badc">{importErr}</span></div>}
+          {selectable.length > 0 && (
+            <div class="fr">
+              <span class="grow" />
+              <Btn sm kind="pri" disabled={selected.length === 0 || importing} onClick={() => void doImport()}>
+                {importing ? 'Importing…' : selected.length ? `Import ${selected.length}` : 'Import'}
+              </Btn>
+            </div>
+          )}
+        </div>
+      )}
+      {repos.length === 0 && !adding && !picker && (
+        <div class="line">Link a git repository to import and sync shared project profiles.</div>
+      )}
+      {repos.map(r => {
+        const fileIssue = r.files.find(f => f.state in UPSTREAM_SAYS);
+        const issue = r.error ?? (fileIssue ? `${fileIssue.profile}: ${fileIssue.message ?? UPSTREAM_SAYS[fileIssue.state]}` : null);
+        return (
+          <div key={r.id} class="uprepo">
+            <Row l={<span class="upurl"><code title={r.url}>{r.url}</code>{r.ref && <Tag>{r.ref}</Tag>}</span>}>
+              <span class="d">{r.files.length} {r.files.length === 1 ? 'profile' : 'profiles'}{u?.when ? ` · ${u.when}` : ''}</span>
+              <Btn sm icon="save" onClick={() => void openImport(r.id)} disabled={loadingId === r.id}>{loadingId === r.id ? 'Fetching…' : 'Import'}</Btn>
+              <Confirm label="Remove" verb="Remove" onYes={() => void removeRepo(r.id)} />
+            </Row>
+            {issue && <div class="line"><span class="badc">{issue}</span></div>}
+          </div>
+        );
+      })}
+    </Sec>
   );
 }
 

@@ -604,3 +604,27 @@ test('pop-out shows Host unreachable instead of New VM when all hosts fail, and 
   await expect(page.getByRole('button', { name: 'Control panel' })).toBeVisible();
   await expect(page.locator('.who summary')).toContainText('atlas');
 });
+
+test('projects page links a remote config repo, imports a profile, and removes the link', async ({ page }) => {
+  await open(page, 'win', 'calm', 'dark', 'projects');
+  await page.getByRole('button', { name: 'Add repo' }).click();
+  await page.getByLabel('Git repository URL').fill('https://git.example.net/team/configs.git');
+  await page.getByLabel('Branch or ref (optional)').fill('main');
+  await page.getByRole('button', { name: 'Fetch profiles' }).click();
+
+  // Discovered profiles appear unticked by default; billing is new, webshop collides locally.
+  await expect(page.getByText('Import from')).toBeVisible();
+  const billing = page.getByLabel(/billing/);
+  await expect(billing).not.toBeChecked();
+  await billing.check();
+  await page.getByRole('button', { name: 'Import 1' }).click();
+
+  await expect(page.getByRole('cell', { name: 'billing', exact: true })).toBeVisible();
+  await expect(page.locator('.uprepo').getByText(/1 profile/)).toBeVisible();
+
+  // Remove asks in place before unlinking.
+  await page.getByRole('button', { name: 'Remove' }).click();
+  await page.getByRole('button', { name: 'Remove' }).click();
+  await expect(page.getByText('Link a git repository to import and sync shared project profiles.')).toBeVisible();
+  await expect(page.getByRole('cell', { name: 'billing', exact: true })).toBeVisible();
+});

@@ -15182,6 +15182,12 @@
                 "$ref": "#/components/schemas/UpstreamBaseRequest"
               }
             ]
+          },
+          "import": {
+            "type": [
+              "null",
+              "boolean"
+            ]
           }
         }
       },

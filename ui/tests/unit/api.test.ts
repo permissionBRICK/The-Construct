@@ -2175,7 +2175,7 @@ describe('ApiBackend agent reports', () => {
 
 describe('ApiBackend upstream config repos', () => {
   const view = (state: string, message: string | null, refreshedAt = '2026-11-21T14:05:00Z') => ({ json: {
-    running: false, refreshedAt, links: [{ url: 'https://git.example.test/team/configs.git', ref: 'main', commit: 'c'.repeat(40), error: null,
+    running: false, refreshedAt, links: [{ id: 'r1', url: 'https://git.example.test/team/configs.git', ref: 'main', commit: 'c'.repeat(40), error: null,
       files: [{ profile: 'webshop', path: 'projects/webshop.json', state, message }] }],
   } });
 
@@ -2190,7 +2190,10 @@ describe('ApiBackend upstream config repos', () => {
     on('GET', '/api/upstream', view('conflict', 'Changed here and upstream: sdks.node.'));
     await be.start();
     const u = be.snapshot().upstream!;
-    expect(u.repos).toEqual([{ url: 'https://git.example.test/team/configs.git', files: [{ profile: 'webshop', state: 'conflict' }] }]);
+    expect(u.repos).toEqual([{
+      id: 'r1', url: 'https://git.example.test/team/configs.git', ref: 'main', error: null,
+      files: [{ profile: 'webshop', path: 'projects/webshop.json', state: 'conflict', message: 'Changed here and upstream: sdks.node.' }],
+    }]);
     expect(u.problem).toBe('webshop: Changed here and upstream: sdks.node.');
     expect(u.when).toMatch(/^\d\d:\d\d$/);
 
@@ -2204,11 +2207,56 @@ describe('ApiBackend upstream config repos', () => {
     expect(calls.filter(c => c.path.endsWith('/api/v1/profiles')).length).toBeGreaterThan(profileReads);
 
     // A refresh on the agent's schedule announces itself: the line follows.
-    on('GET', '/api/upstream', { json: { running: false, refreshedAt: '2026-11-21T15:05:00Z', links: [{ url: 'https://git.example.test/team/configs.git', ref: 'main', commit: null,
+    on('GET', '/api/upstream', { json: { running: false, refreshedAt: '2026-11-21T15:05:00Z', links: [{ id: 'r1', url: 'https://git.example.test/team/configs.git', ref: 'main', commit: null,
       error: 'The repository could not be fetched.', files: [{ profile: 'webshop', path: 'projects/webshop.json', state: 'failed', message: 'The repository could not be fetched.' }] }] } });
     be.onEvent('upstream', { seq: 5, type: 'upstream', engine: null, data: null });
     await settle();
     expect(be.snapshot().upstream!.problem).toBe('https://git.example.test/team/configs.git: The repository could not be fetched.');
+  });
+
+  it('links a repo, lists and imports profiles, and removes the link', async () => {
+    const { be, calls, on } = world();
+    await be.start();
+
+    on('POST', '/api/upstream/repos', { json: {
+      id: 'r1', url: 'https://git.example.test/team/configs.git', ref: 'main', commit: 'a'.repeat(40),
+      files: [{ path: 'projects/billing.json', name: 'billing', tracked: false, trackedAs: null, existsLocally: false, valid: true, error: null }],
+    } });
+    on('GET', '/api/upstream', { json: {
+      running: false, refreshedAt: '2026-11-21T14:05:00Z',
+      links: [{ id: 'r1', url: 'https://git.example.test/team/configs.git', ref: 'main', commit: 'a'.repeat(40), error: null, files: [] }],
+    } });
+    const added = await be.addUpstreamRepo('https://git.example.test/team/configs.git', 'main');
+    expect(added.id).toBe('r1');
+    expect(added.files).toHaveLength(1);
+    expect(be.snapshot().upstream?.repos.map(r => r.id)).toEqual(['r1']);
+
+    on('GET', '/api/upstream/repos/r1/files', { json: {
+      id: 'r1', url: 'https://git.example.test/team/configs.git', ref: 'main', commit: 'a'.repeat(40),
+      files: [{ path: 'projects/billing.json', name: 'billing', tracked: false, trackedAs: null, existsLocally: false, valid: true, error: null }],
+    } });
+    const listed = await be.listUpstreamFiles('r1');
+    expect(listed.files[0].name).toBe('billing');
+
+    on('POST', '/api/upstream/repos/r1/import', { json: {
+      id: 'r1', url: 'https://git.example.test/team/configs.git', commit: 'a'.repeat(40),
+      results: [{ profile: 'billing', path: 'projects/billing.json', state: 'merged', message: null }],
+      view: {
+        running: false, refreshedAt: '2026-11-21T14:06:00Z',
+        links: [{ id: 'r1', url: 'https://git.example.test/team/configs.git', ref: 'main', commit: 'a'.repeat(40), error: null,
+          files: [{ profile: 'billing', path: 'projects/billing.json', state: 'merged', message: null }] }],
+      },
+    } });
+    const profileReads = calls.filter(c => c.path.endsWith('/api/v1/profiles')).length;
+    const imported = await be.importUpstreamFiles('r1', [{ path: 'projects/billing.json' }]);
+    expect(imported.results[0].state).toBe('merged');
+    expect(be.snapshot().upstream?.repos[0].files).toHaveLength(1);
+    expect(calls.filter(c => c.path.endsWith('/api/v1/profiles')).length).toBeGreaterThan(profileReads);
+
+    on('DELETE', '/api/upstream/repos/r1', { status: 204 });
+    on('GET', '/api/upstream', { json: { running: false, refreshedAt: '2026-11-21T14:07:00Z', links: [] } });
+    await be.removeUpstreamRepo('r1');
+    expect(be.snapshot().upstream).toBeNull();
   });
 });
 

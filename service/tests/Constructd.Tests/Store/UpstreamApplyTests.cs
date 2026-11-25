@@ -334,4 +334,37 @@ public sealed class UpstreamApplyTests : IAsyncLifetime
             new UpstreamVersion("op-1", Url, "projects/billing.json", null, "c1", renamed), null, "device:pc", [], default));
         Assert.Equal("billing-2", (await ValueAsync(EngineReplica.ProfileId("billing-2")))!["name"]!.GetValue<string>());
     }
+
+    [Fact]
+    public async Task An_explicit_import_can_reimport_a_deleted_profile_without_overwriting_a_new_local_one()
+    {
+        var (replica, _) = Engine();
+        var v1 = Web("""
+            "provisionCommands":["a"]
+            """);
+        Assert.IsType<UpstreamOutcome.Applied>(await replica.ApplyUpstreamAsync("web", Version("c1", v1), null, "device:pc", [], default));
+        await replica.DeleteProfileAsync("web", "device:pc");
+        await replica.SyncAsync();
+
+        // Background refresh drops it, while an explicit import brings it back with a fresh base.
+        Assert.IsType<UpstreamOutcome.Dropped>(await replica.ApplyUpstreamAsync("web", Version("c2", v1), null, "device:pc", [], default));
+        var v2 = Web("""
+            "provisionCommands":["b"]
+            """);
+        Assert.IsType<UpstreamOutcome.Applied>(await replica.ApplyUpstreamAsync("web",
+            new UpstreamVersion("op-reimport", Url, Path, "main", "c2", v2, Import: true), null, "device:pc", [], default));
+        Assert.Equal("""["b"]""", (await ValueAsync(EngineReplica.ProfileId("web")))!["provisionCommands"]!.ToJsonString());
+
+        // If a local profile of that name was created after deletion, explicit import still refuses to overwrite it.
+        await replica.DeleteProfileAsync("web", "device:pc");
+        await replica.SyncAsync();
+        await replica.WriteProfileAsync(Web("""
+            "provisionCommands":["local"]
+            """), "device:pc");
+        await replica.SyncAsync();
+        var refused = Assert.IsType<UpstreamOutcome.Refused>(await replica.ApplyUpstreamAsync("web",
+            new UpstreamVersion("op-reimport-2", Url, Path, "main", "c3", v2, Import: true), null, "device:pc", [], default));
+        Assert.Equal("not-tracked", refused.Code);
+        Assert.Equal("""["local"]""", (await ValueAsync(EngineReplica.ProfileId("web")))!["provisionCommands"]!.ToJsonString());
+    }
 }

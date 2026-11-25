@@ -114,8 +114,16 @@ export class FakeBackend implements Backend {
       case 'old-guest': for (const a of d.vms[0].agents) a.signedIn = null; break;
       // Shared profiles from a company config repo (design 9.7), one changed here and upstream.
       case 'upstream':
-        d.upstream = { repos: [{ url: 'https://git.example.net/team/configs.git', files: [{ profile: 'webshop', state: 'conflict' }, { profile: 'toolkit', state: 'up-to-date' }] }],
-          when: '14:05', running: false, problem: 'webshop: changed here and upstream; an agent resolves it' };
+        d.upstream = {
+          repos: [{
+            id: 'r1', url: 'https://git.example.net/team/configs.git', ref: 'main', error: null,
+            files: [
+              { profile: 'webshop', path: 'projects/webshop.json', state: 'conflict', message: 'changed here and upstream; an agent resolves it' },
+              { profile: 'toolkit', path: 'projects/toolkit.json', state: 'up-to-date', message: null },
+            ],
+          }],
+          when: '14:05', running: false, problem: 'webshop: changed here and upstream; an agent resolves it',
+        };
         d.projects.find(p => p.name === 'webshop')!.conflict = true;
         break;
       case 'changed': this.vm(d, 'atlas').changeWaits = 'webshop'; break;
@@ -618,6 +626,69 @@ export class FakeBackend implements Backend {
 
   syncProjects() { this.set(d => { d.sync.when = 'just now'; }, 'Synced'); }
   refreshUpstream() { this.set(d => { if (d.upstream) d.upstream.when = 'just now'; }, 'Checked the upstream repos'); }
+
+  async addUpstreamRepo(url: string, ref?: string) {
+    const clean = url.trim();
+    if (!clean) throw new Error('Enter a valid git repository URL.');
+    if (/^[^:]+:\/\/[^/@]*:[^/@]*@/.test(clean)) throw new Error('The URL carries a password; remove it and let your git credential helper supply it.');
+    const existing = this.s.upstream?.repos.find(r => r.url === clean);
+    const id = existing?.id ?? 'r' + this.seq++;
+    if (!existing) {
+      this.set(d => {
+        const repos = [...(d.upstream?.repos ?? []), { id, url: clean, ref: ref?.trim() || null, error: null, files: [] }];
+        d.upstream = { repos, when: 'just now', running: false, problem: d.upstream?.problem ?? null };
+      }, 'Repository linked');
+    }
+    return this.listUpstreamFiles(id);
+  }
+
+  async listUpstreamFiles(id: string) {
+    const repo = this.s.upstream?.repos.find(r => r.id === id);
+    if (!repo) throw new Error('No such linked repository.');
+    const tracked = new Map(repo.files.map(f => [f.path ?? `projects/${f.profile}.json`, f.profile]));
+    const local = new Set(this.s.projects.map(p => p.name));
+    const sample = ['webshop', 'toolkit', 'billing'];
+    return {
+      id: repo.id, url: repo.url, ref: repo.ref ?? null, commit: 'a'.repeat(40),
+      files: sample.map(name => {
+        const path = `projects/${name}.json`;
+        const as = tracked.get(path) ?? null;
+        return { path, name, tracked: as !== null, trackedAs: as, existsLocally: as === null && local.has(name), valid: true, error: null };
+      }),
+    };
+  }
+
+  async importUpstreamFiles(id: string, files: { path: string; as?: string }[]) {
+    const repo = this.s.upstream?.repos.find(r => r.id === id);
+    if (!repo) throw new Error('No such linked repository.');
+    const results = files.map(f => {
+      const stem = f.path.replace(/^.*\//, '').replace(/\.json$/i, '');
+      const profile = f.as?.trim() || stem;
+      return { profile, path: f.path, state: 'merged', message: null };
+    });
+    this.set(d => {
+      for (const r of results) {
+        if (!d.projects.some(p => p.name === r.profile)) {
+          d.projects.push({ name: r.profile, repos: [], sdks: {}, mcp: [], hostPackages: [], provisionCommands: [], forwards: [] });
+        }
+      }
+      const target = d.upstream?.repos.find(r => r.id === id);
+      if (target) {
+        for (const r of results) {
+          if (!target.files.some(x => x.path === r.path)) target.files.push({ profile: r.profile, path: r.path, state: 'merged', message: null });
+        }
+      }
+    }, `Imported ${results.length} ${results.length === 1 ? 'profile' : 'profiles'}`);
+    return { id, url: repo.url, commit: 'a'.repeat(40), results };
+  }
+
+  async removeUpstreamRepo(id: string) {
+    this.set(d => {
+      if (!d.upstream) return;
+      const repos = d.upstream.repos.filter(r => r.id !== id);
+      d.upstream = repos.length ? { ...d.upstream, repos } : null;
+    }, 'Repository unlinked');
+  }
 
   closeForward(vmId: string, forwardId: string) {
     const f = this.s.vms.find(v => v.id === vmId)?.forwards.find(x => x.id === forwardId);

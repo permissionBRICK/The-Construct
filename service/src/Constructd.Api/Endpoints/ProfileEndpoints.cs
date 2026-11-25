@@ -162,7 +162,7 @@ public static class ProfileEndpoints
         if (request.Ref is { Length: > 255 }) return CodedProblems.Validation("ref", "The ref is at most 255 characters.");
         if (request.Base is { Content: null }) return CodedProblems.Validation("base", "A base carries its content.");
 
-        var version = new UpstreamVersion(operation, request.Url!.Trim(), path, request.Ref, commit.ToLowerInvariant(), request.Content);
+        var version = new UpstreamVersion(operation, request.Url!.Trim(), path, request.Ref, commit.ToLowerInvariant(), request.Content, request.Import == true);
         var known = request.Base is { Content: { } content } b ? new UpstreamBase(b.Commit, content) : null;
         return await sync.ApplyUpstreamAsync(device.Account, profile, version, known, ProfileSync.DeviceOrigin(device.DeviceId), ct) switch
         {

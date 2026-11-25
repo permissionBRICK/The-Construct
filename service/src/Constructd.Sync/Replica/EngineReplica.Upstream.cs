@@ -12,7 +12,7 @@ namespace Constructd.Sync.Replica;
 /// and <paramref name="Path"/> the file's provenance, <paramref name="Commit"/> the upstream commit and
 /// <paramref name="Content"/> the file at that commit.
 /// </summary>
-public sealed record UpstreamVersion(string OperationId, string Url, string Path, string? Ref, string Commit, JsonObject Content);
+public sealed record UpstreamVersion(string OperationId, string Url, string Path, string? Ref, string Commit, JsonObject Content, bool Import = false);
 
 /// <summary>The base a device knows from before the engine stored one: the old client's manifest and stored base (13.1).</summary>
 public sealed record UpstreamBase(string? Commit, JsonObject Content);
@@ -78,9 +78,16 @@ public sealed partial class EngineReplica
 
                 // Deleted here (config-sync 7), now or since the base was written, also when the name was created again
                 // (the store keeps a record's last deletion): the base goes and upstream never brings the profile back.
-                // An old client's base predates every deletion in the store.
-                if (profile is { Deleted: true }
-                    || applied is not null && profile?.DeletedRevision > appliedRecord!.Revision
+                // An old client's base predates every deletion in the store. An explicit user import (version.Import)
+                // starts fresh on a deleted profile instead of dropping it, while still refusing to overwrite an
+                // existing profile created locally after the deletion.
+                var deletedSinceBase = applied is not null && profile?.DeletedRevision > appliedRecord!.Revision;
+                if (version.Import && (profile is { Deleted: true } || deletedSinceBase))
+                {
+                    applied = null;
+                }
+                else if (profile is { Deleted: true }
+                    || deletedSinceBase
                     || applied is null && knownBase is not null && profile?.DeletedRevision is not null)
                 {
                     if (appliedRecord is not { Deleted: false }) return new UpstreamOutcome.Dropped();

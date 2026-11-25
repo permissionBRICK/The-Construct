@@ -3,7 +3,7 @@ import type { paths as AgentPaths } from '../generated/agent';
 import type { paths as EnginePaths } from '../generated/engine';
 import type {
   AgentId, Backend, CreateVmRequest, Feature, FileAction, FirstRunRequest, Host, HostProbe, HostUser, HostVm, Job, JobKind, Open, Prefs, ProfileSave, SettingsPatch, SignIn, SignInInput, State, Upgrade,
-  T3Thread, VaultMode, VaultRequest, Vm, WinKey,
+  T3Thread, UpstreamImportResult, UpstreamRepoFiles, VaultMode, VaultRequest, Vm, WinKey,
 } from '../types';
 import { followEvents, type AgentEventData } from './events';
 import { openExternal } from '../../ui/shell';
@@ -1721,6 +1721,60 @@ export class ApiBackend implements Backend {
     if (this.s.upstream?.running) return;
     if (this.s.upstream) this.emit({ upstream: { ...this.s.upstream, running: true } });
     void this.run(async () => this.showUpstream(await ok(this.agent.POST('/api/upstream/refresh'))));
+  }
+
+  async addUpstreamRepo(url: string, ref?: string): Promise<UpstreamRepoFiles> {
+    try {
+      const r = await ok(this.agent.POST('/api/upstream/repos', { body: { url, ref: ref ?? null } }));
+      await this.loadUpstream();
+      return {
+        id: r.id, url: r.url, ref: r.ref ?? null, commit: r.commit,
+        files: r.files.map(f => ({ path: f.path, name: f.name, tracked: f.tracked, trackedAs: f.trackedAs ?? null, existsLocally: f.existsLocally, valid: f.valid, error: f.error ?? null })),
+      };
+    } catch (e) {
+      throw new Error(errText(e));
+    }
+  }
+
+  async listUpstreamFiles(id: string): Promise<UpstreamRepoFiles> {
+    try {
+      const r = await ok(this.agent.GET('/api/upstream/repos/{id}/files', { params: { path: { id } } }));
+      return {
+        id: r.id, url: r.url, ref: r.ref ?? null, commit: r.commit,
+        files: r.files.map(f => ({ path: f.path, name: f.name, tracked: f.tracked, trackedAs: f.trackedAs ?? null, existsLocally: f.existsLocally, valid: f.valid, error: f.error ?? null })),
+      };
+    } catch (e) {
+      throw new Error(errText(e));
+    }
+  }
+
+  async importUpstreamFiles(id: string, files: { path: string; as?: string }[]): Promise<UpstreamImportResult> {
+    try {
+      const r = await ok(this.agent.POST('/api/upstream/repos/{id}/import', {
+        params: { path: { id } },
+        body: { files: files.map(f => ({ path: f.path, as: f.as ?? null })) },
+      }));
+      this.showUpstream(r.view);
+      await this.loadProfiles();
+      const imported = r.results.filter(x => x.state === 'merged' || x.state === 'up-to-date').length;
+      if (imported > 0) this.note(`Imported ${imported} ${imported === 1 ? 'profile' : 'profiles'}`);
+      return {
+        id: r.id, url: r.url, commit: r.commit,
+        results: r.results.map(x => ({ profile: x.profile, path: x.path, state: x.state, message: x.message ?? null })),
+      };
+    } catch (e) {
+      throw new Error(errText(e));
+    }
+  }
+
+  async removeUpstreamRepo(id: string): Promise<void> {
+    try {
+      await ok(this.agent.DELETE('/api/upstream/repos/{id}', { params: { path: { id } } }));
+      await this.loadUpstream();
+      this.note('Repository unlinked');
+    } catch (e) {
+      throw new Error(errText(e));
+    }
   }
 
   closeForward(vmId: string, forwardId: string) {

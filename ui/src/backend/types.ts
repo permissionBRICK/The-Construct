@@ -456,10 +456,41 @@ export interface Upstream {
 }
 
 export interface UpstreamRepo {
+  id: string;
   /** Shown without user info. */
   url: string;
-  /** Tracked profiles and how each stands: up-to-date, merged, conflict, waiting, removed-upstream, invalid, refused, dropped, failed. */
-  files: { profile: string; state: string }[];
+  ref?: string | null;
+  error?: string | null;
+  /** Tracked profiles and how each stands: up-to-date, merged, conflict, waiting, removed-upstream, invalid, refused, dropped, pending, failed. */
+  files: { profile: string; path?: string; state: string; message?: string | null }[];
+}
+
+/** One profile file discovered in an upstream config repo. */
+export interface UpstreamAvailableFile {
+  path: string;
+  name: string;
+  tracked: boolean;
+  trackedAs: string | null;
+  existsLocally: boolean;
+  valid: boolean;
+  error: string | null;
+}
+
+/** Profile files discovered in one linked upstream config repo. */
+export interface UpstreamRepoFiles {
+  id: string;
+  url: string;
+  ref: string | null;
+  commit: string;
+  files: UpstreamAvailableFile[];
+}
+
+/** Per-file outcome of importing selected profiles from a linked upstream config repo. */
+export interface UpstreamImportResult {
+  id: string;
+  url: string;
+  commit: string;
+  results: { profile: string; path: string; state: string; message: string | null }[];
 }
 
 export type SettingsPatch = { [K in keyof VmSettings]?: Partial<VmSettings[K]> };
@@ -541,6 +572,14 @@ export interface Backend {
   syncProjects(): void;
   /** Fetches the upstream config repos now; their changes are merged into the shared profiles. */
   refreshUpstream(): void;
+  /** Links an upstream config repo by URL (optional branch/ref) and returns the profile files found in it. */
+  addUpstreamRepo(url: string, ref?: string): Promise<UpstreamRepoFiles>;
+  /** Fetches an already-linked upstream config repo and returns the profile files found in it. */
+  listUpstreamFiles(id: string): Promise<UpstreamRepoFiles>;
+  /** Imports selected files from a linked upstream config repo (optional rename via `as`). */
+  importUpstreamFiles(id: string, files: { path: string; as?: string }[]): Promise<UpstreamImportResult>;
+  /** Unlinks an upstream config repo; already-imported profiles stay in the account. */
+  removeUpstreamRepo(id: string): Promise<void>;
   closeForward(vmId: string, forwardId: string): void;
   /** This device's SSH config: write the VM's `Host` alias again, or remove it. */
   setSshAlias(vmId: string, on: boolean): void;
