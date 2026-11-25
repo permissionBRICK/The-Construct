@@ -130,13 +130,31 @@ describe('FakeBackend', () => {
   it('saves an entered secret, never auto-approved, and overwrites nothing', () => {
     const be = new FakeBackend({ scene: 'enter', timers: false });
     const r = be.snapshot().vaultRequests[0];
-    be.enterSecret(r.id, 'sk-test-1');
-    expect(be.snapshot().secrets.find(x => x.name === r.secret)?.auto).toBe(false);
+    be.enterSecret(r.id, 'sk-test-1', 'sandbox-user');
+    const saved = be.snapshot().secrets.find(x => x.name === r.secret);
+    expect(saved?.auto).toBe(false);
+    expect(saved?.hasUsername).toBe(true);
     expect(be.snapshot().notice?.text).toBe('Saved in the vault');
     be.demo('enter');   // the same name again: it exists now
     be.enterSecret(be.snapshot().vaultRequests[0].id, 'other');
     expect(be.snapshot().secrets.filter(x => x.name === r.secret)).toHaveLength(1);
     expect(be.snapshot().notice?.text).toMatch(/already exists/);
+  });
+
+  it('tracks secret usernames on add, update and reveal; username-only edits keep leases', async () => {
+    const be = new FakeBackend({ timers: false });
+    be.addSecret('svc-login', 'Service login', 'pw-1', 'svc-user');
+    expect(be.snapshot().secrets.find(x => x.name === 'svc-login')?.hasUsername).toBe(true);
+    expect(await be.revealSecret('svc-login')).toEqual({ username: 'svc-login-user', value: 'svc-login-sample-value' });
+    // Updating only the username on staging-db keeps its active lease.
+    expect(be.snapshot().leases.some(l => l.secret === 'staging-db')).toBe(true);
+    be.updateSecret('staging-db', { username: '' });
+    expect(be.snapshot().secrets.find(x => x.name === 'staging-db')?.hasUsername).toBe(false);
+    expect(be.snapshot().leases.some(l => l.secret === 'staging-db')).toBe(true);
+    expect(await be.revealSecret('staging-db')).toEqual({ username: '', value: 'staging-db-sample-value' });
+    // Replacing the value ends its leases.
+    be.updateSecret('staging-db', { value: 'pw-2' });
+    expect(be.snapshot().leases.some(l => l.secret === 'staging-db')).toBe(false);
   });
 
   it('updates everything the user owns, VMs one after the other', () => {

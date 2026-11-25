@@ -2,7 +2,7 @@ import createClient, { type Client } from 'openapi-fetch';
 import type { paths as AgentPaths } from '../generated/agent';
 import type { paths as EnginePaths } from '../generated/engine';
 import type {
-  AgentId, Backend, CreateVmRequest, Feature, FileAction, FirstRunRequest, Host, HostProbe, HostUser, HostVm, Job, JobKind, Open, Prefs, ProfileSave, SettingsPatch, SignIn, SignInInput, State, Upgrade,
+  AgentId, Backend, CreateVmRequest, Feature, FileAction, FirstRunRequest, Host, HostProbe, HostUser, HostVm, Job, JobKind, Open, Prefs, ProfileSave, RevealedSecret, SecretUpdate, SettingsPatch, SignIn, SignInInput, State, Upgrade,
   T3Thread, UpstreamImportResult, UpstreamRepoFiles, VaultMode, VaultRequest, Vm, WinKey,
 } from '../types';
 import { followEvents, type AgentEventData } from './events';
@@ -1968,7 +1968,7 @@ export class ApiBackend implements Backend {
     })();
   }
 
-  enterSecret(key: string, value: string | null) {
+  enterSecret(key: string, value: string | null, username?: string) {
     const a = this.answer(key);
     if (!a) return;
     const path = { params: { path: { engine: a.engine, id: a.id } } };
@@ -1976,10 +1976,11 @@ export class ApiBackend implements Backend {
       void this.run(() => ok(this.agent.POST('/api/vault/entry-requests/{engine}/{id}/decline', path)), 'Declined').then(done => this.answeredWith(key, done));
       return;
     }
+    const u = username?.trim();
     void (async () => {
       let done = true;
       try {
-        await ok(this.agent.POST('/api/vault/entry-requests/{engine}/{id}', { ...path, body: { value } }));
+        await ok(this.agent.POST('/api/vault/entry-requests/{engine}/{id}', { ...path, body: u ? { value, username: u } : { value } }));
         this.note(`Saved ${a.r.secret}`);
       } catch (e) {
         // A name taken meanwhile ends the request at the engine; anything else leaves it to answer again.
@@ -1991,17 +1992,23 @@ export class ApiBackend implements Backend {
     })();
   }
 
-  addSecret(name: string, note: string, value: string) {
-    void this.run(() => ok(this.agent.POST('/api/vault/secrets', { body: { name: name.trim(), description: note, value, autoApprove: false } })), `Added ${name.trim()}`)
+  addSecret(name: string, note: string, value: string, username?: string) {
+    const u = username?.trim();
+    void this.run(() => ok(this.agent.POST('/api/vault/secrets', { body: { name: name.trim(), description: note, value, ...(u ? { username: u } : {}), autoApprove: false } })), `Added ${name.trim()}`)
       .then(() => this.loadVault());
   }
 
-  replaceSecret(name: string, value: string) {
-    void this.run(() => ok(this.agent.PATCH('/api/vault/secrets/{name}', { params: { path: { name } }, body: { value } })), `Replaced ${name}`).then(() => this.loadVault());
+  updateSecret(name: string, change: SecretUpdate) {
+    const body: { username?: string; value?: string } = {};
+    if (change.username !== undefined) body.username = change.username.trim();
+    if (change.value) body.value = change.value;
+    if (!Object.keys(body).length) return;
+    void this.run(() => ok(this.agent.PATCH('/api/vault/secrets/{name}', { params: { path: { name } }, body })), `Updated ${name}`).then(() => this.loadVault());
   }
 
-  async revealSecret(name: string): Promise<string> {
-    return (await ok(this.agent.POST('/api/vault/secrets/{name}/reveal', { params: { path: { name } } }))).value;
+  async revealSecret(name: string): Promise<RevealedSecret> {
+    const r = await ok(this.agent.POST('/api/vault/secrets/{name}/reveal', { params: { path: { name } } }));
+    return { username: r.username, value: r.value };
   }
 
   deleteSecret(name: string) {

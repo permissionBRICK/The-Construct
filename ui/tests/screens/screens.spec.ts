@@ -208,7 +208,7 @@ test('a remote host is added only after its fingerprint is confirmed in place', 
   await expect(page.locator('.vtab', { hasText: 'quill' })).toBeVisible();
 });
 
-test('a secret is one line; opened, it is shown for a moment, copied, hidden, and replaced in place', async ({ page }) => {
+test('a secret is one line; opened, it is shown for a moment, copied, hidden, and edited in place', async ({ page }) => {
   await open(page, 'win', 'calm', 'dark', 'vault');
   const line = page.locator('tr', { hasText: 'forge-token' });
   // One compact line, the long note cut with an ellipsis and whole in its tooltip (finding 23).
@@ -223,13 +223,45 @@ test('a secret is one line; opened, it is shown for a moment, copied, hidden, an
   await expect(row.locator('.note')).toContainText('rotate it after every handover to another team');
   await row.getByRole('button', { name: 'Show' }).click();
   await expect(row.locator('code.reveal')).toHaveText('forge-token-sample-value');
+  await expect(row.locator('code.reveal-user')).toHaveCount(0);
   await expect(page).toHaveScreenshot('win-vault-reveal-dark.png');
   await row.getByRole('button', { name: 'Hide' }).click();
   await expect(page.getByText('forge-token-sample-value')).toHaveCount(0);
-  await row.getByRole('button', { name: 'Replace' }).click();
+  await row.getByRole('button', { name: 'Edit' }).click();
   await row.getByLabel('New value of forge-token').fill('new-value');
   await row.getByRole('button', { name: 'Save' }).click();
   await expect(row.getByLabel('New value of forge-token')).toHaveCount(0);
+});
+
+test('a secret username can be added, revealed, edited, and cleared', async ({ page }) => {
+  await open(page, 'win', 'calm', 'dark', 'vault');
+  // Existing secret with a username shows the tag, reveals username + value, and prefills username on Edit.
+  await page.locator('tr', { hasText: 'staging-db' }).click();
+  const row = page.locator('tr.more-row');
+  await expect(row.locator('.tg')).toHaveText('with username');
+  await row.getByRole('button', { name: 'Show' }).click();
+  await expect(row.locator('code.reveal-user')).toHaveText('staging-db-user');
+  await expect(row.locator('code.reveal')).toHaveText('staging-db-sample-value');
+  await row.getByRole('button', { name: 'Hide' }).click();
+  await expect(page.getByText('staging-db-user')).toHaveCount(0);
+  await row.getByRole('button', { name: 'Edit' }).click();
+  const userField = row.getByLabel('Username of staging-db');
+  await expect(userField).toHaveValue('staging-db-user');
+  await expect(row.getByRole('button', { name: 'Save' })).toBeDisabled();
+  await userField.fill('');
+  await expect(row.getByRole('button', { name: 'Save' })).toBeEnabled();
+  await row.getByRole('button', { name: 'Save' }).click();
+  await expect(row.locator('.tg')).toHaveCount(0);
+
+  // Adding a new secret accepts an optional username.
+  await page.getByRole('button', { name: 'Add' }).click();
+  await page.getByLabel('Name', { exact: true }).fill('erp-admin');
+  await page.getByLabel('Note').fill('ERP login');
+  await page.getByLabel('Username', { exact: true }).fill('erp-bot');
+  await page.getByLabel('Value').fill('secret-pw');
+  await page.getByRole('button', { name: 'Save' }).click();
+  await page.locator('tr', { hasText: 'erp-admin' }).click();
+  await expect(page.locator('tr.more-row .tg')).toHaveText('with username');
 });
 
 test('a job\'s log opens at its end', async ({ page }) => {
@@ -275,7 +307,7 @@ test('the pop-out disables text selection on chrome while keeping inputs, logs a
   expect(await page.evaluate(() => getSelection()?.toString() ?? '')).toBe('');
 
   await open(page, 'pop', 'enter', 'dark');
-  await expect(page.locator('input')).toHaveCSS('user-select', 'text');
+  for (const input of await page.locator('input').all()) await expect(input).toHaveCSS('user-select', 'text');
 
   await open(page, 'pop', 'failed-reinstall', 'dark');
   await expect(page.locator('.logbox pre.code')).toHaveCSS('user-select', 'text');

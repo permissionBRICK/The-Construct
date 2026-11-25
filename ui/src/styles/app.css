@@ -193,8 +193,10 @@ html[data-surf="alone"] body { background: transparent; }
 .app .tb.secrets tr.open td.e svg { transform: rotate(180deg); }
 .app .tb.secrets tr.more-row td { height: auto; padding: 0 0 12px; white-space: normal; }
 .app .tb .sx { display: flex; align-items: flex-start; gap: 14px; }
-.app .tb .sx .note { flex: 1; margin: 0; min-width: 0; padding-top: 5px; color: var(--fg); overflow-wrap: anywhere; }
+.app .tb .sx .smeta { flex: 1; min-width: 0; display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 10px; padding-top: 5px; }
+.app .tb .sx .note { margin: 0; min-width: 0; color: var(--fg); overflow-wrap: anywhere; }
 .app .tb .sx .acts { margin-left: auto; }
+.app .tb.secrets .confirm .in { width: 170px; }
 .app .meter { display: inline-block; height: 6px; background: var(--ln); border-radius: 3px; overflow: hidden; width: 110px; vertical-align: middle; }
 .app .meter i { display: block; height: 100%; background: var(--fg); }
 /* one scroll area per page: the strip scrolls sideways only, where it must, without a bar of its own */
@@ -391,7 +393,8 @@ html[data-surf="alone"] body { background: transparent; }
 
 /* The host fingerprint to confirm, a revealed secret, the actions of a secret's row. */
 .app .blk.pin .fp { font-size: 14px; line-height: 1.6; word-spacing: 4px; overflow-wrap: anywhere; }
-.app code.reveal { max-width: 260px; overflow-wrap: anywhere; }
+.app code.reveal, .app code.reveal-user { max-width: 260px; overflow-wrap: anywhere; }
+.app .reveal-part { display: inline-flex; align-items: center; gap: 6px; }
 .app .acts { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
 .app .acts.one { flex-wrap: nowrap; }
 .app .two > .confirm { display: grid; grid-template-columns: 1fr 1fr; gap: inherit; }

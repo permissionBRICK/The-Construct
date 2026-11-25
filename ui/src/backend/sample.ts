@@ -200,11 +200,11 @@ export function sampleState(): State {
     vaultRequests: [],
     vaultFiles: [],
     secrets: [
-      { name: 'forge-token', note: 'Git forge, push access for the release pipeline of webshop and toolkit; rotate it after every handover to another team', usedBy: ['atlas'], last: 'now', auto: false },
-      { name: 'staging-db', note: 'Staging database', usedBy: ['harbor'], last: '2 d', auto: false },
-      { name: 'deploy-key', note: 'Production deploy', usedBy: [], last: '9 d', auto: false },
-      { name: 'npm-publish', note: 'Registry, publish', usedBy: ['atlas', 'harbor'], last: '1 h', auto: true },
-      { name: 'mail-api', note: 'Test mailbox', usedBy: [], last: '3 d', auto: true },
+      { name: 'forge-token', note: 'Git forge, push access for the release pipeline of webshop and toolkit; rotate it after every handover to another team', hasUsername: false, usedBy: ['atlas'], last: 'now', auto: false },
+      { name: 'staging-db', note: 'Staging database', hasUsername: true, usedBy: ['harbor'], last: '2 d', auto: false },
+      { name: 'deploy-key', note: 'Production deploy', hasUsername: false, usedBy: [], last: '9 d', auto: false },
+      { name: 'npm-publish', note: 'Registry, publish', hasUsername: false, usedBy: ['atlas', 'harbor'], last: '1 h', auto: true },
+      { name: 'mail-api', note: 'Test mailbox', hasUsername: false, usedBy: [], last: '3 d', auto: true },
     ],
     leases: [
       { id: 'l1', secret: 'forge-token', vmName: 'atlas', reason: 'Push the release', left: '1:42' },

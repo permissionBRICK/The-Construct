@@ -19,9 +19,10 @@ import { copy, na, useApp } from './ctx';
     value lives only in this card's field and is emptied when the card answers. */
 export function VaultCard({ r, onDone }: { r: VaultRequest; onDone?: () => void }) {
   const { be, s } = useApp();
+  const [username, setUsername] = useState('');
   const [value, setValue] = useState('');
-  const done = () => { setValue(''); onDone?.(); };
-  const save = () => { if (value) { be.enterSecret(r.id, value); done(); } };
+  const done = () => { setUsername(''); setValue(''); onDone?.(); };
+  const save = () => { if (value) { be.enterSecret(r.id, value, username); done(); } };
   // The span the VM asked for is the default; the user may pick another before allowing.
   const choose = !na(s, 'approval-span') && r.kind === 'lease' && !!r.ttlSeconds;
   const [ttl, setTtl] = useState<number | undefined>(undefined);
@@ -33,6 +34,7 @@ export function VaultCard({ r, onDone }: { r: VaultRequest; onDone?: () => void 
       {r.reason && <div class="msg"><Tag>agent</Tag> <span class="quote">{r.reason}</span></div>}
       {r.kind === 'enter' ? (
         <>
+          <Field value={username} onInput={setUsername} label={`Username of ${r.secret}`} placeholder="Username (optional)" mono />
           <Field type="password" value={value} onInput={setValue} label={`Value of ${r.secret}`} placeholder="Value" onEnter={save} />
           <div class="two">
             <Btn onClick={() => { be.enterSecret(r.id, null); done(); }}>Decline</Btn>

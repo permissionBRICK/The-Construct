@@ -244,21 +244,34 @@ test('first run, a VM, a reprovision and a second device on the real API', async
   const engineId = ((await (await local.get('/api/state')).json()) as { engines: { id: string }[] }).engines[0].id;
   expect((await (await local.get(`/api/engines/${encodeURIComponent(engineId)}/api/v1/vms/alpha/repair`)).json()).startedHere).toBe(true);
 
-  // A secret added in the vault and revealed for a moment.
+  // A secret added in the vault with a username, revealed, and edited in place.
   await pa.goto(`${a.base}/#/vault`);
   await pa.getByRole('button', { name: 'Add' }).click();
-  await pa.getByLabel('Name').fill('deploy-token');
+  await pa.getByLabel('Name', { exact: true }).fill('deploy-token');
   await pa.getByLabel('Note').fill('deploys');
+  await pa.getByLabel('Username', { exact: true }).fill('deploy-bot');
   await pa.getByLabel('Value').fill('e2e-secret-value');
   await pa.getByRole('button', { name: 'Save' }).click();
   const line = pa.locator('tr', { hasText: 'deploy-token' });
   await expect(line).toBeVisible();
   await line.click();
   const row = pa.locator('tr.more-row');
+  await expect(row.locator('.tg')).toHaveText('with username');
   await row.getByRole('button', { name: 'Show' }).click();
+  await expect(row.locator('code.reveal-user')).toHaveText('deploy-bot');
   await expect(row.locator('code.reveal')).toHaveText('e2e-secret-value');
   await row.getByRole('button', { name: 'Hide' }).click();
   await expect(pa.getByText('e2e-secret-value')).toHaveCount(0);
+  await expect(pa.getByText('deploy-bot')).toHaveCount(0);
+  await row.getByRole('button', { name: 'Edit' }).click();
+  await expect(row.getByLabel('Username of deploy-token')).toHaveValue('deploy-bot');
+  await row.getByLabel('Username of deploy-token').fill('release-bot');
+  await row.getByRole('button', { name: 'Save' }).click();
+  await row.getByRole('button', { name: 'Show' }).click();
+  await expect(row.locator('code.reveal-user')).toHaveText('release-bot');
+  await expect(row.locator('code.reveal')).toHaveText('e2e-secret-value');
+  await row.getByRole('button', { name: 'Hide' }).click();
+  await expect(pa.getByText('release-bot')).toHaveCount(0);
 
   // The VM asks for it through the engine's guest route with its own token; the card names the VM and marks
   // the agent's words; Approve answers it and the VM's poll gets the answer.
