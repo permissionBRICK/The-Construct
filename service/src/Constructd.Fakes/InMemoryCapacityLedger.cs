@@ -102,6 +102,32 @@ public sealed partial class InMemoryCapacityLedger(IClock clock) : ICapacityLedg
 
         }
     }
+    public Task RelocateDiskAsync(string vmName, string oldDiskPath, string newDiskPath, string newVolume, CancellationToken ct)
+    {
+        lock (InMemoryTransaction.Gate)
+        {
+            var oldKey = CapacityMath.Key("disk:" + oldDiskPath);
+            var newArtifact = "disk:" + newDiskPath;
+            var newKey = CapacityMath.Key(newArtifact);
+            var unresolvedKey = CapacityMath.Key("unresolved-primary-disk:" + vmName);
+            var matched = _reservations.Values.Where(r => r.Resource == ReservationResource.Storage && !ReservationRules.SavedState(r) &&
+                Ownership.SameName(r.VmName, vmName) && r.Artifact is not null &&
+                (CapacityMath.Key(r.Artifact) == oldKey || CapacityMath.Key(r.Artifact) == newKey || CapacityMath.Key(r.Artifact) == unresolvedKey)).ToArray();
+            var vm = ReadManagedVms?.Invoke().FirstOrDefault(v => Ownership.SameName(v.Name, vmName));
+            var owner = matched.FirstOrDefault()?.ScopeOwner ?? vm?.Owner ?? "system";
+            var amount = matched.Length > 0 ? matched.Max(r => r.Amount) : (vm is not null ? (long)vm.DiskGb << 30 : 0L);
+            var created = matched.Length > 0 ? matched.Min(r => r.Created) : clock.UtcNow;
+            foreach (var row in matched) _reservations.Remove(row.Id);
+            if (amount > 0)
+            {
+                var id = Guid.NewGuid().ToString("n");
+                _reservations[id] = new(id, ReservationResource.Storage, owner, vmName, newArtifact, newVolume, amount,
+                    ReservationPhase.Held, ReservationOrigin.Api, null, created, null, clock.UtcNow);
+            }
+            Audit?.AppendAsync(new(clock.UtcNow, owner, "capacity.relocate", vmName, AuditOutcome.Success, newVolume), ct).GetAwaiter().GetResult();
+            return Task.CompletedTask;
+        }
+    }
     public Task TrimAsync(string id, long amount, CancellationToken ct)
     {
         lock (InMemoryTransaction.Gate)

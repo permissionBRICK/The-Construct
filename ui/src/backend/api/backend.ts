@@ -66,6 +66,8 @@ interface AdminData {
   /** `repair.auto` and `repair.chat` from the host configuration. */
   repairAuto: boolean | undefined;
   repairChat: boolean | undefined;
+  /** `storage.vmStorageRoot` from the host configuration; null = Hyper-V default. */
+  vmStorageRoot: string | null | undefined;
 }
 
 /** A repair session with the lines read so far. */
@@ -87,6 +89,7 @@ interface Slice {
   autoReprovision: boolean | null;
   usageWindow: Host['usage']['window'];
   kind: string;
+  storageMoveSupported: boolean;
   problem: string | null;
   /** True once this engine's initial VM list read has answered (or failed), so empty-VM states do not flash early. */
   vmsLoaded: boolean;
@@ -101,7 +104,7 @@ interface Slice {
 
 const newSlice = (view: EngineView): Slice => ({
   view, me: null, health: null, all: [], mine: [], parts: new Map(), jobs: [], ended: new Map(), lost: new Set(), admin: null, autoReprovision: null,
-  usageWindow: 'month', kind: '', problem: null, vmsLoaded: false, repairs: new Map(), repairChecked: new Set(), repairStarting: new Set(), replying: new Set(),
+  usageWindow: 'month', kind: '', storageMoveSupported: false, problem: null, vmsLoaded: false, repairs: new Map(), repairChecked: new Set(), repairStarting: new Set(), replying: new Set(),
 });
 
 class ApiError extends Error {
@@ -672,7 +675,11 @@ export class ApiBackend implements Backend {
           problems,
         });
       }),
-      !sl.kind ? ok(c.GET('/api/v1/host/capabilities')).then(cap => { sl.kind = hostKind(cap as HostCapabilities); }, () => { /* shown without its kind */ }) : Promise.resolve(),
+      !sl.kind ? ok(c.GET('/api/v1/host/capabilities')).then(cap => {
+        const hc = cap as HostCapabilities;
+        sl.kind = hostKind(hc);
+        sl.storageMoveSupported = Boolean(hc.policy?.storageMove);
+      }, () => { /* shown without its kind */ }) : Promise.resolve(),
     ]);
     // A failed job's VM (or one whose job has warnings) is asked once for its repair session, which may have run
     // before this page opened; events follow it from there.
@@ -733,6 +740,7 @@ export class ApiBackend implements Backend {
       lan,
       repairAuto: config.status === 'fulfilled' ? (config.value as HostConfig).repair?.auto ?? true : prev?.repairAuto,
       repairChat: config.status === 'fulfilled' ? (config.value as HostConfig).repair?.chat ?? false : prev?.repairChat,
+      vmStorageRoot: config.status === 'fulfilled' ? ((config.value as HostConfig).storage?.vmStorageRoot ?? null) : prev?.vmStorageRoot,
     };
   }
 
@@ -849,6 +857,8 @@ export class ApiBackend implements Backend {
       ...(a?.lan !== undefined ? { lan: a.lan } : {}),
       ...(admin && a?.repairAuto !== undefined ? { repairAuto: a.repairAuto } : {}),
       ...(admin && a?.repairChat !== undefined ? { repairChat: a.repairChat } : {}),
+      ...(admin && a?.vmStorageRoot !== undefined ? { vmStorageRoot: a.vmStorageRoot } : {}),
+      ...(sl.storageMoveSupported ? { storageMoveSupported: true } : {}),
     };
   }
 
@@ -1423,8 +1433,8 @@ export class ApiBackend implements Backend {
   private jobEnded(engine: string, job: JobResponse) {
     const key = jobKey(engine, job.id);
     if (!ended(job)) return;
-    const fallback: JobKind = job.kind === 'create-vm' ? 'create' : job.kind === 'reinstall' ? 'reinstall' : job.kind === 'restore' ? 'restore' : job.kind === 'update-agents' ? 'update' : 'reprovision';
-    const verb = { reprovision: 'Reprovisioned', reinstall: 'Reinstalled', update: 'Updated', restore: 'Restored', create: 'Created' }[this.started.get(key)?.kind ?? fallback];
+    const fallback: JobKind = job.kind === 'create-vm' ? 'create' : job.kind === 'reinstall' ? 'reinstall' : job.kind === 'restore' ? 'restore' : job.kind === 'update-agents' ? 'update' : job.kind === 'move-storage' ? 'move' : 'reprovision';
+    const verb = { reprovision: 'Reprovisioned', reinstall: 'Reinstalled', update: 'Updated', restore: 'Restored', create: 'Created', move: 'Moved' }[this.started.get(key)?.kind ?? fallback];
     if (job.state === 'succeeded' && job.vmName) this.note(`${verb} ${job.vmName}`);
   }
 
@@ -2109,6 +2119,34 @@ export class ApiBackend implements Backend {
     const repair = this.repairSwitch(hostId, { chat: on });
     if (!repair) return;
     this.hostAct(hostId, c => ok(c.PUT('/api/v1/host/config', { body: { repair } as never })), on ? 'The repair runs in Construct\'s chat' : 'The repair runs in T3 Code');
+  }
+
+  setHostStoragePath(hostId: string, path: string | null, moveAllVms = false) {
+    const next = path?.trim() ? path.trim() : null;
+    const sl = this.slices.get(hostId);
+    if (!sl) return;
+    void this.run(async () => {
+      const c = this.engine(hostId);
+      await ok(c.PUT('/api/v1/host/config', { body: { storage: { vmStorageRoot: next } } as never }));
+      if (sl.admin) sl.admin.vmStorageRoot = next;
+      this.compose();
+      if (moveAllVms) {
+        const res = await ok(c.POST('/api/v1/host/vms/storage/move', { body: { destinationPath: next } }));
+        if (res.vms.length > 0) this.note(`Saved default path; moving ${res.vms.length} ${res.vms.length === 1 ? 'VM' : 'VMs'}`);
+        else this.note('Saved default disk path; all VMs are already there');
+      } else {
+        this.note(next ? 'Saved default disk path' : 'Reset default disk path to Hyper-V default');
+      }
+    }, undefined, hostId);
+  }
+
+  moveVmStorage(hostId: string, vmName: string, destinationPath: string | null) {
+    const next = destinationPath?.trim() ? destinationPath.trim() : null;
+    void this.run(async () => {
+      const c = this.engine(hostId);
+      const r = await ok(c.POST('/api/v1/vms/{name}/storage/move', { params: { path: { name: vmName } }, body: { destinationPath: next } }));
+      await this.track(hostId, r.jobId, { kind: 'move' });
+    }, `Moving ${vmName}`, hostId);
   }
 
   /** The repair section with one switch changed. A section is replaced whole, so the switch shows its new position at

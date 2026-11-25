@@ -12,7 +12,7 @@ public static class ChildVmComposition
     {
         if (options.Fake)
         {
-            services.AddSingleton(sp => new FakeChildVmDriver(sp.GetRequiredService<FakeHypervisorDriver>()));
+            services.AddSingleton(sp => new FakeChildVmDriver(sp.GetRequiredService<FakeHypervisorDriver>(), sp.GetService<IHostConfigStore>(), options));
             services.AddSingleton<IChildVmDriver>(sp => sp.GetRequiredService<FakeChildVmDriver>());
         }
         else if (options.IsProxmox)

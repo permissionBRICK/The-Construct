@@ -377,6 +377,8 @@ function New-ConstructChildVm {
     }
     if ($h.networkAttached) { $null = Get-VMSwitch -Name $Descriptor.switchName -ErrorAction Stop }
     if (Test-Path -LiteralPath $disk) { throw 'name-taken' }
+    $diskDir = Split-Path -Parent $disk
+    if ($diskDir -and -not (Test-Path -LiteralPath $diskDir)) { New-Item -ItemType Directory -Force -Path $diskDir | Out-Null }
     $marker = $disk + '.childvm.json'
     if ($Descriptor.ownershipPath) { $marker = [string]$Descriptor.ownershipPath }
     $configPath = Join-Path (Get-VMHost -ErrorAction Stop).VirtualMachinePath ('childvm-' + [Guid]::NewGuid().ToString('N'))
@@ -420,6 +422,25 @@ function Remove-ConstructChildVm {
     $disk = Get-ConstructChildDiskPath -Name $Name -VhdPath $VhdPath
     $marker = $disk + '.childvm.json'
     $vm = Get-ConstructChildVmObject $Name
+    if (-not (Test-Path -LiteralPath $marker) -and $vm) {
+        # If the child VM's disk was relocated away from the host's current default storage root,
+        # check for the ownership marker beside the VM's actual attached base disk.
+        foreach ($drive in @(Get-VMHardDiskDrive -VMName $Name -ErrorAction SilentlyContinue | Where-Object { $_.Path })) {
+            $cur = [string]$drive.Path
+            $seen = @{}
+            while ($cur -and -not $seen.ContainsKey($cur)) {
+                $seen[$cur] = $true
+                $parent = (Get-VHD -Path $cur -ErrorAction SilentlyContinue).ParentPath
+                if (-not $parent) { break }
+                $cur = [string]$parent
+            }
+            if ($cur -and (Test-Path -LiteralPath ($cur + '.childvm.json'))) {
+                $disk = $cur
+                $marker = $cur + '.childvm.json'
+                break
+            }
+        }
+    }
     if (-not (Test-Path -LiteralPath $marker)) {
         if ($vm -or (Test-Path -LiteralPath $disk)) { throw 'artifact-ownership-unverified' }
         return

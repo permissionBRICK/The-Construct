@@ -49,6 +49,8 @@ public interface ICapacityLedger
     /// <summary>pending → held. Requires the observed state that justifies it.</summary>
     Task ConfirmAsync(IReadOnlyList<string> ids, VmState observed, CancellationToken ct);
     Task ReleaseAsync(IReadOnlyList<string> ids, VmState observed, string reason, CancellationToken ct);
+    /// <summary>Updates a VM's storage reservation after its virtual hard disk moved to a new path and volume.</summary>
+    Task RelocateDiskAsync(string vmName, string oldDiskPath, string newDiskPath, string newVolume, CancellationToken ct);
     /// <summary>Trim a storage reservation to the artifact's real size (media completion).</summary>
     Task TrimAsync(string id, long amount, CancellationToken ct);
     /// <summary>Keeps a pending reservation alive while its operation runs (extends PendingUntil).</summary>

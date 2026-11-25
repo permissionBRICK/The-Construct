@@ -8,6 +8,7 @@ public sealed class UnsupportedCapacityLedger : ICapacityLedger
     public Task<CapacityDecision> TryReserveAsync(ReservationRequest request, CancellationToken ct) => Task.FromResult(new CapacityDecision(false, [], null, "host", 0, 0, 0, "unsupported-capability", 0));
     public Task ConfirmAsync(IReadOnlyList<string> ids, VmState observed, CancellationToken ct) => throw Unsupported();
     public Task ReleaseAsync(IReadOnlyList<string> ids, VmState observed, string reason, CancellationToken ct) => throw Unsupported();
+    public Task RelocateDiskAsync(string vmName, string oldDiskPath, string newDiskPath, string newVolume, CancellationToken ct) => throw Unsupported();
     public Task TrimAsync(string id, long amount, CancellationToken ct) => throw Unsupported();
     public Task ExtendAsync(IReadOnlyList<string> ids, TimeSpan by, CancellationToken ct) => throw Unsupported();
     public Task<IReadOnlyList<OrphanOutcome>> ReconcileAsync(CancellationToken ct) => throw Unsupported();

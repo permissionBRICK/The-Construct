@@ -117,7 +117,7 @@ function orchard(): Host {
       { name: 'media', updated: '14 Oct', json: json({ maxBytes: 17179869184, maxItemsPerUser: 20, uploadChunkBytes: 8388608, uploadTtlHours: 24, acquireTimeoutMinutes: 180, allowHttp: true, unreferencedTtlHours: null }) },
       { name: 'network', updated: '14 Oct', json: json({ hostForwardsEnabled: true, directAddressReporting: true, defaultMode: 'relayed', ownerMaySwitchMode: false }) },
       { name: 'virtualization', updated: '14 Oct', json: json({ nestedDefault: true, nestedSelectable: true, minimumRamBytes: 6442450944 }) },
-      { name: 'updates', updated: '14 Oct', json: json({ channel: 'stable', auto: false, drainTimeoutMinutes: 60, healthTimeoutSeconds: 120 }) },
+      { name: 'updates', updated: '14 Oct', json: json({ repository: 'permissionBRICK/The-Construct', channel: 'stable', auto: false, drainTimeoutMinutes: 60, healthTimeoutSeconds: 120 }) },
       { name: 'usage', updated: '14 Oct', json: json({ retentionDays: 400 }) },
       { name: 'vault', updated: '14 Oct', json: json({ webUrl: null }) },
       { name: 'https', updated: '14 Oct', json: json({ sharedPort: 8443, startOnRequest: true }) },
@@ -141,6 +141,7 @@ export function sampleState(): State {
     vms: [
       vm({
         id: 'atlas', name: 'atlas', hostId: 'pc', power: 'on', address: 'atlas.example.net',
+        diskPath: 'C:\\ProgramData\\Microsoft\\Windows\\Virtual Hard Disks\\atlas.vhdx',
         settings: settings(16, 8),
         children: [{ name: 'win-test', os: 'Windows 11', left: '5 h 20 m', power: 'on' }],
         projectsOn: ['webshop', 'toolkit'],
@@ -158,7 +159,7 @@ export function sampleState(): State {
           { id: 'b1', at: '12 Oct 03:00', kind: 'Scheduled', size: '377 MB', files: 45310, pinned: false, protected: true },
         ],
       }),
-      vm({ id: 'pebble', name: 'pebble', hostId: 'pc', power: 'off', address: 'pebble.example.net', projectsOn: ['docs-site'], usage: { cpuPct: 0, memUsedGb: 0, diskUsedGb: 31 }, settings: settings(8, 4), appliedHw: { memGb: 8, cpus: 4 }, memTotalGb: 8 }),
+      vm({ id: 'pebble', name: 'pebble', hostId: 'pc', power: 'off', address: 'pebble.example.net', diskPath: 'C:\\ProgramData\\Microsoft\\Windows\\Virtual Hard Disks\\pebble.vhdx', projectsOn: ['docs-site'], usage: { cpuPct: 0, memUsedGb: 0, diskUsedGb: 31 }, settings: settings(8, 4), appliedHw: { memGb: 8, cpus: 4 }, memTotalGb: 8 }),
       vm({ id: 'harbor', name: 'harbor', hostId: 'orchard', power: 'on', address: 'harbor.orchard.example.net', projectsOn: ['webshop'], usage: { cpuPct: 22, memUsedGb: 9.4, diskUsedGb: 88 },
         children: [{ name: 'harbor-win', os: 'Windows 11', left: '5 h 20 m', power: 'on' }],
         backups: [{ id: 'h1', at: 'Today 02:00', kind: 'Scheduled', size: '1.1 GB', files: 120400, pinned: false, protected: true }] }),
@@ -166,17 +167,17 @@ export function sampleState(): State {
     ],
     hosts: [
       {
-        id: 'pc', name: 'This PC', kind: 'Hyper-V', version: '2.4.0', channel: 'stable', admin: true, repairAuto: true, repairChat: false, address: 'https://192.0.2.10:8443', signIn: 'windows', vmCount: 2,
+        id: 'pc', name: 'This PC', kind: 'Hyper-V', version: '2.4.0', channel: 'stable', admin: true, repairAuto: true, repairChat: false, vmStorageRoot: null, storageMoveSupported: true, address: 'https://192.0.2.10:8443', signIn: 'windows', vmCount: 2,
         ...emptyAdmin,
         lan: false,
         capacity: { mode: 'observe', ram: [24, 64], cpu: [12, 16], disk: [0.3, 1] },
         vms: [
-          { name: 'atlas', owner: 'alex', role: 'primary', power: 'on', cpuPct: 12, memGb: 6.2, memMaxGb: 16, diskGb: 48, cpus: 8, network: 'default', address: '192.0.2.11', lease: 'no expiry', shared: false, tokensToday: '0.8 M' },
-          { name: 'win-test', owner: 'alex', role: 'child', parent: 'atlas', power: 'on', cpuPct: 4, memGb: 2.8, memMaxGb: 8, diskGb: 38, cpus: 4, network: 'default', address: '192.0.2.12', lease: '5 h 20 m', shared: false, tokensToday: '0' },
-          { name: 'pebble', owner: 'alex', role: 'primary', power: 'off', cpuPct: 0, memGb: 0, memMaxGb: 8, diskGb: 31, cpus: 4, network: 'default', address: '192.0.2.13', lease: 'no expiry', shared: false, tokensToday: '0' },
+          { name: 'atlas', owner: 'alex', role: 'primary', power: 'on', cpuPct: 12, memGb: 6.2, memMaxGb: 16, diskGb: 48, cpus: 8, network: 'default', address: '192.0.2.11', lease: 'no expiry', shared: false, tokensToday: '0.8 M', diskPath: 'C:\\ProgramData\\Microsoft\\Windows\\Virtual Hard Disks\\atlas.vhdx' },
+          { name: 'win-test', owner: 'alex', role: 'child', parent: 'atlas', power: 'on', cpuPct: 4, memGb: 2.8, memMaxGb: 8, diskGb: 38, cpus: 4, network: 'default', address: '192.0.2.12', lease: '5 h 20 m', shared: false, tokensToday: '0', diskPath: 'C:\\ProgramData\\Microsoft\\Windows\\Virtual Hard Disks\\win-test.vhdx' },
+          { name: 'pebble', owner: 'alex', role: 'primary', power: 'off', cpuPct: 0, memGb: 0, memMaxGb: 8, diskGb: 31, cpus: 4, network: 'default', address: '192.0.2.13', lease: 'no expiry', shared: false, tokensToday: '0', diskPath: 'C:\\ProgramData\\Microsoft\\Windows\\Virtual Hard Disks\\pebble.vhdx' },
         ],
         users: [user('alex', 'admin', 2, 1, '18.4 M')],
-        config: orchard().config.filter(c => ['capacity', 'lifecycle', 'backups', 'updates'].includes(c.name)),
+        config: [...orchard().config.filter(c => ['capacity', 'lifecycle', 'backups', 'updates'].includes(c.name)), { name: 'storage', updated: '–', json: json({ vmStorageRoot: null }) }],
         updates: [{ at: '2 Nov 20:58', from: '2.3.2', to: '2.4.0', state: 'done', by: 'alex' }],
       },
       orchard(),

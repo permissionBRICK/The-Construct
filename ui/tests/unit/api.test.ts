@@ -2363,3 +2363,43 @@ describe('ApiBackend initial loading and progressive VM delivery', () => {
     expect(be.snapshot().vms.map(v => v.name)).toEqual(['atlas']);
   });
 });
+
+describe('ApiBackend VM storage path and relocation', () => {
+  const P = `/api/engines/${E1}/api/v1`;
+
+  it('reads storageMove capability, host default path, and VM diskPath, and saves with optional batch move', async () => {
+    const { be, on, calls, settle } = world();
+    on('GET', `${P}/host/capabilities`, { json: { kind: 'hyperv', backend: 'hyperv', capabilities: {}, nested: { available: true, default: true, selectable: true }, policy: { storageMove: true } } });
+    on('GET', `${P}/vms`, { json: [{ ...vmResponse('atlas', 'alex'), diskPath: 'C:\\ProgramData\\Microsoft\\Windows\\Virtual Hard Disks\\atlas.vhdx' }] });
+    on('GET', `${P}/host/config`, { json: { repair: { auto: true, chat: false, source: 'default', updatedAt: null }, storage: { vmStorageRoot: 'D:\\VMs', source: 'stored', updatedAt: '2026-11-25T10:00:00Z' } } });
+    on('PUT', `${P}/host/config`, { json: { storage: { vmStorageRoot: 'E:\\FastVMs', source: 'stored', updatedAt: '2026-11-25T12:00:00Z' } } });
+    on('POST', `${P}/host/vms/storage/move`, { status: 202, json: { vms: ['atlas'], destinationPath: 'E:\\FastVMs' } });
+    const moveJob = { id: 'j-move-1', kind: 'move-storage', vmName: 'atlas', state: 'running', phase: 'move', created: '2026-11-25T12:00:00Z', progress: [] };
+    let moved = false;
+    on('GET', `${P}/jobs`, () => ({ json: moved ? [moveJob] : [] }));
+    on('POST', `${P}/vms/atlas/storage/move`, () => { moved = true; return { status: 202, json: { jobId: 'j-move-1' } }; });
+    on('GET', `${P}/jobs/j-move-1`, { json: moveJob });
+
+    await be.start();
+    expect(be.snapshot().hosts[0].storageMoveSupported).toBe(true);
+    expect(be.snapshot().hosts[0].vmStorageRoot).toBe('D:\\VMs');
+    expect(be.snapshot().vms[0].diskPath).toBe('C:\\ProgramData\\Microsoft\\Windows\\Virtual Hard Disks\\atlas.vhdx');
+
+    // Save host path without moving VMs.
+    be.setHostStoragePath(E1, 'E:\\FastVMs', false);
+    await settle();
+    expect(calls.some(c => c.method === 'PUT' && c.path === `${P}/host/config` && (c.body as { storage?: { vmStorageRoot?: string } })?.storage?.vmStorageRoot === 'E:\\FastVMs')).toBe(true);
+    expect(calls.some(c => c.method === 'POST' && c.path === `${P}/host/vms/storage/move`)).toBe(false);
+
+    // Save host path with auto-move all VMs.
+    be.setHostStoragePath(E1, 'E:\\FastVMs', true);
+    await settle();
+    expect(calls.some(c => c.method === 'POST' && c.path === `${P}/host/vms/storage/move` && (c.body as { destinationPath?: string })?.destinationPath === 'E:\\FastVMs')).toBe(true);
+
+    // Move an individual VM.
+    be.moveVmStorage(E1, 'atlas', 'F:\\Single');
+    await settle();
+    expect(calls.some(c => c.method === 'POST' && c.path === `${P}/vms/atlas/storage/move` && (c.body as { destinationPath?: string })?.destinationPath === 'F:\\Single')).toBe(true);
+    expect(be.snapshot().jobs.some(j => j.kind === 'move' && j.vmId === 'atlas')).toBe(true);
+  });
+});

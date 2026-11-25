@@ -1,5 +1,5 @@
 import type { ComponentChildren, JSX } from 'preact';
-import { useLayoutEffect, useRef, useState } from 'preact/hooks';
+import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import { Icon, type IconName } from './icons';
 import type { Dot as DotKind } from '../model/vm';
 import { copy, useApp } from './ctx';
@@ -139,6 +139,26 @@ export function Copyable({ text }: { text: string }) {
     <div class="line">
       <code class="grow sel">{text}</code>
       <Btn sm icon="copy" onClick={() => { copy(text); toast('Copied'); }}>Copy</Btn>
+    </div>
+  );
+}
+
+/** A modal dialog over the window, closed on Escape or clicking the backdrop. */
+export function Modal({ title, onClose, children, acts }: {
+  title: string; onClose: () => void; children: ComponentChildren; acts: ComponentChildren;
+}) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+  return (
+    <div class="modal-bg" onClick={e => { if (e.target === e.currentTarget) onClose(); }}>
+      <div class="blk modal" role="dialog" aria-modal="true" aria-label={title}>
+        <div class="bh"><b>{title}</b><Btn sm icon="x" title="Close" onClick={onClose} /></div>
+        <div class="modal-body">{children}</div>
+        <div class="bf">{acts}</div>
+      </div>
     </div>
   );
 }

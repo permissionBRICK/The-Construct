@@ -112,7 +112,8 @@ public static class HostAdminEndpoints
                 Https: new HostHttpsPolicy(
                     Available: certificate is not null,
                     SharedPort: https.SharedPort,
-                    MainAddress: https.SharedPort is not null && !string.IsNullOrWhiteSpace(options.PublicHostPattern)))));
+                    MainAddress: https.SharedPort is not null && !string.IsNullOrWhiteSpace(options.PublicHostPattern)),
+                StorageMove: http.RequestServices.GetService<IVmStorageDriver>() is not null)));
     }
     internal static async Task<CapacityConfig> CapacityConfigAsync(IHostConfigStore config, ConstructdOptions options, CancellationToken ct) =>
         await config.GetAsync<CapacityConfig>("capacity", ct) ?? HostAdminDefaults.Capacity with { Mode = options.HostAdmin.Capacity.Mode };
@@ -160,6 +161,7 @@ public static class HostAdminEndpoints
             object value = row is null ? fallback : JsonSerializer.Deserialize(row.ValueJson, fallback.GetType(), ApiJson.Options)!;
             if (row is null && key == "capacity") value = HostAdminDefaults.Capacity with { Mode = options.HostAdmin.Capacity.Mode };
             if (row is null && key == "updates") value = HostUpdateTrust.Defaults(options);
+            if (row is null && key == "storage") value = new StorageConfig(StoragePathRules.NormalizeOptional(options.VmStorageRoot));
             if (value is UpdatesConfig updates) value = HostUpdateTrust.Apply(updates, options);
             // Fields stay at section level; source and updatedAt describe the whole section.
             var fields = JsonSerializer.SerializeToNode(value, ApiJson.Options)!.AsObject();
@@ -207,8 +209,9 @@ public static class HostAdminEndpoints
             if (HostConfigValidation.Validate(value) is { } error) return CodedProblems.Validation(property.Name, error);
             if (value is HttpsConfig https && HostConfigValidation.HttpsPortConflict(https, options) is { } portConflict)
                 return CodedProblems.Validation("https.sharedPort", portConflict);
-            if (HostConfigValidation.UnsupportedOnPlatform(value, options.IsProxmox))
-                return CodedProblems.Create(400, "unsupported-on-platform", "Direct network mode requires Proxmox.");
+            if (HostConfigValidation.UnsupportedOnPlatformReason(value, options) is { } unsupportedReason)
+                return CodedProblems.Create(400, "unsupported-on-platform", unsupportedReason);
+            if (value is StorageConfig storage) value = new StorageConfig(StoragePathRules.NormalizeOptional(storage.VmStorageRoot));
             if (value is VirtualizationConfig { NestedDefault: true } && !driver.NestedAvailable && !await NestedDefaultOnAsync(metadata, ct))
                 return CodedProblems.Create(409, "unsupported-on-host", "Nested virtualization is unavailable on this host.");
             if (value is UpdatesConfig updates && HostUpdateTrust.Apply(updates, options) != updates)

@@ -37,8 +37,25 @@ public sealed class HypervisorOperationException(string operation, string vmName
 /// script dot-sources the driver's own <c>hyperv\HyperV.Driver.ps1</c> (<see cref="HyperVScripts"/>)
 /// and calls the contract function there.
 /// </summary>
-public sealed class HyperVDriver : IHypervisorDriver, IVmCpuDriver, IVmMemoryDriver, IVmNestedDriver, IVmFactsDriver, IVmHostStartDriver
+public sealed class HyperVDriver : IHypervisorDriver, IVmCpuDriver, IVmMemoryDriver, IVmNestedDriver, IVmFactsDriver, IVmHostStartDriver, IVmStorageDriver
 {
+    /// <summary>Moving a large VHDX across drives can take a while.</summary>
+    private static readonly TimeSpan MoveStorageTimeout = TimeSpan.FromHours(2);
+
+    public async Task<VmStorageMoveResult> MoveStorageAsync(string name, string destinationDirectory, IProgress<string>? progress, CancellationToken ct)
+    {
+        var value = await RunAsync("move-storage", name, HyperVScript.MoveStorage(name, destinationDirectory), MoveStorageTimeout, progress, ct)
+            .ConfigureAwait(false);
+        if (value.ValueKind != JsonValueKind.Object) throw Fail("move-storage", name, "the driver reported no storage move result");
+        string? Text(string key) => value.TryGetProperty(key, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
+        var oldPath = Text("OldDiskPath");
+        var newPath = Text("NewDiskPath");
+        var newVolume = Text("NewVolume");
+        if (string.IsNullOrWhiteSpace(oldPath) || string.IsNullOrWhiteSpace(newPath) || string.IsNullOrWhiteSpace(newVolume))
+            throw Fail("move-storage", name, "the driver reported incomplete disk paths");
+        var moved = ReadBool(value, "Moved");
+        return new VmStorageMoveResult(oldPath, newPath, newVolume, moved);
+    }
     public async Task<HypervisorVmFacts?> GetFactsAsync(string name, CancellationToken ct)
     {
         var value = await RunAsync("vm-facts", name, HyperVScript.GetFacts(name), ShortTimeout, null, ct);
@@ -76,10 +93,11 @@ public sealed class HyperVDriver : IHypervisorDriver, IVmCpuDriver, IVmMemoryDri
     private readonly IProcessRunner _processes;
     private readonly ConstructdOptions _options;
     private readonly ILogger<HyperVDriver> _logger;
+    private readonly IHostConfigStore? _config;
     private readonly Lock _capabilityGate = new();
     private DriverCapabilities? _capabilities;
 
-    public HyperVDriver(IProcessRunner processes, ConstructdOptions options, ILogger<HyperVDriver> logger)
+    public HyperVDriver(IProcessRunner processes, ConstructdOptions options, ILogger<HyperVDriver> logger, IHostConfigStore? config = null)
     {
         ArgumentNullException.ThrowIfNull(processes);
         ArgumentNullException.ThrowIfNull(options);
@@ -88,6 +106,7 @@ public sealed class HyperVDriver : IHypervisorDriver, IVmCpuDriver, IVmMemoryDri
         _processes = processes;
         _options = options;
         _logger = logger;
+        _config = config;
     }
 
     /// <summary>
@@ -154,10 +173,11 @@ public sealed class HyperVDriver : IHypervisorDriver, IVmCpuDriver, IVmMemoryDri
     {
         ArgumentNullException.ThrowIfNull(descriptor);
 
+        var vhdPath = await VhdPathForAsync(descriptor.Name, cancellationToken).ConfigureAwait(false);
         var script = HyperVScript.CreateVm(
             descriptor,
             _options.SwitchName,
-            VhdPathFor(descriptor.Name));
+            vhdPath);
 
         await RunAsync("create-vm", descriptor.Name, script, CreateTimeout, progress, cancellationToken)
             .ConfigureAwait(false);
@@ -281,18 +301,20 @@ public sealed class HyperVDriver : IHypervisorDriver, IVmCpuDriver, IVmMemoryDri
             progress: null,
             cancellationToken).ConfigureAwait(false);
 
-    /// <summary>The VHDX path for a VM, or null when the admin left the storage root unset.</summary>
-    private string? VhdPathFor(string vmName)
+    /// <summary>The VHDX path for a VM, or null when neither host storage config nor startup option sets a root.</summary>
+    private async Task<string?> VhdPathForAsync(string vmName, CancellationToken cancellationToken)
     {
-        if (string.IsNullOrWhiteSpace(_options.VmStorageRoot))
+        var configured = _config is null ? null : (await _config.GetAsync<StorageConfig>("storage", cancellationToken).ConfigureAwait(false))?.VmStorageRoot;
+        var root = StoragePathRules.ResolveConfiguredRoot(configured, _options);
+        if (string.IsNullOrWhiteSpace(root))
         {
             return null;
         }
 
-        var root = ArgumentGuard.WindowsPath(_options.VmStorageRoot, "Constructd:VmStorageRoot")
+        var validated = ArgumentGuard.WindowsPath(root, "Constructd:VmStorageRoot")
             .TrimEnd('\\', '/');
 
-        return $@"{root}\{ArgumentGuard.VmName(vmName)}.vhdx";
+        return $@"{validated}\{ArgumentGuard.VmName(vmName)}.vhdx";
     }
 
     /// <summary>

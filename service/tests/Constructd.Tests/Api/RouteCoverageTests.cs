@@ -29,6 +29,8 @@ public class RouteCoverageTests
         "PUT /api/v1/me/updates",
         "POST /api/v1/me/vms/reprovision",
         "POST /api/v1/host/vms/reprovision",
+        "POST /api/v1/host/vms/storage/move",
+        "POST /api/v1/vms/{name}/storage/move",
         "GET /api/v1/vms/{name}/update",
         "POST /api/v1/vms/{name}/update",
         "POST /api/v1/media/acquire",

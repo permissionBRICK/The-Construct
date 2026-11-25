@@ -254,6 +254,22 @@ html[data-surf="alone"] body { background: transparent; }
 .app .wft > .d svg { width: 14px; height: 14px; }
 .app .codebox { display: grid; grid-template-columns: repeat(4, auto); justify-content: space-between; gap: 10px 8px; padding: 16px; border: 1px solid var(--pri); border-radius: var(--radc); background: var(--pn); font: 600 17px var(--mono); letter-spacing: .04em; }
 .app .toast { position: fixed; left: 50%; bottom: 18px; transform: translateX(-50%); z-index: 30; padding: 8px 14px; white-space: nowrap; max-width: calc(100% - 24px); overflow: hidden; text-overflow: ellipsis; pointer-events: none; background: var(--side); color: var(--sidefg); border-radius: var(--rad); font-size: 12px; }
+.app .modal-bg { position: fixed; inset: 0; z-index: 40; display: grid; place-items: center; padding: 16px; background: rgba(0, 0, 0, .52); }
+.app .modal { width: 100%; max-width: 460px; box-shadow: 0 18px 44px rgba(0, 0, 0, .35); gap: 12px; }
+.app .modal-body { display: flex; flex-direction: column; gap: 8px; color: var(--dim); }
+.app .modal-body code { color: var(--fg); overflow-wrap: anywhere; }
+.app .path-val { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 340px; display: inline-block; vertical-align: middle; }
+.app .storage-form { display: flex; flex-direction: column; gap: 8px; padding: 10px 0; }
+.app .storage-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.app .storage-row > .in { flex: 1; min-width: 220px; }
+.app .r.cfg-row { align-items: flex-start; padding: 10px 0; min-height: 0; }
+.app .r.cfg-row .rl { flex-direction: column; align-items: flex-start; gap: 2px; white-space: normal; overflow: visible; text-overflow: clip; }
+.app .r.cfg-row .rl small { font-size: 12px; color: var(--dim); line-height: 1.35; }
+.app .r.cfg-row .rr { flex: none; padding-top: 2px; }
+.app .cfg-unit { display: inline-flex; align-items: center; gap: 6px; }
+.app .cfg-unit .in { width: 112px; text-align: right; }
+.app .cfg-unit .u { min-width: 28px; color: var(--dim); font-size: 12px; }
+.app .cfg-chan { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
 .app details > summary { list-style: none; cursor: pointer; }
 .app details > summary::-webkit-details-marker { display: none; }
 
@@ -368,6 +384,8 @@ html[data-surf="alone"] body { background: transparent; }
 .app.s-phone .strip > div:nth-child(n+3) { border-top: 1px solid var(--ln); }
 .app.s-phone .g2, .app.s-phone .two:not(.stack .two):not(.blk .two) { grid-template-columns: 1fr; }
 .app.s-phone .qrbox { grid-template-columns: 1fr; }
+.app.s-phone .r.cfg-row { flex-direction: column; align-items: stretch; gap: 8px; }
+.app.s-phone .r.cfg-row .rr { justify-content: flex-start; }
 
 @media (prefers-reduced-motion: reduce) { .app * { animation: none !important; transition: none !important; } }
 

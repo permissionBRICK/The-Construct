@@ -6,7 +6,7 @@ using Constructd.Core.Logic;
 using Constructd.Windows.Internal;
 namespace Constructd.Windows.HyperV;
 
-public sealed partial class HyperVChildDriver(IProcessRunner processes, ConstructdOptions options, IHypervisorDriver legacy) : IChildVmDriver, IChildVmStorage, IChildVmCreationOwnership, IWindowsGuestChannel, IWindowsLicenseMachines
+public sealed partial class HyperVChildDriver(IProcessRunner processes, ConstructdOptions options, IHypervisorDriver legacy, IHostConfigStore? config = null) : IChildVmDriver, IChildVmStorage, IChildVmCreationOwnership, IWindowsGuestChannel, IWindowsLicenseMachines
 {
     private BackendCapabilities? _capabilities;
     private readonly SemaphoreSlim _capabilityGate = new(1, 1);
@@ -31,19 +31,19 @@ public sealed partial class HyperVChildDriver(IProcessRunner processes, Construc
     public async Task<string?> GetCreationOperationAsync(string name, CancellationToken ct)
     {
         ArgumentGuard.VmName(name);
-        var value = await RunAsync("creation-owner", "Get-ConstructChildCreationOperation", "-Name $inputData.name -VhdPath $inputData.vhdPath", new { name, vhdPath = DiskPath(name) }, ct);
+        var value = await RunAsync("creation-owner", "Get-ConstructChildCreationOperation", "-Name $inputData.name -VhdPath $inputData.vhdPath", new { name, vhdPath = await DiskPathAsync(name, ct) }, ct);
         return value.ValueKind == JsonValueKind.Null ? null : value.GetString();
     }
     public async Task<ChildStoragePlacement> ResolveStorageAsync(string name, CancellationToken ct)
     {
         ArgumentGuard.VmName(name);
-        return Read<ChildStoragePlacement>(await RunAsync("storage", "Get-ConstructChildStorage", "-Name $inputData.name -VhdPath $inputData.vhdPath", new { name, vhdPath = DiskPath(name) }, ct));
+        return Read<ChildStoragePlacement>(await RunAsync("storage", "Get-ConstructChildStorage", "-Name $inputData.name -VhdPath $inputData.vhdPath", new { name, vhdPath = await DiskPathAsync(name, ct) }, ct));
     }
     public async Task<ChildStoragePlacement> ResolvePrimaryStorageAsync(string name, CancellationToken ct)
     {
         ArgumentGuard.VmName(name);
         // The existing primary driver has this historical default, independently of Get-VMHost.
-        var path = DiskPath(name) ?? @"C:\ProgramData\Microsoft\Windows\Virtual Hard Disks\" + name + ".vhdx";
+        var path = await DiskPathAsync(name, ct) ?? StoragePathRules.DefaultPrimaryRoot + "\\" + name + ".vhdx";
         return Read<ChildStoragePlacement>(await RunAsync("storage", "Get-ConstructChildStorage", "-Name $inputData.name -VhdPath $inputData.vhdPath", new { name, vhdPath = path }, ct));
     }
     public Task CreateAsync(ChildVmDescriptor descriptor, IProgress<string>? progress, CancellationToken ct) =>
@@ -52,7 +52,7 @@ public sealed partial class HyperVChildDriver(IProcessRunner processes, Construc
     {
         ValidateDescriptor(descriptor);
         HardwarePresets.ValidateCapabilities(descriptor.Hardware, await GetCapabilitiesAsync(ct), descriptor.AuxiliaryMediaPath is not null);
-        var canonicalDisk = DiskPath(descriptor.Name) ?? (await ResolveStorageAsync(descriptor.Name, ct)).DiskPath;
+        var canonicalDisk = await DiskPathAsync(descriptor.Name, ct) ?? (await ResolveStorageAsync(descriptor.Name, ct)).DiskPath;
         progress?.Report("Creating general-purpose VM hardware and disk.");
         await RunAsync("create", "New-ConstructChildVm", "-Descriptor $inputData", new { descriptor.Name, descriptor.Hardware, VhdPath = descriptor.VhdPath ?? canonicalDisk, OwnershipPath = canonicalDisk + ".childvm.json", descriptor.InstallMediaPath, descriptor.AuxiliaryMediaPath, descriptor.SwitchName, OperationId = operationId, LicenseBaseline = options.WindowsLicenseReuse && descriptor.Hardware.Os == "windows" }, ct, TimeSpan.FromMinutes(30));
     }
@@ -60,7 +60,7 @@ public sealed partial class HyperVChildDriver(IProcessRunner processes, Construc
     {
         ArgumentGuard.VmName(name);
         progress?.Report("Removing child VM and owned disk artifacts.");
-        await RunAsync("remove", "Remove-ConstructChildVm", "-Name $inputData.name -VhdPath $inputData.vhdPath", new { name, vhdPath = DiskPath(name) }, ct, TimeSpan.FromMinutes(30));
+        await RunAsync("remove", "Remove-ConstructChildVm", "-Name $inputData.name -VhdPath $inputData.vhdPath", new { name, vhdPath = await DiskPathAsync(name, ct) }, ct, TimeSpan.FromMinutes(30));
     }
     public async Task UpdateHardwareAsync(string name, ChildHardware hardware, bool resendTemplate, CancellationToken ct)
     {
@@ -99,7 +99,16 @@ public sealed partial class HyperVChildDriver(IProcessRunner processes, Construc
         try { return value.Deserialize<T>(HyperVChildScript.Json) ?? throw Fail("read"); }
         catch (JsonException) { throw Fail("read"); }
     }
-    private string? DiskPath(string name) => string.IsNullOrWhiteSpace(options.VmStorageRoot) ? null : ArgumentGuard.WindowsPath(options.VmStorageRoot, "VmStorageRoot").TrimEnd('\\', '/') + "\\" + name + ".vhdx";
+    private async Task<string?> StorageRootAsync(CancellationToken ct)
+    {
+        var configured = config is null ? null : (await config.GetAsync<StorageConfig>("storage", ct))?.VmStorageRoot;
+        return StoragePathRules.ResolveConfiguredRoot(configured, options);
+    }
+    private async Task<string?> DiskPathAsync(string name, CancellationToken ct)
+    {
+        var root = await StorageRootAsync(ct);
+        return string.IsNullOrWhiteSpace(root) ? null : ArgumentGuard.WindowsPath(root, "VmStorageRoot").TrimEnd('\\', '/') + "\\" + name + ".vhdx";
+    }
     private static void ValidatePath(string? path) { if (path is not null) ArgumentGuard.WindowsPath(path, "media path"); }
     private static void ValidateDescriptor(ChildVmDescriptor d)
     {

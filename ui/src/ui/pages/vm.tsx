@@ -7,7 +7,7 @@ import { aliasWritten, UPSTREAM_SAYS } from '../../backend/api/map';
 import { Icon } from '../icons';
 import { Btn, Confirm, Dot, Field, Head, KV, NotYet, Page, Row, Sec, Seg, Switch, Table, Tabs, Tag, UpTag } from '../kit';
 import { copy, na, useApp } from '../ctx';
-import { ActionButtons, JobBlock, MovedNotes, NEEDS_RUNNING, PowerBtn, ReinstallConfirm, SignInBlock, SignInCards, VaultCards, WarnedBlock } from '../blocks';
+import { ActionButtons, JobBlock, MoveDiskRow, MovedNotes, NEEDS_RUNNING, PowerBtn, ReinstallConfirm, SignInBlock, SignInCards, VaultCards, WarnedBlock } from '../blocks';
 import { signInState } from '../../model/signin';
 import { shortVersion } from '../../model/update';
 
@@ -504,6 +504,7 @@ type Tab = 'res' | 'svc' | 'id' | 'agents';
 
 export function Settings({ vm }: { vm: Vm }) {
   const { s, be, route, go, toast } = useApp();
+  const host = s.hosts.find(h => h.id === vm.hostId);
   const tab = (route.arg as Tab) || 'res';
   const [hw, setHw] = useState<{ memGb: number; cpus: number } | null>(null);
   const st = vm.settings;
@@ -535,6 +536,11 @@ export function Settings({ vm }: { vm: Vm }) {
           </>}
           {na(s, 'vm-services') ? null : <SwapSize value={st.swap.sizeGb} tag={tag('swap')} onSave={v => save({ swap: { sizeGb: v } })} />}
         </Sec>
+        {host?.admin && host.storageMoveSupported && (
+          <Sec title="Storage">
+            <MoveDiskRow hostId={host.id} vmName={vm.name} diskPath={vm.diskPath} hostDefaultPath={host.vmStorageRoot} disabled={activeJob(s, vm.id)?.state === 'running'} />
+          </Sec>
+        )}
         <Sec title="Disk and system" right={tag('disk')}>
           {na(s, 'vm-disk') ? <NotYet /> : <><Row l={<>Disk <span class="d">GB</span></>}><Seg label="Disk" opts={[60, 120, 240] as const} value={st.disk.diskGb as 120} onChange={v => save({ disk: { diskGb: v } })} /></Row>
           <Row l="Ubuntu"><Seg label="Ubuntu" opts={['22.04', '24.04'] as const} value={st.disk.ubuntu as '24.04'} onChange={v => save({ disk: { ubuntu: v } })} /></Row></>}

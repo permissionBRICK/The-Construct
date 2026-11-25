@@ -1,8 +1,15 @@
-import { useState } from 'preact/hooks';
+import { useEffect, useRef, useState } from 'preact/hooks';
 import type { Host, HostUser, HostVm } from '../../backend/types';
 import { hostUpdateTarget } from '../../model/vm';
+import { DEFAULT_WINDOWS_DISK_DIR, dirOfWindowsPath, normalizeWindowsDir, sameWindowsDir, windowsDirError } from '../../model/storage';
+import {
+  buildConfigPayload, channelChoice, DEDICATED_HOST_CONFIG_SECTIONS, HOST_CONFIG_SECTIONS, HOST_CONFIG_SPEC_BY_KEY,
+  parseConfigSection, toFieldDrafts, visibleFields,
+  type FieldDrafts, type HostConfigField, type HostConfigSectionSpec,
+} from '../../model/hostConfig';
 import { Icon } from '../icons';
-import { Btn, Confirm, Copyable, Dot, Field, Head, KV, Meter, Page, Row, Sec, Seg, Switch, Table, Tabs, Tag, UpTag } from '../kit';
+import { Btn, Confirm, Copyable, Dot, Field, Head, KV, Meter, Modal, Page, Row, Sec, Seg, Switch, Table, Tabs, Tag, UpTag } from '../kit';
+import { MoveDiskRow } from '../blocks';
 import { na, useApp } from '../ctx';
 
 /* Hosts: the list, and host administration for hosts the user administers. Every feature of today's host
@@ -164,6 +171,7 @@ function HostVmSettings({ h, v, kids, onClose }: { h: Host; v: HostVm; kids: Hos
       <Row l="vCPUs"><Field value={cpus} onInput={setCpus} label="vCPUs" mono /></Row>
       <Row l={<>Memory <span class="d">GB</span></>}><Field value={mem} onInput={setMem} label="Memory" mono /></Row>
       <Row l="Address"><span class="m">{v.address}</span></Row>
+      {h.storageMoveSupported && <MoveDiskRow hostId={h.id} vmName={v.name} diskPath={v.diskPath} hostDefaultPath={h.vmStorageRoot} />}
       {v.role === 'child' && <Row l={<>Lifetime <span class="d m">{v.lease}</span></>}><Btn sm onClick={() => act('renew-lease')}>Restart countdown</Btn></Row>}
       {v.role === 'child' && <Row l="Shared"><Switch on={v.shared} onChange={() => act('toggle-shared')} label="Shared" /></Row>}
       {v.role === 'primary' && <Row l="VM token"><Confirm label="Rotate" disabled={na(s, 'vm-token')} onYes={() => act('rotate-token')} /></Row>}
@@ -331,38 +339,306 @@ function HOps({ h }: { h: Host }) {
 
 function HConfig({ h }: { h: Host }) {
   const { be } = useApp();
-  const [open, setOpen] = useState<string | null>(null);
+  const byName = new Map(h.config.map(c => [c.name, c]));
+  const known = HOST_CONFIG_SECTIONS
+    .map(spec => ({ spec, item: byName.get(spec.key) }))
+    .filter((x): x is { spec: HostConfigSectionSpec; item: Host['config'][number] } => !!x.item);
+  const unknown = h.config.filter(c => !DEDICATED_HOST_CONFIG_SECTIONS.has(c.name) && !HOST_CONFIG_SPEC_BY_KEY[c.name]);
   return (
     <>
+      {h.storageMoveSupported && <HostStoragePath h={h} />}
       {h.repairAuto !== undefined && (
-        <Sec>
+        <Sec title="Repair">
           <Row l="Repair agent starts by itself"><Switch on={h.repairAuto} onChange={on => be.setRepairAuto(h.id, on)} label="Repair agent starts by itself" /></Row>
           {h.repairChat !== undefined && (
             <Row l="Repair in Construct, not T3 Code"><Switch on={h.repairChat} onChange={on => be.setRepairChat(h.id, on)} label="Repair in Construct, not T3 Code" /></Row>
           )}
         </Sec>
       )}
-      <Sec title="Sections">
-        <Table cols={[{ h: 'Section', cls: 'm' }, { h: 'Changed', cls: 'x' }, { h: '', cls: 'e' }]}
-          rows={h.config.map(c => [c.name, c.updated, <Btn sm icon="edit" onClick={() => setOpen(open === c.name ? null : c.name)}>{open === c.name ? 'Close' : 'Edit'}</Btn>])} />
-      </Sec>
-      {open && <ConfigEdit key={open} h={h} name={open} onClose={() => setOpen(null)} />}
+      {known.map(({ spec, item }) => (
+        <HostConfigSection key={`${h.id}:${spec.key}`} h={h} spec={spec} item={item} />
+      ))}
+      {unknown.map(item => (
+        <RawConfigSection key={`${h.id}:${item.name}`} h={h} item={item} />
+      ))}
       <Certificate h={h} />
     </>
   );
 }
 
-function ConfigEdit({ h, name, onClose }: { h: Host; name: string; onClose: () => void }) {
+/** GUI settings card for one host configuration section. */
+function HostConfigSection({ h, spec, item }: { h: Host; spec: HostConfigSectionSpec; item: Host['config'][number] }) {
   const { be } = useApp();
-  const c = h.config.find(x => x.name === name)!;
-  const [text, setText] = useState(c.json);
+  const parsed = parseConfigSection(item.json);
+  if (!parsed) return <RawConfigSection h={h} item={item} />;
+  const fields = visibleFields(spec, h.kind, parsed);
+  const initial = toFieldDrafts(fields, parsed);
+  const [drafts, setDrafts] = useState<FieldDrafts>(initial);
   const [err, setErr] = useState<string | null>(null);
+  const syncKey = `${h.id}\0${h.kind}\0${spec.key}\0${item.json}`;
+  const synced = useRef(syncKey);
+
+  useEffect(() => {
+    if (synced.current === syncKey) return;
+    synced.current = syncKey;
+    const p = parseConfigSection(item.json);
+    if (!p) return;
+    setDrafts(toFieldDrafts(visibleFields(spec, h.kind, p), p));
+    setErr(null);
+  }, [syncKey]);
+
+  const setField = (key: string, value: string | boolean | null) => {
+    setDrafts(prev => ({ ...prev, [key]: value }));
+    setErr(null);
+  };
+
+  const dirty = fields.some(f => drafts[f.key] !== initial[f.key]);
+  const reset = () => { setDrafts(initial); setErr(null); };
+  const save = () => {
+    const res = buildConfigPayload(spec, fields, parsed, drafts);
+    if (res.error !== null) { setErr(res.error); return; }
+    const e = be.saveConfig(h.id, spec.key, JSON.stringify(res.value, null, 2));
+    setErr(e);
+    if (!e) setDrafts(toFieldDrafts(fields, res.value));
+  };
+
+  const right = dirty
+    ? <Tag warn>unsaved</Tag>
+    : item.updated && item.updated !== 'default' && item.updated !== '–'
+      ? <span class="d">{item.updated}</span>
+      : null;
+
   return (
-    <Sec title={name}>
-      <textarea class="code edit" spellcheck={false} aria-label={`${name} configuration`} value={text} onInput={e => setText(e.currentTarget.value)} rows={text.split('\n').length + 1} />
+    <Sec title={spec.label} right={right}>
+      {fields.map(f => (
+        <HostConfigFieldRow key={f.key} field={f} value={drafts[f.key]} onChange={v => setField(f.key, v)} onEnter={dirty ? save : undefined} />
+      ))}
       {err && <div class="line badc">{err}</div>}
-      <div class="bf pad"><span /><Btn sm onClick={onClose}>Cancel</Btn><Btn sm kind="pri" onClick={() => { const e = be.saveConfig(h.id, name, text); setErr(e); if (!e) onClose(); }}>Save</Btn></div>
+      {dirty && (
+        <div class="bf pad">
+          <span />
+          <Btn sm onClick={reset}>Reset</Btn>
+          <Btn sm kind="pri" onClick={save}>Save</Btn>
+        </div>
+      )}
     </Sec>
+  );
+}
+
+function HostConfigFieldRow({ field, value, onChange, onEnter }: {
+  field: HostConfigField;
+  value: string | boolean | null | undefined;
+  onChange: (v: string | boolean | null) => void;
+  onEnter?: () => void;
+}) {
+  let control;
+  switch (field.type) {
+    case 'bool':
+      if (field.nullable) {
+        const cur = value === true ? 'true' : value === false ? 'false' : 'unset';
+        control = (
+          <Seg
+            label={field.label}
+            opts={['unset', 'true', 'false'] as const}
+            labels={{ unset: 'No cap', true: 'Allow', false: 'Deny' }}
+            value={cur}
+            onChange={v => onChange(v === 'unset' ? null : v === 'true')}
+          />
+        );
+      } else {
+        control = <Switch on={Boolean(value)} onChange={onChange} label={field.label} />;
+      }
+      break;
+
+    case 'enum':
+      control = (
+        <Seg
+          label={field.label}
+          opts={field.options}
+          labels={field.labels}
+          value={typeof value === 'string' && field.options.includes(value) ? value : field.options[0]}
+          onChange={onChange}
+        />
+      );
+      break;
+
+    case 'channel': {
+      const strVal = typeof value === 'string' ? value : 'stable';
+      const choice = channelChoice(strVal);
+      control = (
+        <div class="cfg-chan">
+          <Seg
+            label={field.label}
+            opts={['stable', 'nightly', 'custom'] as const}
+            labels={{ stable: 'Stable', nightly: 'Nightly', custom: 'Custom URL' }}
+            value={choice}
+            onChange={c => {
+              if (c === 'stable' || c === 'nightly') onChange(c);
+              else onChange(choice === 'custom' ? strVal : 'https://');
+            }}
+          />
+          {choice === 'custom' && (
+            <Field
+              value={strVal}
+              onInput={onChange}
+              label="Custom update manifest URL"
+              placeholder="https://example.net/manifest.json"
+              mono
+              onEnter={onEnter}
+            />
+          )}
+        </div>
+      );
+      break;
+    }
+
+    case 'int':
+    case 'bytes':
+      control = (
+        <span class="cfg-unit">
+          <Field
+            value={typeof value === 'string' ? value : ''}
+            onInput={onChange}
+            label={field.label}
+            placeholder={field.nullable ? (field.nullLabel ?? 'Default') : undefined}
+            mono
+            onEnter={onEnter}
+          />
+          {field.unit && <span class="u">{field.unit}</span>}
+        </span>
+      );
+      break;
+
+    case 'string':
+      control = (
+        <Field
+          value={typeof value === 'string' ? value : ''}
+          onInput={onChange}
+          label={field.label}
+          placeholder={field.placeholder ?? (field.nullable ? field.nullLabel : undefined)}
+          mono
+          onEnter={onEnter}
+        />
+      );
+      break;
+  }
+
+  return (
+    <div class="r cfg-row">
+      <span class="rl">
+        <span>{field.label}</span>
+        <small>{field.help}</small>
+      </span>
+      <span class="rr">{control}</span>
+    </div>
+  );
+}
+
+/** Fallback editor for any future config section not yet described in `HOST_CONFIG_SECTIONS`. */
+function RawConfigSection({ h, item }: { h: Host; item: Host['config'][number] }) {
+  const { be } = useApp();
+  const [text, setText] = useState(item.json);
+  const [err, setErr] = useState<string | null>(null);
+  const syncKey = `${h.id}\0${item.name}\0${item.json}`;
+  const synced = useRef(syncKey);
+  useEffect(() => {
+    if (synced.current === syncKey) return;
+    synced.current = syncKey;
+    setText(item.json);
+    setErr(null);
+  }, [syncKey]);
+  const dirty = text !== item.json;
+  return (
+    <Sec title={item.name} right={dirty ? <Tag warn>unsaved</Tag> : <span class="d">{item.updated}</span>}>
+      <textarea class="code edit" spellcheck={false} aria-label={`${item.name} configuration`} value={text} onInput={e => { setText(e.currentTarget.value); setErr(null); }} rows={Math.max(3, text.split('\n').length + 1)} />
+      {err && <div class="line badc">{err}</div>}
+      {dirty && (
+        <div class="bf pad">
+          <span />
+          <Btn sm onClick={() => { setText(item.json); setErr(null); }}>Reset</Btn>
+          <Btn sm kind="pri" onClick={() => setErr(be.saveConfig(h.id, item.name, text))}>Save</Btn>
+        </div>
+      )}
+    </Sec>
+  );
+}
+
+/** Host default VM disk folder (`storage.vmStorageRoot`), with a confirmation popup offering to auto-move all existing VMs when changed. */
+function HostStoragePath({ h }: { h: Host }) {
+  const { be } = useApp();
+  const saved = h.vmStorageRoot ?? '';
+  const [value, setValue] = useState(saved);
+  const [err, setErr] = useState<string | null>(null);
+  const [pending, setPending] = useState<{ path: string | null; display: string; movable: number } | null>(null);
+  const syncKey = `${h.id}\0${h.vmStorageRoot ?? ''}`;
+  const synced = useRef(syncKey);
+  useEffect(() => {
+    if (synced.current === syncKey) return;
+    synced.current = syncKey;
+    setValue(h.vmStorageRoot ?? '');
+    setErr(null);
+  }, [syncKey]);
+
+  const requestSave = (raw: string | null) => {
+    const trimmed = raw?.trim() ?? '';
+    const bad = windowsDirError(trimmed, true);
+    if (bad) { setErr(bad); return; }
+    setErr(null);
+    const next = trimmed ? normalizeWindowsDir(trimmed) : null;
+    const targetDir = next ?? DEFAULT_WINDOWS_DISK_DIR;
+    const movable = h.vms.filter(v => {
+      const cur = dirOfWindowsPath(v.diskPath);
+      return !cur || !sameWindowsDir(cur, targetDir);
+    }).length;
+    if (movable > 0) {
+      setPending({ path: next, display: targetDir, movable });
+    } else {
+      be.setHostStoragePath(h.id, next, false);
+    }
+  };
+
+  const trimmedValue = value.trim();
+  const normalizedValue = trimmedValue && !windowsDirError(trimmedValue, true) ? normalizeWindowsDir(trimmedValue) : trimmedValue;
+  const normalizedSaved = saved ? normalizeWindowsDir(saved) : '';
+  const dirty = normalizedValue.toLowerCase() !== normalizedSaved.toLowerCase();
+  const apply = (moveAll: boolean) => {
+    if (!pending) return;
+    const p = pending.path;
+    setPending(null);
+    be.setHostStoragePath(h.id, p, moveAll);
+  };
+
+  return (
+    <>
+      <Sec title="VM storage">
+        <div class="storage-form">
+          <div class="storage-row">
+            <Field value={value} onInput={v => { setValue(v); setErr(null); }} label="Default VM disk path" placeholder={DEFAULT_WINDOWS_DISK_DIR} mono wide onEnter={() => { if (dirty) requestSave(value); }} />
+            {saved && <Btn sm onClick={() => requestSave(null)}>Reset</Btn>}
+            <Btn sm kind="pri" disabled={!dirty} onClick={() => requestSave(value)}>Save</Btn>
+          </div>
+          <div class="d">Folder where new Hyper-V VM disks (.vhdx) are created. Leave empty for Hyper-V&apos;s default folder.</div>
+          {err && <div class="badc">{err}</div>}
+        </div>
+      </Sec>
+      {pending && (
+        <Modal title="Move existing VMs?" onClose={() => setPending(null)} acts={
+          <>
+            <span />
+            <Btn sm onClick={() => setPending(null)}>Cancel</Btn>
+            <Btn sm onClick={() => apply(false)}>Only new VMs</Btn>
+            <Btn sm kind="pri" icon="folder" onClick={() => apply(true)}>Move all VMs</Btn>
+          </>
+        }>
+          <div>The default disk path will change to:</div>
+          <code>{pending.display}</code>
+          <div>
+            This host has {pending.movable} existing {pending.movable === 1 ? 'VM' : 'VMs'} in another location.
+            Do you want to automatically move {pending.movable === 1 ? 'it' : 'them'} to the new path too?
+          </div>
+        </Modal>
+      )}
+    </>
   );
 }
 

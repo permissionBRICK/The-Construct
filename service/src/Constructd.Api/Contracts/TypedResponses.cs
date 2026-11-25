@@ -57,7 +57,8 @@ public sealed record HostCapabilitiesResponse(string Backend, HostKind Kind, Bac
 public sealed record HostNestedCapabilities(bool Available, bool Default, bool Selectable);
 
 public sealed record HostPolicyResponse(bool HostForwardsEnabled, bool DirectAddressReporting, string DefaultMode, bool OwnerMaySwitchMode,
-    bool AllowNeverLifetime, long? MaxChildLifetimeSeconds, CapacityMode CapacityMode, MemoryPressureConfig MemoryPressure, HostHttpsPolicy Https);
+    bool AllowNeverLifetime, long? MaxChildLifetimeSeconds, CapacityMode CapacityMode, MemoryPressureConfig MemoryPressure, HostHttpsPolicy Https,
+    bool StorageMove = false);
 
 /// <param name="MainAddress">Whether a main forward gets a port-less address under the VM's own name.</param>
 public sealed record HostHttpsPolicy(bool Available, int? SharedPort, bool MainAddress);

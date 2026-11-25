@@ -439,3 +439,26 @@ describe('Windows guests', () => {
     expect(h.winGuests.find(g => g.name === 'reed')!.activation).toBe('activated');
   });
 });
+
+describe('VM storage relocation', () => {
+  it('updates host default path without moving VMs, or moves all VMs when requested', () => {
+    const be = new FakeBackend({ timers: false });
+    be.setHostStoragePath('pc', 'D:\\ConstructVMs', false);
+    let pc = be.snapshot().hosts.find(h => h.id === 'pc')!;
+    expect(pc.vmStorageRoot).toBe('D:\\ConstructVMs');
+    expect(pc.vms.find(v => v.name === 'atlas')!.diskPath).toContain('C:\\ProgramData\\');
+
+    be.setHostStoragePath('pc', 'E:\\FastVMs', true);
+    pc = be.snapshot().hosts.find(h => h.id === 'pc')!;
+    expect(pc.vmStorageRoot).toBe('E:\\FastVMs');
+    expect(pc.vms.every(v => v.diskPath === `E:\\FastVMs\\${v.name}.vhdx`)).toBe(true);
+    expect(be.snapshot().vms.find(v => v.id === 'atlas')!.diskPath).toBe('E:\\FastVMs\\atlas.vhdx');
+  });
+
+  it('moves an individual VM disk to a chosen folder', () => {
+    const be = new FakeBackend({ timers: false });
+    be.moveVmStorage('pc', 'atlas', 'F:\\SingleVm');
+    expect(be.snapshot().vms.find(v => v.id === 'atlas')!.diskPath).toBe('F:\\SingleVm\\atlas.vhdx');
+    expect(be.snapshot().hosts.find(h => h.id === 'pc')!.vms.find(v => v.name === 'atlas')!.diskPath).toBe('F:\\SingleVm\\atlas.vhdx');
+  });
+});

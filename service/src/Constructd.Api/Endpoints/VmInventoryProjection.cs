@@ -17,7 +17,17 @@ public sealed class VmInventoryProjection(IVmRepository vms, IVmDelegationReposi
         var relationship = await DelegationAuthorization.RelationshipAsync(caller, vm, vms, users, ct);
         var result = await ApiHelpers.ToResponseAsync(vm, forwards, options, ct);
         var owned = relationship is ForwardRelationship.Admin or ForwardRelationship.Owner or ForwardRelationship.Parent or ForwardRelationship.Self;
-        var reservation = (await capacity.SnapshotAsync(false, ct)).Reservations.Where(r => Ownership.SameName(r.VmName, vm.Name)).ToArray();
+        var capSnapshot = await capacity.SnapshotAsync(false, ct);
+        var reservation = capSnapshot.Reservations.Where(r => Ownership.SameName(r.VmName, vm.Name)).ToArray();
+        string? diskPath = null;
+        if (owned)
+        {
+            var measured = capSnapshot.MeasuredVms?.FirstOrDefault(v => CapacityMath.Matches(vm, v));
+            var disk = measured?.Disks.FirstOrDefault(d => Ownership.SameName(d.Path.Replace('\\', '/').Split('/').Last(), vm.Name + ".vhdx"))
+                ?? measured?.Disks.FirstOrDefault();
+            diskPath = disk?.Path ?? reservation.FirstOrDefault(r => r.Resource == ReservationResource.Storage &&
+                r.Artifact?.StartsWith("disk:", StringComparison.OrdinalIgnoreCase) == true)?.Artifact?[5..];
+        }
         var mediaProjection = new List<object>();
         foreach (var reference in await media.ListReferencesForVmAsync(vm.Name, ct))
             if (await media.GetAsync(reference.MediaId, ct) is { } item)
@@ -60,7 +70,8 @@ public sealed class VmInventoryProjection(IVmRepository vms, IVmDelegationReposi
             CurrentOperation = job is null ? null : new(job.Id, job.Kind, job.Phase, job.Initiator),
             Children = vm.Kind == VmKind.Primary ? (await delegation.ListChildrenAsync(vm.Name, ct)).Select(v => v.Name).ToArray() : null,
             AllowedActions = relationship is null ? [] : await policy.AllowedActionsAsync(vm, caller.NameOrEmpty(), relationship.Value, ct),
-            Forwards = owned ? result.Forwards : (await forwards.ListAsync(vm.Name, ct)).Where(f => Ownership.SameName(f.Destination?.RequestedBy, ForwardRequesterHandler.Requester(caller))).Select(f => ForwardResponse.From(f, options.PublicHostFor(vm.Name))).ToArray()
+            Forwards = owned ? result.Forwards : (await forwards.ListAsync(vm.Name, ct)).Where(f => Ownership.SameName(f.Destination?.RequestedBy, ForwardRequesterHandler.Requester(caller))).Select(f => ForwardResponse.From(f, options.PublicHostFor(vm.Name))).ToArray(),
+            DiskPath = diskPath
         };
     }
 }

@@ -5,7 +5,7 @@ using Constructd.Core.Services;
 using Constructd.Core.Logic;
 namespace Constructd.Fakes;
 
-public sealed class FakeChildVmDriver(FakeHypervisorDriver hypervisor) : IChildVmDriver, IChildVmStorage, IChildVmCreationOwnership, IWindowsGuestChannel, IWindowsLicenseMachines
+public sealed class FakeChildVmDriver(FakeHypervisorDriver hypervisor, IHostConfigStore? config = null, Constructd.Core.Configuration.ConstructdOptions? options = null) : IChildVmDriver, IChildVmStorage, IChildVmCreationOwnership, IWindowsGuestChannel, IWindowsLicenseMachines
 {
     private readonly ConcurrentDictionary<string, (ChildVmDescriptor Descriptor, string Id)> _licensed = new();
     public WindowsActivationCommand? ActivationCommand { get; private set; }
@@ -86,8 +86,16 @@ public sealed class FakeChildVmDriver(FakeHypervisorDriver hypervisor) : IChildV
     public Task<string?> GetCreationOperationAsync(string name, CancellationToken ct)
     { Check(ct); return Task.FromResult(_creationOperations.GetValueOrDefault(name)); }
     public Task<ChildStoragePlacement> ResolvePrimaryStorageAsync(string name, CancellationToken ct) => ResolveStorageAsync(name, ct);
-    public Task<ChildStoragePlacement> ResolveStorageAsync(string name, CancellationToken ct)
-    { Check(ct); return Task.FromResult(new ChildStoragePlacement(@"C:\VMs\" + name + ".vhdx", @"C:\", @"C:\")); }
+    public async Task<ChildStoragePlacement> ResolveStorageAsync(string name, CancellationToken ct)
+    {
+        Check(ct);
+        var stored = config is null ? null : (await config.GetAsync<StorageConfig>("storage", ct))?.VmStorageRoot;
+        var root = options is not null ? StoragePathRules.ResolveConfiguredRoot(stored, options) : StoragePathRules.NormalizeOptional(stored);
+        var dir = root ?? @"C:\VMs";
+        var path = dir.EndsWith('\\') ? dir + name + ".vhdx" : dir + "\\" + name + ".vhdx";
+        var vol = StoragePathRules.VolumeRoot(dir);
+        return new ChildStoragePlacement(path, vol, @"C:\");
+    }
     public Task<BackendCapabilities> GetCapabilitiesAsync(CancellationToken ct) => Task.FromResult(Capabilities);
     private void Check(CancellationToken ct) { ct.ThrowIfCancellationRequested(); if (Failure is not null) throw Failure; }
     public Task CreateAsync(ChildVmDescriptor descriptor, IProgress<string>? progress, CancellationToken ct) =>

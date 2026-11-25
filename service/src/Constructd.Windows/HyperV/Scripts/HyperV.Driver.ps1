@@ -134,6 +134,11 @@ function New-ConstructVm {
     $memoryBytes = Resolve-ConstructVmMemoryBytes -Descriptor $Descriptor
     $diskBytes   = Resolve-ConstructVmDiskBytes   -Descriptor $Descriptor
 
+    $vhdDir = Split-Path -Parent $vhdPath
+    if ($vhdDir -and -not (Test-Path -LiteralPath $vhdDir)) {
+        New-Item -ItemType Directory -Force -Path $vhdDir | Out-Null
+    }
+
     New-VM -Name $name `
            -Generation $generation `
            -MemoryStartupBytes $memoryBytes `
@@ -654,5 +659,127 @@ function Get-ConstructVmFacts {
         MemoryBytes = [long]$vm.MemoryStartup
         DiskBytes   = $diskBytes
         BiosGuid    = $bios
+    }
+}
+
+# ── Storage relocation ───────────────────────────────────────────────────────
+
+function Move-ConstructVmStorage {
+    <#
+        Move a VM's virtual hard disk(s) to $DestinationDir using Hyper-V's Move-VMStorage.
+        Works while the VM is Running or Off; rejects Saved state (Hyper-V cannot move
+        storage of a saved VM). Updates a child VM's .childvm.json ownership marker when
+        present alongside the moved base disk.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Name,
+        [Parameter(Mandatory)][string]$DestinationDir
+    )
+
+    $vm = Get-VM -Name $Name -ErrorAction Stop
+    $vm = @($vm)[0]
+    if ([string]$vm.State -eq 'Saved') {
+        throw "Turn off or start VM '$Name' before moving its disk (saved VMs cannot have their storage moved)."
+    }
+
+    $destDir = $DestinationDir.Trim().Replace('/', '\').TrimEnd('\')
+    if ($destDir -match '^[A-Za-z]:$') { $destDir = $destDir + '\' }
+    if (-not (Test-Path -LiteralPath $destDir)) {
+        New-Item -ItemType Directory -Force -Path $destDir -ErrorAction Stop | Out-Null
+    }
+
+    $drives = @(Get-VMHardDiskDrive -VM $vm -ErrorAction Stop | Where-Object { $_.Path })
+    if ($drives.Count -eq 0) {
+        throw "VM '$Name' has no attached virtual hard disk to move."
+    }
+
+    # Resolve the base .vhdx for each attached drive (in case checkpoints exist).
+    $entries = New-Object 'System.Collections.Generic.List[object]'
+    $seenSrc = @{}
+    foreach ($drive in $drives) {
+        $attached = [string]$drive.Path
+        if ($seenSrc.ContainsKey($attached.ToLowerInvariant())) { continue }
+        $seenSrc[$attached.ToLowerInvariant()] = $true
+        $chain = @(Get-VhdChain -Path $attached)
+        $base = if ($chain.Count -gt 0) { [string]$chain[$chain.Count - 1] } else { $attached }
+        $entries.Add(@{ Attached = $attached; Base = $base; Chain = $chain })
+    }
+
+    $primary = $entries | Where-Object { ([IO.Path]::GetFileName($_.Base)) -ieq ($Name + '.vhdx') } | Select-Object -First 1
+    if (-not $primary) { $primary = $entries[0] }
+    $oldPrimary = [string]$primary.Base
+
+    $destNorm = $destDir.TrimEnd('\').ToLowerInvariant()
+    $vhdMoves = New-Object 'System.Collections.Generic.List[hashtable]'
+    $plannedBaseMap = @{}
+    foreach ($e in $entries) {
+        $srcBase = [string]$e.Base
+        $srcDir = (Split-Path -Parent $srcBase).TrimEnd('\').ToLowerInvariant()
+        if ($srcDir -eq $destNorm) {
+            $plannedBaseMap[$srcBase] = $srcBase
+            continue
+        }
+        $leaf = [IO.Path]::GetFileName($srcBase)
+        $dstPath = Join-Path $destDir $leaf
+        if (Test-Path -LiteralPath $dstPath) {
+            throw "Destination disk file already exists: $dstPath"
+        }
+        $vhdMoves.Add(@{ SourceFilePath = [string]$e.Attached; DestinationFilePath = $dstPath })
+        $plannedBaseMap[$srcBase] = $dstPath
+    }
+
+    $newPrimary = [string]$plannedBaseMap[$oldPrimary]
+    $moved = $false
+    if ($vhdMoves.Count -gt 0) {
+        Write-Step "Moving virtual disk for '$Name' to $destDir"
+        $moveParams = @{
+            VMName      = $Name
+            VHDs        = @($vhdMoves.ToArray())
+            ErrorAction = 'Stop'
+        }
+        $snapshots = @(Get-VMSnapshot -VM $vm -ErrorAction SilentlyContinue)
+        if ($snapshots.Count -gt 0) {
+            $moveParams['SnapshotFilePath'] = $destDir
+        }
+        Move-VMStorage @moveParams
+        $moved = $true
+        Write-Ok "Moved virtual disk to $newPrimary"
+
+        # If this is a child VM with an ownership sidecar beside its old base disk,
+        # relocate and update the marker so removal continues to verify ownership.
+        $oldMarker = $oldPrimary + '.childvm.json'
+        $newMarker = $newPrimary + '.childvm.json'
+        if ((Test-Path -LiteralPath $oldMarker) -and ($oldMarker -ine $newMarker)) {
+            $record = Get-Content -LiteralPath $oldMarker -Raw | ConvertFrom-Json
+            $record.rootDisk = $newPrimary
+            $updatedDisks = New-Object 'System.Collections.Generic.List[string]'
+            foreach ($d in @(Get-VMHardDiskDrive -VMName $Name -ErrorAction SilentlyContinue | Where-Object { $_.Path })) {
+                foreach ($f in @(Get-VhdChain -Path $d.Path)) {
+                    if ($updatedDisks -notcontains $f) { $updatedDisks.Add($f) }
+                }
+            }
+            if ($updatedDisks.Count -eq 0) { $updatedDisks.Add($newPrimary) }
+            $record.disks = @($updatedDisks.ToArray())
+            [IO.File]::WriteAllText($newMarker, ($record | ConvertTo-Json -Depth 6), (New-Object Text.UTF8Encoding($false)))
+            Remove-Item -LiteralPath $oldMarker -Force -ErrorAction SilentlyContinue
+            Write-Ok "Updated child VM ownership marker"
+        }
+    } else {
+        Write-Note "Virtual disk for '$Name' is already in $destDir"
+    }
+
+    $newVolume = [IO.Path]::GetPathRoot($newPrimary)
+    try {
+        $v = Get-Volume -FilePath $newPrimary -ErrorAction Stop
+        if ($v.DriveLetter) { $newVolume = ([string]$v.DriveLetter + ':\') }
+        elseif ($v.Path) { $newVolume = [string]$v.Path }
+    } catch { }
+
+    return @{
+        OldDiskPath = $oldPrimary
+        NewDiskPath = $newPrimary
+        NewVolume   = $newVolume
+        Moved       = $moved
     }
 }
