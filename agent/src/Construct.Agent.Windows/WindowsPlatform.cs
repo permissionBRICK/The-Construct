@@ -1,5 +1,8 @@
 using System.Diagnostics;
 using System.Security.Cryptography;
+using System.Security.Cryptography.X509Certificates;
+using System.Security.Principal;
+using System.Text;
 using System.Text.RegularExpressions;
 using Construct.Agent.Device;
 using Construct.Agent.Update;
@@ -80,6 +83,92 @@ internal sealed partial class WindowsPlatform : IDevicePlatform, IAgentLauncher
         var directory = Path.Combine(local, "Programs", "t3code");
         if (!File.Exists(Path.Combine(local, "The-Construct", "artifacts", "t3code", "installed.json"))) return Task.FromResult(false);
         return Task.FromResult(WindowsT3Desktop.StartDetached(directory, link));
+    }
+
+    /// <summary>
+    /// Saves the VM's self-signed T3 Code HTTPS CA under <c>%LOCALAPPDATA%\The-Construct\artifacts\t3code\</c> and
+    /// imports it into the Windows Trusted Root store when not already trusted (LocalMachine when elevated, otherwise
+    /// CurrentUser — which shows one confirmation dialog). Superseded CAs for the same VM are removed afterwards.
+    /// </summary>
+    public Task TrustT3CaAsync(string vmName, string pem, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(vmName) || string.IsNullOrWhiteSpace(pem)) return Task.CompletedTask;
+        try
+        {
+            using var cert = X509Certificate2.CreateFromPem(pem);
+            var thumb = cert.Thumbprint;
+            if (string.IsNullOrEmpty(thumb)) return Task.CompletedTask;
+
+            var local = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+            var dir = Path.Combine(local, "The-Construct", "artifacts", "t3code");
+            var safeName = Regex.Replace(vmName.Trim(), "[^A-Za-z0-9._-]", "_");
+            var fileName = string.Equals(safeName, "agent-vm", StringComparison.OrdinalIgnoreCase)
+                ? "construct-t3-ca.crt"
+                : $"construct-t3-ca-{safeName}.crt";
+            var path = Path.Combine(dir, fileName);
+
+            string? previousThumb = null;
+            if (File.Exists(path))
+            {
+                try
+                {
+                    using var old = X509Certificate2.CreateFromPem(File.ReadAllText(path));
+                    previousThumb = old.Thumbprint;
+                }
+                catch (Exception ex) when (ex is CryptographicException or IOException) { }
+            }
+
+            if (!HasRootCert(StoreLocation.LocalMachine, thumb) && !HasRootCert(StoreLocation.CurrentUser, thumb))
+            {
+                var elevated = new WindowsPrincipal(WindowsIdentity.GetCurrent()).IsInRole(WindowsBuiltInRole.Administrator);
+                var targetLocation = elevated ? StoreLocation.LocalMachine : StoreLocation.CurrentUser;
+                using var store = new X509Store(StoreName.Root, targetLocation);
+                store.Open(OpenFlags.ReadWrite);
+                store.Add(cert);
+            }
+
+            if (!string.IsNullOrEmpty(previousThumb) && !string.Equals(previousThumb, thumb, StringComparison.OrdinalIgnoreCase))
+            {
+                TryRemoveRootCert(StoreLocation.CurrentUser, previousThumb);
+                if (new WindowsPrincipal(WindowsIdentity.GetCurrent()).IsInRole(WindowsBuiltInRole.Administrator))
+                    TryRemoveRootCert(StoreLocation.LocalMachine, previousThumb);
+            }
+
+            Directory.CreateDirectory(dir);
+            var temp = path + ".tmp";
+            File.WriteAllText(temp, pem.Replace("\r\n", "\n", StringComparison.Ordinal).TrimEnd() + "\n", Encoding.ASCII);
+            File.Move(temp, path, overwrite: true);
+        }
+        catch (Exception ex) when (ex is CryptographicException or IOException or UnauthorizedAccessException or ArgumentException)
+        {
+            // Best-effort: declining the Windows prompt or a locked store never fails T3 pairing itself.
+        }
+
+        return Task.CompletedTask;
+    }
+
+    private static bool HasRootCert(StoreLocation location, string thumbprint)
+    {
+        try
+        {
+            using var store = new X509Store(StoreName.Root, location);
+            store.Open(OpenFlags.ReadOnly);
+            var found = store.Certificates.Find(X509FindType.FindByThumbprint, thumbprint, validOnly: false);
+            return found.Count > 0;
+        }
+        catch (CryptographicException) { return false; }
+    }
+
+    private static void TryRemoveRootCert(StoreLocation location, string thumbprint)
+    {
+        try
+        {
+            using var store = new X509Store(StoreName.Root, location);
+            store.Open(OpenFlags.ReadWrite);
+            var found = store.Certificates.Find(X509FindType.FindByThumbprint, thumbprint, validOnly: false);
+            foreach (var old in found) store.Remove(old);
+        }
+        catch (CryptographicException) { }
     }
 
     public bool? StartWithOs => _registry.ReadString(DesktopRegistration.RunKey, RunValue) is { Length: > 0 };

@@ -130,7 +130,18 @@ public sealed partial class VmActions(VmLinks links, IDevicePlatform platform)
 
         var stdout = pairing.Stdout ?? "";
         var scopes = System.Text.RegularExpressions.Regex.Match(stdout, @"(?m)^CONSTRUCT_PAIRING_SCOPES=(administrative|standard)\s*$") is { Success: true } m ? m.Groups[1].Value : "standard";
-        var json = System.Text.RegularExpressions.Regex.Replace(stdout, @"(?m)^CONSTRUCT_PAIRING_SCOPES=\w+\s*$", "").Trim();
+        if (System.Text.RegularExpressions.Regex.Match(stdout, @"(?m)^CONSTRUCT_T3_CA_B64=([A-Za-z0-9+/=]+)\s*$") is { Success: true } caMatch)
+        {
+            try
+            {
+                var pem = System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(caMatch.Groups[1].Value));
+                if (pem.Contains("-----BEGIN CERTIFICATE-----", StringComparison.Ordinal))
+                    await platform.TrustT3CaAsync(vm, pem, ct).ConfigureAwait(false);
+            }
+            catch (FormatException) { /* ignore malformed CA payload; pairing continues */ }
+        }
+
+        var json = System.Text.RegularExpressions.Regex.Replace(stdout, @"(?m)^CONSTRUCT_(?:PAIRING_SCOPES=\w+|T3_CA_B64=[A-Za-z0-9+/=]+)\s*$", "").Trim();
         var offered = T3Code.ExtractPairLinks(json).Select(l => new T3PairingLinkEntry(l.Kind, l.PairUrl)).ToList();
         var url = offered.FirstOrDefault(l => l.Kind == "forwarded")?.PairUrl ?? T3Code.ExtractPairUrl(json);
         if (!Uri.TryCreate(url, UriKind.Absolute, out var uri) || uri.Scheme is not ("http" or "https"))
@@ -165,6 +176,10 @@ public sealed partial class VmActions(VmLinks links, IDevicePlatform platform)
         """ + label + """
         ' $extra --log-level none)" || exit 3
         printf 'CONSTRUCT_PAIRING_SCOPES=%s\n' "$scopes"
+        if [ -r /etc/construct/t3code-ca.crt ]; then
+          ca_b64="$(base64 -w 0 /etc/construct/t3code-ca.crt 2>/dev/null || base64 /etc/construct/t3code-ca.crt | tr -d '\r\n')"
+          if [ -n "$ca_b64" ]; then printf 'CONSTRUCT_T3_CA_B64=%s\n' "$ca_b64"; fi
+        fi
         printf '%s\n' "$out"
 
         """;

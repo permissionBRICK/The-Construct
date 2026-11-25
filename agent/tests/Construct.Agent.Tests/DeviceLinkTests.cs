@@ -346,6 +346,26 @@ public sealed class DeviceLinkTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task T3_pairing_trusts_the_vms_https_ca_certificate_when_present()
+    {
+        await _device.Links.RefreshAsync(CancellationToken.None);
+        var ssh = _device.Transports["e1/work"];
+        var actions = new VmActions(_device.Links, _device.Platform);
+        const string pem = "-----BEGIN CERTIFICATE-----\nMIIBTEST\n-----END CERTIFICATE-----\n";
+        var b64 = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(pem));
+        ssh.ScriptHandler = (_, _) => Task.FromResult(new ProcessResult(0,
+            $"CONSTRUCT_PAIRING_SCOPES=administrative\nCONSTRUCT_T3_CA_B64={b64}\n" +
+            """{"pairUrl":"https://work.mshome.net:5178/pair#token=one"}"""));
+
+        var link = await actions.T3PairingAsync("e1", "work", CancellationToken.None);
+
+        Assert.Equal("https://work.mshome.net:5178/pair#token=one", link.PairUrl);
+        Assert.Equal("administrative", link.Scopes);
+        var trusted = Assert.Single(_device.Platform.TrustedT3Cas);
+        Assert.Equal(("work", pem), trusted);
+    }
+
+    [Fact]
     public async Task On_this_pcs_engine_a_vm_is_dialled_at_the_direct_address_the_engine_names()
     {
         var engines = new FakeEngines().Add("local", "https://127.0.0.1:7462").Add("remote", "https://pc.example:7462");

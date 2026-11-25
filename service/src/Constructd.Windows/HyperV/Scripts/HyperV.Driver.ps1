@@ -706,7 +706,7 @@ function Move-ConstructVmStorage {
         $entries.Add(@{ Attached = $attached; Base = $base; Chain = $chain })
     }
 
-    $primary = $entries | Where-Object { ([IO.Path]::GetFileName($_.Base)) -ieq ($Name + '.vhdx') } | Select-Object -First 1
+    $primary = $entries | Where-Object { ([IO.Path]::GetFileName(([string]$_.Base).Replace('\', '/'))) -ieq ($Name + '.vhdx') } | Select-Object -First 1
     if (-not $primary) { $primary = $entries[0] }
     $oldPrimary = [string]$primary.Base
 
@@ -715,18 +715,26 @@ function Move-ConstructVmStorage {
     $plannedBaseMap = @{}
     foreach ($e in $entries) {
         $srcBase = [string]$e.Base
-        $srcDir = (Split-Path -Parent $srcBase).TrimEnd('\').ToLowerInvariant()
+        $srcDir = (Split-Path -Parent $srcBase).Replace('/', '\').TrimEnd('\').ToLowerInvariant()
         if ($srcDir -eq $destNorm) {
             $plannedBaseMap[$srcBase] = $srcBase
             continue
         }
-        $leaf = [IO.Path]::GetFileName($srcBase)
-        $dstPath = Join-Path $destDir $leaf
-        if (Test-Path -LiteralPath $dstPath) {
-            throw "Destination disk file already exists: $dstPath"
+        $baseLeaf = [IO.Path]::GetFileName($srcBase.Replace('\', '/'))
+        $dstBasePath = [string]($destDir.TrimEnd('\') + '\' + $baseLeaf)
+        if (Test-Path -LiteralPath $dstBasePath) {
+            throw "Destination disk file already exists: $dstBasePath"
         }
-        $vhdMoves.Add(@{ SourceFilePath = [string]$e.Attached; DestinationFilePath = $dstPath })
-        $plannedBaseMap[$srcBase] = $dstPath
+        $attached = [string]$e.Attached
+        $attachedLeaf = [IO.Path]::GetFileName($attached.Replace('\', '/'))
+        $dstAttachedPath = [string]($destDir.TrimEnd('\') + '\' + $attachedLeaf)
+        if (($dstAttachedPath -ine $dstBasePath) -and (Test-Path -LiteralPath $dstAttachedPath)) {
+            throw "Destination disk file already exists: $dstAttachedPath"
+        }
+        # Move-VMStorage checks hashtable values as raw .NET strings (rejecting PSObject-wrapped
+        # strings from Join-Path in Windows PowerShell 5.1) and requires matching filenames.
+        $vhdMoves.Add(@{ SourceFilePath = $attached; DestinationFilePath = $dstAttachedPath })
+        $plannedBaseMap[$srcBase] = $dstBasePath
     }
 
     $newPrimary = [string]$plannedBaseMap[$oldPrimary]
@@ -734,13 +742,13 @@ function Move-ConstructVmStorage {
     if ($vhdMoves.Count -gt 0) {
         Write-Step "Moving virtual disk for '$Name' to $destDir"
         $moveParams = @{
-            VMName      = $Name
-            VHDs        = @($vhdMoves.ToArray())
+            VMName      = [string]$Name
+            VHDs        = [hashtable[]]$vhdMoves.ToArray()
             ErrorAction = 'Stop'
         }
         $snapshots = @(Get-VMSnapshot -VM $vm -ErrorAction SilentlyContinue)
         if ($snapshots.Count -gt 0) {
-            $moveParams['SnapshotFilePath'] = $destDir
+            $moveParams['SnapshotFilePath'] = [string]$destDir
         }
         Move-VMStorage @moveParams
         $moved = $true

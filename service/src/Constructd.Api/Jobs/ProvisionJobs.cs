@@ -132,7 +132,7 @@ public sealed record ProvisionSubmission(string RequestId, string? Commit, VmDes
 public sealed class ProvisionJobs(IVmRepository vms, IJobStore jobs, IJobQueryStore history, IPersistedJobRunner runner, IVmOperationGate gates,
     IMaintenanceGate maintenance, IVmDesiredStateSource desired, IProvisionTargets targets, IReleaseInfo release,
     IHostConfigStore config, ConstructdOptions options, ProvisionJob job, ReinstallJob reinstall, IHypervisorDriver driver,
-    BackupCoordinator backups, JobDevices devices, ProvisionStart starter, IClock clock)
+    BackupCoordinator backups, JobDevices devices, ProvisionStart starter, IClock clock, IVmTokenIssuer? vmTokens = null)
 {
     // owner|vm|requestId → job id, the fast path; the stored jobs are the fallback.
     private readonly ConcurrentDictionary<string, string> _requests = new(StringComparer.OrdinalIgnoreCase);
@@ -190,6 +190,7 @@ public sealed class ProvisionJobs(IVmRepository vms, IJobStore jobs, IJobQuerySt
     public async Task<ProvisionJobResult> ProvisionCreatedAsync(string jobId, Vm vm, VmDesiredState given, string actor, string vmToken,
         IProgress<string> progress, CancellationToken ct, JobSecretBag? secrets = null)
     {
+        given = EnrichServiceSettings(vm, given);
         var state = new StoredDesiredState(given, ProvisionScript.DesiredHash(given), clock.UtcNow, actor, vm.Created);
         await desired.SetDesiredAsync(vm.Name, state, ct);
         string commit;
@@ -210,6 +211,55 @@ public sealed class ProvisionJobs(IVmRepository vms, IJobStore jobs, IJobQuerySt
             progress.Report($"{step}: failed: {message}");
             return new JobFailureException($"{code}: {message}", new ProvisionJobResult("", "", state.Hash, null, false, step, code, [], [], false, null));
         }
+    }
+
+    /// <summary>
+    /// Populates the engine's own service identity (<c>ServiceUrl</c>, <c>ServiceCaB64</c>, and for shared hosts
+    /// <c>ExternalHost</c>/<c>ExternalSshPort</c>) when the caller did not supply them, so every VM provisioned by
+    /// this engine is enrolled as service-managed (<c>construct vm</c>, <c>construct secret</c>, <c>construct backup</c>).
+    /// </summary>
+    private VmDesiredState EnrichServiceSettings(Vm vm, VmDesiredState given)
+    {
+        var s = given.Settings;
+        var serviceUrl = s.ServiceUrl;
+        if (string.IsNullOrWhiteSpace(serviceUrl) && !string.IsNullOrWhiteSpace(options.PublicHost))
+        {
+            var scheme = options.ListenUrl.StartsWith("http://", StringComparison.OrdinalIgnoreCase)
+                && !Composition.TlsComposition.IsConfigured(options) ? "http" : "https";
+            serviceUrl = $"{scheme}://{options.PublicHost}:{options.ApiPort()}";
+        }
+
+        var serviceCaB64 = s.ServiceCaB64;
+        if (string.IsNullOrWhiteSpace(serviceCaB64) && !string.IsNullOrWhiteSpace(serviceUrl))
+        {
+            var pem = Composition.TlsComposition.CurrentCertificatePem(options);
+            if (!string.IsNullOrWhiteSpace(pem))
+                serviceCaB64 = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(pem));
+        }
+
+        var externalHost = s.ExternalHost;
+        var externalSshPort = s.ExternalSshPort;
+        if (!options.Solo && string.IsNullOrWhiteSpace(externalHost) && vm.SshForwardPort is int sshPort
+            && !string.IsNullOrWhiteSpace(options.PublicHost))
+        {
+            externalHost = options.PublicHost;
+            externalSshPort ??= sshPort;
+        }
+
+        if (serviceUrl == s.ServiceUrl && serviceCaB64 == s.ServiceCaB64
+            && externalHost == s.ExternalHost && externalSshPort == s.ExternalSshPort)
+            return given;
+
+        return given with
+        {
+            Settings = s with
+            {
+                ServiceUrl = serviceUrl,
+                ServiceCaB64 = serviceCaB64,
+                ExternalHost = externalHost,
+                ExternalSshPort = externalSshPort,
+            },
+        };
     }
 
     private async Task<Job> StartAsync(Vm vm, string actor, ProvisionSubmission request, CancellationToken ct)
@@ -269,7 +319,23 @@ public sealed class ProvisionJobs(IVmRepository vms, IJobStore jobs, IJobQuerySt
             handle = new GateHandle(operation, entered);
 
             // Saved before the run: a retry, or a reprovision with no client, uses the same settings.
-            if (request.Desired is not null) await desired.SetDesiredAsync(vm.Name, state, ct);
+            // Also backfill host service identity if this VM was created without ServiceUrl, and
+            // issue a VM token on reprovision so the guest receives /etc/construct/vm-token.
+            var missingServiceUrl = string.IsNullOrWhiteSpace(state.Desired.Settings.ServiceUrl);
+            var enriched = EnrichServiceSettings(vm, state.Desired);
+            var enrichedChanged = enriched != state.Desired;
+            if (enrichedChanged)
+                state = state with { Desired = enriched, Hash = ProvisionScript.DesiredHash(enriched) };
+            if (request.Desired is not null || enrichedChanged)
+                await desired.SetDesiredAsync(vm.Name, state, ct);
+            if (missingServiceUrl && !string.IsNullOrWhiteSpace(state.Desired.Settings.ServiceUrl)
+                && request.Kind == JobKinds.Provision
+                && !request.Secrets.Has(ProvisionScript.VmTokenVariable)
+                && vmTokens is not null)
+            {
+                var issued = await vmTokens.IssueVmTokenAsync(vm.Name, VmTokenKind.Primary, ct);
+                request.Secrets.Set(ProvisionScript.VmTokenVariable, Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(issued)));
+            }
             var channel = HostUpdateTrust.Settings(await config.GetAsync<UpdatesConfig>("updates", ct), options).Channel;
             var queued = new Job(id, request.Kind, vm.Name, vm.Owner, JobState.Queued, [], null, null, clock.UtcNow, null,
                 actor, request.RequestId, request.Kind == JobKinds.Reinstall ? ReinstallJob.Steps[0] : startFirst ? ProvisionStart.Step : ProvisionJob.Steps[0]);
