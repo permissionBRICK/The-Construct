@@ -26,19 +26,28 @@ public sealed record UpstreamImport(int Links, int Tracked, int LeftOut);
 /// </summary>
 public sealed class UpstreamLinks(DeviceAgent agent, IDeviceEngines engines)
 {
-    public static string RecordId(string url) => "upstream:" + Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(url.Trim())))[..16];
+    public static string Id(string url) => Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(url.Trim())))[..16];
+
+    public static string RecordId(string url) => "upstream:" + Id(url);
 
     public async Task<IReadOnlyList<UpstreamLink>> ListAsync(CancellationToken ct) =>
         (await agent.ReadRecordsAsync(RecordKinds.Upstream, ct).ConfigureAwait(false)).Values.Select(Parse).OfType<UpstreamLink>().ToList();
 
+    public async Task<UpstreamLink?> FindAsync(string id, CancellationToken ct) =>
+        (await ListAsync(ct).ConfigureAwait(false)).FirstOrDefault(l => Id(l.Url) == id);
+
     /// <summary>Adds <paramref name="link"/>'s files to the link of its URL (a file of the same path is replaced).</summary>
-    public Task AddAsync(UpstreamLink link, CancellationToken ct) =>
+    public Task AddAsync(UpstreamLink link, CancellationToken ct, bool replaceRef = false) =>
         agent.UpdateRecordAsync(RecordId(link.Url), RecordKinds.Upstream, current =>
         {
             var known = current is null ? null : Parse(current);
             var files = (known?.Files ?? []).Where(f => link.Files.All(n => n.Path != f.Path)).Concat(link.Files).OrderBy(f => f.Path, StringComparer.Ordinal).ToList();
-            return Value(new UpstreamLink(link.Url.Trim(), known?.Ref ?? link.Ref, files));
+            return Value(new UpstreamLink(link.Url.Trim(), replaceRef ? link.Ref : known?.Ref ?? link.Ref, files));
         }, ct);
+
+    /// <summary>Unlinks the repository; already-imported local profiles stay in the account.</summary>
+    public Task RemoveAsync(string url, CancellationToken ct) =>
+        agent.UpdateRecordAsync(RecordId(url), RecordKinds.Upstream, _ => null, ct);
 
     /// <summary>The file is no longer tracked (its profile was deleted here); the link stays.</summary>
     public Task RemoveFileAsync(string url, string path, CancellationToken ct) =>

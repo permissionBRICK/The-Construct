@@ -199,4 +199,150 @@ public sealed class UpstreamTests
         Assert.Empty(view["links"]!.AsArray());
         Assert.Null(view["refreshedAt"]);
     }
+
+    [Fact]
+    public async Task A_user_can_link_a_repo_browse_its_profiles_import_with_rename_refresh_and_remove_it()
+    {
+        await using var rig = await MovedAsync(f =>
+        {
+            f.Settings(new JsonObject
+            {
+                ["constructRepo"] = "permissionBRICK/The-Construct", ["constructRef"] = "main", ["installedCommit"] = new string('a', 40),
+                ["gitUserName"] = "Ada", ["gitEmail"] = "ada@example.test", ["projects"] = new JsonArray("local"), ["t3code"] = true,
+            });
+            f.SshKey("agent_vm_ed25519");
+            f.ConfigRepo(new Dictionary<string, string>
+            {
+                ["projects/local.json"] = """{"name":"local","hostPackages":["ripgrep"]}""",
+            });
+        });
+
+        var (repo, commit1) = rig.Fixture.UpstreamRepo(new Dictionary<string, string>
+        {
+            ["projects/webshop.json"] = """{"name":"webshop","repos":[{"url":"https://example.test/webshop.git"}],"sdks":{"node":"20"}}""",
+            ["projects/local.json"] = """{"name":"local","repos":[{"url":"https://example.test/local.git"}],"sdks":{"python":"3.12"}}""",
+            ["projects/broken.json"] = """{"name":"broken","repos":"not-an-array"}""",
+            ["projects/default.json"] = """{"name":"default"}""",
+            ["projects/project.schema.json"] = """{"title":"schema"}""",
+            ["projects/demo.sample.json"] = """{"name":"demo"}""",
+        });
+
+        // Link the repo: fetches first and returns discovered profiles (reserved/sample filtered, broken marked invalid, collision flagged).
+        var added = await rig.Agent.PostAsync("api/upstream/repos", new JsonObject { ["url"] = repo });
+        var id = added["id"]!.GetValue<string>();
+        Assert.NotEmpty(id);
+        Assert.Equal(repo, added["url"]!.GetValue<string>());
+        Assert.Equal(commit1, added["commit"]!.GetValue<string>());
+        var files = added["files"]!.AsArray();
+        Assert.Equal(["broken", "local", "webshop"], files.Select(f => f!["name"]!.GetValue<string>()).ToArray());
+        Assert.False(files[0]!["valid"]!.GetValue<bool>());
+        Assert.True(files[1]!["existsLocally"]!.GetValue<bool>());
+        Assert.True(files[1]!["valid"]!.GetValue<bool>());
+        Assert.False(files[2]!["existsLocally"]!.GetValue<bool>());
+        Assert.False(files[2]!["tracked"]!.GetValue<bool>());
+
+        // Trying to import colliding "local" without renaming is refused and leaves the local profile untouched.
+        var refused = await rig.Agent.PostAsync($"api/upstream/repos/{id}/import", new JsonObject
+        {
+            ["files"] = new JsonArray(new JsonObject { ["path"] = "projects/local.json" }),
+        });
+        Assert.Equal("refused", refused["results"]![0]!["state"]!.GetValue<string>());
+        var engine = rig.Agent.Host.Upgrade.Bridge.Read().LocalEngine!;
+        var localProfile = (await rig.Agent.GetAsync($"api/engines/{engine}/api/v1/profiles/local"))["profile"]!.AsObject();
+        Assert.Equal("""["ripgrep"]""", localProfile["hostPackages"]!.ToJsonString());
+
+        // Import "webshop" as itself and "local" renamed as "team-local".
+        var imported = await rig.Agent.PostAsync($"api/upstream/repos/{id}/import", new JsonObject
+        {
+            ["files"] = new JsonArray(
+                new JsonObject { ["path"] = "projects/webshop.json" },
+                new JsonObject { ["path"] = "projects/local.json", ["as"] = "team-local" }),
+        });
+        Assert.All(imported["results"]!.AsArray(), r => Assert.Equal("merged", r!["state"]!.GetValue<string>()));
+        var webshop = (await rig.Agent.GetAsync($"api/engines/{engine}/api/v1/profiles/webshop"))["profile"]!.AsObject();
+        Assert.Equal("20", webshop["sdks"]!["node"]!.GetValue<string>());
+        var teamLocal = (await rig.Agent.GetAsync($"api/engines/{engine}/api/v1/profiles/team-local"))["profile"]!.AsObject();
+        Assert.Equal("team-local", teamLocal["name"]!.GetValue<string>());
+        Assert.Equal("3.12", teamLocal["sdks"]!["python"]!.GetValue<string>());
+
+        // Listing files again shows both as tracked, and sees newly added upstream files.
+        rig.Fixture.UpstreamCommit(repo, new Dictionary<string, string>
+        {
+            ["projects/webshop.json"] = """{"name":"webshop","repos":[{"url":"https://example.test/webshop.git"}],"sdks":{"node":"22"}}""",
+            ["projects/billing.json"] = """{"name":"billing","sdks":{"go":"1.23"}}""",
+        });
+        var listed = await rig.Agent.GetAsync($"api/upstream/repos/{id}/files");
+        var byPath = listed["files"]!.AsArray().ToDictionary(f => f!["path"]!.GetValue<string>());
+        Assert.True(byPath["projects/webshop.json"]!["tracked"]!.GetValue<bool>());
+        Assert.Equal("webshop", byPath["projects/webshop.json"]!["trackedAs"]!.GetValue<string>());
+        Assert.True(byPath["projects/local.json"]!["tracked"]!.GetValue<bool>());
+        Assert.Equal("team-local", byPath["projects/local.json"]!["trackedAs"]!.GetValue<string>());
+        Assert.False(byPath["projects/billing.json"]!["tracked"]!.GetValue<bool>());
+
+        // Refresh picks up the upstream change to webshop.
+        var refreshed = await rig.Agent.PostAsync("api/upstream/refresh", null);
+        var link = refreshed["links"]!.AsArray().Single()!;
+        Assert.Equal("merged", link["files"]!.AsArray().Single(f => f!["profile"]!.GetValue<string>() == "webshop")!["state"]!.GetValue<string>());
+        Assert.Equal("22", (await rig.Agent.GetAsync($"api/engines/{engine}/api/v1/profiles/webshop"))["profile"]!["sdks"]!["node"]!.GetValue<string>());
+
+        // Deleting webshop locally and explicitly re-importing it succeeds.
+        var beforeDelete = await rig.Agent.GetAsync($"api/engines/{engine}/api/v1/profiles/webshop");
+        var del = await rig.Agent.Api.DeleteAsync($"api/engines/{engine}/api/v1/profiles/webshop?baseRevision={beforeDelete["revision"]!.GetValue<long>()}");
+        Assert.Equal(HttpStatusCode.OK, del.StatusCode);
+        Assert.Equal("written", (await del.Content.ReadFromJsonAsync<JsonObject>())!["status"]!.GetValue<string>());
+        var reimported = await rig.Agent.PostAsync($"api/upstream/repos/{id}/import", new JsonObject
+        {
+            ["files"] = new JsonArray(new JsonObject { ["path"] = "projects/webshop.json" }),
+        });
+        Assert.Equal("merged", reimported["results"]![0]!["state"]!.GetValue<string>());
+        Assert.Equal("22", (await rig.Agent.GetAsync($"api/engines/{engine}/api/v1/profiles/webshop"))["profile"]!["sdks"]!["node"]!.GetValue<string>());
+
+        // Removing the link clears it from GET /api/upstream while keeping imported profiles in the account.
+        var removed = await rig.Agent.Api.DeleteAsync($"api/upstream/repos/{id}");
+        Assert.Equal(HttpStatusCode.NoContent, removed.StatusCode);
+        Assert.Empty((await rig.Agent.GetAsync("api/upstream"))["links"]!.AsArray());
+        Assert.Equal("22", (await rig.Agent.GetAsync($"api/engines/{engine}/api/v1/profiles/webshop"))["profile"]!["sdks"]!["node"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public async Task Linking_a_repo_discovers_root_profiles_when_no_projects_dir_exists_and_refuses_bad_urls()
+    {
+        await using var rig = await MovedAsync(f =>
+        {
+            f.Settings(new JsonObject
+            {
+                ["constructRepo"] = "permissionBRICK/The-Construct", ["constructRef"] = "main", ["installedCommit"] = new string('a', 40),
+                ["gitUserName"] = "Ada", ["gitEmail"] = "ada@example.test", ["projects"] = new JsonArray(), ["t3code"] = true,
+            });
+            f.SshKey("agent_vm_ed25519");
+            f.ConfigRepo(new Dictionary<string, string> { ["projects/seed.json"] = """{"name":"seed"}""" });
+        });
+
+        // Password in URL is refused before git runs and nothing is stored.
+        var withPw = await rig.Agent.Api.PostAsJsonAsync("api/upstream/repos", new JsonObject { ["url"] = "https://alice:secret@git.example.test/configs.git" });
+        Assert.Equal(HttpStatusCode.BadRequest, withPw.StatusCode);
+        Assert.Equal("url-has-password", (await withPw.Content.ReadFromJsonAsync<JsonObject>())!["code"]!.GetValue<string>());
+
+        // Bad ref is refused before git runs.
+        var badRef = await rig.Agent.Api.PostAsJsonAsync("api/upstream/repos", new JsonObject { ["url"] = "https://git.example.test/configs.git", ["ref"] = "--upload-pack=x" });
+        Assert.Equal(HttpStatusCode.BadRequest, badRef.StatusCode);
+        Assert.Equal("invalid-ref", (await badRef.Content.ReadFromJsonAsync<JsonObject>())!["code"]!.GetValue<string>());
+
+        // Missing repo fails fetch with 422 and is not saved.
+        var missing = await rig.Agent.Api.PostAsJsonAsync("api/upstream/repos", new JsonObject { ["url"] = Path.Combine(rig.Agent.Directory, "does-not-exist") });
+        Assert.Equal(HttpStatusCode.UnprocessableEntity, missing.StatusCode);
+        Assert.Empty((await rig.Agent.GetAsync("api/upstream"))["links"]!.AsArray());
+
+        // Top-level *.json repo (no projects/ folder) is supported.
+        var (rootRepo, _) = rig.Fixture.UpstreamRepo(new Dictionary<string, string>
+        {
+            ["svc.json"] = """{"name":"svc","sdks":{"dotnet":"10"}}""",
+            ["README.md"] = "configs",
+        });
+        var added = await rig.Agent.PostAsync("api/upstream/repos", new JsonObject { ["url"] = rootRepo });
+        var file = Assert.Single(added["files"]!.AsArray())!;
+        Assert.Equal("svc.json", file["path"]!.GetValue<string>());
+        Assert.Equal("svc", file["name"]!.GetValue<string>());
+        Assert.True(file["valid"]!.GetValue<bool>());
+    }
 }

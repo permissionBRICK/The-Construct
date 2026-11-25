@@ -380,3 +380,18 @@ html[data-surf="alone"] body { background: transparent; }
 
 .app code.brk { white-space: normal; word-break: break-all; overflow: visible; }
 .app .line.key { align-items: flex-start; }
+
+/* upstream config repos on the Projects page */
+.app .upform { display: flex; flex-direction: column; gap: 8px; padding: 12px 0; border-bottom: 1px solid var(--ln); }
+.app .sec .sb > .upform:last-child { border-bottom: 0; }
+.app .upurl { display: inline-flex; align-items: center; gap: 8px; min-width: 0; max-width: 100%; }
+.app .upurl code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.app .upurl .tg { text-transform: none; letter-spacing: 0; }
+.app .uppick { cursor: pointer; }
+.app .uppick.d { cursor: default; }
+.app .uppick input { margin: 0; accent-color: var(--pri); flex: none; }
+.app .uplist > .r:last-child { border-bottom: 0; }
+.app .uprepo { border-bottom: 1px solid var(--ln); }
+.app .sec .sb > .uprepo:last-child { border-bottom: 0; }
+.app .uprepo > .r { border-bottom: 0; }
+.app .uprepo > .line { padding: 0 0 10px; min-height: 0; }

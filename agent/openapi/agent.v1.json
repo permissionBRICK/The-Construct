@@ -3300,6 +3300,185 @@
           }
         }
       }
+    },
+    "/api/upstream/repos": {
+      "post": {
+        "tags": [
+          "upstream"
+        ],
+        "description": "Links an upstream config repo by URL (without a password) and optional branch/ref, fetches it with this PC's git credentials and returns the profile files found in it.",
+        "operationId": "AddUpstreamRepo",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/AddUpstreamRepoRequest"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpstreamRepoFiles"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentProblem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/upstream/repos/{id}/files": {
+      "get": {
+        "tags": [
+          "upstream"
+        ],
+        "description": "Fetches a linked upstream config repo and returns the profile files found in it, marking which are already tracked or collide with an existing local profile.",
+        "operationId": "ListUpstreamRepoFiles",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpstreamRepoFiles"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentProblem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/upstream/repos/{id}/import": {
+      "post": {
+        "tags": [
+          "upstream"
+        ],
+        "description": "Imports selected profile files from a linked upstream config repo into the account through the store's engine and starts tracking them for future refreshes.",
+        "operationId": "ImportUpstreamFiles",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/ImportUpstreamRequest"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpstreamImportResult"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentProblem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/upstream/repos/{id}": {
+      "delete": {
+        "tags": [
+          "upstream"
+        ],
+        "description": "Unlinks an upstream config repo and clears its local cache. Already-imported profiles stay in the account.",
+        "operationId": "RemoveUpstreamRepo",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentProblem"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -3333,6 +3512,26 @@
           "windowsSignIn": {
             "type": "boolean",
             "default": false
+          }
+        }
+      },
+      "AddUpstreamRepoRequest": {
+        "required": [
+          "url"
+        ],
+        "type": "object",
+        "properties": {
+          "url": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "ref": {
+            "type": [
+              "null",
+              "string"
+            ]
           }
         }
       },
@@ -4068,6 +4267,40 @@
               "null",
               "string"
             ]
+          }
+        }
+      },
+      "ImportUpstreamFile": {
+        "required": [
+          "path"
+        ],
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "as": {
+            "type": [
+              "null",
+              "string"
+            ]
+          }
+        }
+      },
+      "ImportUpstreamRequest": {
+        "required": [
+          "files"
+        ],
+        "type": "object",
+        "properties": {
+          "files": {
+            "type": [
+              "null",
+              "array"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/ImportUpstreamFile"
+            }
           }
         }
       },
@@ -5171,6 +5404,46 @@
           }
         }
       },
+      "UpstreamAvailableFile": {
+        "required": [
+          "path",
+          "name",
+          "tracked",
+          "trackedAs",
+          "existsLocally",
+          "valid"
+        ],
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "tracked": {
+            "type": "boolean"
+          },
+          "trackedAs": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "existsLocally": {
+            "type": "boolean"
+          },
+          "valid": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": [
+              "null",
+              "string"
+            ]
+          }
+        }
+      },
       "UpstreamFileStatus": {
         "required": [
           "profile",
@@ -5196,8 +5469,39 @@
           }
         }
       },
+      "UpstreamImportResult": {
+        "required": [
+          "id",
+          "url",
+          "commit",
+          "results",
+          "view"
+        ],
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          },
+          "commit": {
+            "type": "string"
+          },
+          "results": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UpstreamFileStatus"
+            }
+          },
+          "view": {
+            "$ref": "#/components/schemas/UpstreamView"
+          }
+        }
+      },
       "UpstreamLinkStatus": {
         "required": [
+          "id",
           "url",
           "ref",
           "commit",
@@ -5206,6 +5510,9 @@
         ],
         "type": "object",
         "properties": {
+          "id": {
+            "type": "string"
+          },
           "url": {
             "type": "string"
           },
@@ -5231,6 +5538,39 @@
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/UpstreamFileStatus"
+            }
+          }
+        }
+      },
+      "UpstreamRepoFiles": {
+        "required": [
+          "id",
+          "url",
+          "ref",
+          "commit",
+          "files"
+        ],
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          },
+          "ref": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "commit": {
+            "type": "string"
+          },
+          "files": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UpstreamAvailableFile"
             }
           }
         }

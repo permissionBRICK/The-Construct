@@ -968,6 +968,15 @@ record (URL, ref, the tracked files and the profile each is imported as), writte
 was applied is the engine's `upstream-applied` record per profile: the provenance (URL, path, ref),
 the base commit and the base content.
 
+- **Linking & importing.** On the Projects page under **Remote repos**, add a git repository URL
+  (without a password; optional branch/ref) via `POST /api/upstream/repos`. The device agent
+  verifies and fetches it with plain git and this PC's own credentials first, then lists the
+  discovered profile JSON files (`projects/*.json` when a `projects/` folder exists, else top-level
+  `*.json`, skipping reserved names and `*.sample.json`). Select which files to import (none ticked
+  by default; colliding local names prompt for a target name) via
+  `POST /api/upstream/repos/{id}/import`. Already-linked repositories can be browsed again via
+  `GET /api/upstream/repos/{id}/files` to import newly added profiles, or unlinked via
+  `DELETE /api/upstream/repos/{id}` (already-imported profiles stay in the account).
 - **Moving over.** The converter turns the old client's `manifest/` entries into `upstream` records
   and submits each stored base (`bases/<name>.json`) to the store's engine, which keeps it as the
   profile's base without changing the profile. A file without a stored base, or a URL with a

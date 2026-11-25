@@ -5757,6 +5757,7 @@ export interface components {
             commit: null | string;
             content: null | components["schemas"]["JsonObject"];
             base: null | components["schemas"]["UpstreamBaseRequest"];
+            import?: null | boolean;
         };
         UpstreamApplyResponse: {
             status: string;

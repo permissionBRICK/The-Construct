@@ -1202,6 +1202,74 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/upstream/repos": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Links an upstream config repo by URL (without a password) and optional branch/ref, fetches it with this PC's git credentials and returns the profile files found in it. */
+        post: operations["AddUpstreamRepo"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/upstream/repos/{id}/files": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Fetches a linked upstream config repo and returns the profile files found in it, marking which are already tracked or collide with an existing local profile. */
+        get: operations["ListUpstreamRepoFiles"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/upstream/repos/{id}/import": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Imports selected profile files from a linked upstream config repo into the account through the store's engine and starts tracking them for future refreshes. */
+        post: operations["ImportUpstreamFiles"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/upstream/repos/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** @description Unlinks an upstream config repo and clears its local cache. Already-imported profiles stay in the account. */
+        delete: operations["RemoveUpstreamRepo"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -1213,6 +1281,10 @@ export interface components {
             userToken?: null | string;
             /** @default false */
             windowsSignIn: boolean;
+        };
+        AddUpstreamRepoRequest: {
+            url: null | string;
+            ref?: null | string;
         };
         AgentHealth: {
             status: string;
@@ -1385,6 +1457,13 @@ export interface components {
             message: string;
             closable: boolean;
             child: null | string;
+        };
+        ImportUpstreamFile: {
+            path: string;
+            as?: null | string;
+        };
+        ImportUpstreamRequest: {
+            files: null | components["schemas"]["ImportUpstreamFile"][];
         };
         JobStartedWithCredentials: {
             jobId: string;
@@ -1640,18 +1719,42 @@ export interface components {
             oldHosts: string[];
             progress?: null | components["schemas"]["StepProgress"];
         };
+        UpstreamAvailableFile: {
+            path: string;
+            name: string;
+            tracked: boolean;
+            trackedAs: null | string;
+            existsLocally: boolean;
+            valid: boolean;
+            error?: null | string;
+        };
         UpstreamFileStatus: {
             profile: string;
             path: string;
             state: string;
             message?: null | string;
         };
+        UpstreamImportResult: {
+            id: string;
+            url: string;
+            commit: string;
+            results: components["schemas"]["UpstreamFileStatus"][];
+            view: components["schemas"]["UpstreamView"];
+        };
         UpstreamLinkStatus: {
+            id: string;
             url: string;
             ref: null | string;
             commit: null | string;
             error: null | string;
             files: components["schemas"]["UpstreamFileStatus"][];
+        };
+        UpstreamRepoFiles: {
+            id: string;
+            url: string;
+            ref: null | string;
+            commit: string;
+            files: components["schemas"]["UpstreamAvailableFile"][];
         };
         UpstreamView: {
             running: boolean;
@@ -4375,6 +4478,134 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["UpstreamView"];
                 };
+            };
+            /** @description An error. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["AgentProblem"];
+                };
+            };
+        };
+    };
+    AddUpstreamRepo: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": null | components["schemas"]["AddUpstreamRepoRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UpstreamRepoFiles"];
+                };
+            };
+            /** @description An error. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["AgentProblem"];
+                };
+            };
+        };
+    };
+    ListUpstreamRepoFiles: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UpstreamRepoFiles"];
+                };
+            };
+            /** @description An error. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["AgentProblem"];
+                };
+            };
+        };
+    };
+    ImportUpstreamFiles: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": null | components["schemas"]["ImportUpstreamRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UpstreamImportResult"];
+                };
+            };
+            /** @description An error. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["AgentProblem"];
+                };
+            };
+        };
+    };
+    RemoveUpstreamRepo: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description An error. */
             default: {

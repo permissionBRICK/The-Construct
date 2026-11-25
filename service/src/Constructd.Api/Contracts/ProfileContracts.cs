@@ -46,7 +46,7 @@ public sealed record ProfileResolveRequest(JsonObject? Profile);
 /// device knows (the old client's stored base, carried over by the converter).
 /// </summary>
 public sealed record UpstreamApplyRequest(string? OperationId, string? Url, string? Path, string? Ref, string? Commit, JsonObject? Content,
-    UpstreamBaseRequest? Base);
+    UpstreamBaseRequest? Base, bool? Import = null);
 
 /// <summary>The base a device knows for an upstream file: its commit and content.</summary>
 public sealed record UpstreamBaseRequest(string? Commit, JsonObject? Content);

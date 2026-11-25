@@ -530,7 +530,7 @@ export function clock(iso: string): string {
 
 export type UpstreamView = A['schemas']['UpstreamView'];
 
-const UPSTREAM_SAYS: Record<string, string> = {
+export const UPSTREAM_SAYS: Record<string, string> = {
   conflict: 'changed here and upstream; an agent resolves it',
   waiting: 'waits for its conflict to be resolved',
   invalid: 'the upstream file is no valid profile',
@@ -539,10 +539,16 @@ const UPSTREAM_SAYS: Record<string, string> = {
   'removed-upstream': 'removed upstream; kept here',
 };
 
-/** The Projects page's upstream line: null when no repository is linked. */
+/** The Projects page's upstream repos: null when no repository is linked. */
 export function toUpstream(v: UpstreamView): Upstream | null {
   if (!v.links.length) return null;
-  const repos = v.links.map(l => ({ url: l.url, files: l.files.map(f => ({ profile: f.profile, state: f.state })) }));
+  const repos = v.links.map(l => ({
+    id: l.id,
+    url: l.url,
+    ref: l.ref ?? null,
+    error: l.error ?? null,
+    files: l.files.map(f => ({ profile: f.profile, path: f.path, state: f.state, message: f.message ?? null })),
+  }));
   const broken = v.links.find(l => l.error);
   const file = v.links.flatMap(l => l.files).find(f => f.state in UPSTREAM_SAYS);
   const problem = broken ? `${broken.url}: ${broken.error}` : file ? `${file.profile}: ${file.message ?? UPSTREAM_SAYS[file.state]}` : null;
