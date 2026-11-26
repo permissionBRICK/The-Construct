@@ -12,12 +12,12 @@ import { spanText } from './api/map';
    own, so a scene stays exactly as it is. */
 
 export type Scene =
-  | 'calm' | 'update' | 'update-nightly' | 'everything' | 'off' | 'changed' | 'lease' | 'enter' | 'files' | 'file' | 'file-fails' | 'job' | 'failed' | 'failed-reinstall' | 'repair' | 'repair-chat' | 'updating' | 'restart'
+  | 'calm' | 'update' | 'update-tip' | 'update-nightly' | 'everything' | 'off' | 'changed' | 'lease' | 'enter' | 'files' | 'file' | 'file-fails' | 'job' | 'failed' | 'failed-reinstall' | 'repair' | 'repair-chat' | 'updating' | 'restart'
   | 'pairing' | 'pair-confirm' | 'revoked' | 'handout' | 'creating' | 'created' | 'sign-in' | 'sign-in-failed' | 'sign-in-browser' | 'sign-in-key' | 'signed-out' | 'signed-out-two'
   | 'upgrade-intro' | 'upgrade-engine' | 'upgrade-name' | 'upgrade-code' | 'upgrade-close' | 'upgrade-convert' | 'upgrade-host' | 'upgrade-done' | 'upgrade-restart'
   | 'first-run' | 'first-run-restart' | 'warned' | 'old-guest' | 'upstream';
 
-export const SCENES: Scene[] = ['calm', 'update', 'update-nightly', 'everything', 'off', 'changed', 'lease', 'enter', 'files', 'file', 'file-fails', 'job', 'failed', 'failed-reinstall', 'repair', 'repair-chat', 'updating', 'restart', 'pairing', 'pair-confirm', 'revoked', 'handout', 'creating', 'created', 'sign-in', 'sign-in-failed', 'sign-in-browser', 'sign-in-key', 'signed-out', 'signed-out-two', 'upgrade-intro', 'upgrade-engine', 'upgrade-name', 'upgrade-code', 'upgrade-close', 'upgrade-convert', 'upgrade-host', 'upgrade-done', 'upgrade-restart', 'first-run', 'first-run-restart', 'warned', 'old-guest', 'upstream'];
+export const SCENES: Scene[] = ['calm', 'update', 'update-tip', 'update-nightly', 'everything', 'off', 'changed', 'lease', 'enter', 'files', 'file', 'file-fails', 'job', 'failed', 'failed-reinstall', 'repair', 'repair-chat', 'updating', 'restart', 'pairing', 'pair-confirm', 'revoked', 'handout', 'creating', 'created', 'sign-in', 'sign-in-failed', 'sign-in-browser', 'sign-in-key', 'signed-out', 'signed-out-two', 'upgrade-intro', 'upgrade-engine', 'upgrade-name', 'upgrade-code', 'upgrade-close', 'upgrade-convert', 'upgrade-host', 'upgrade-done', 'upgrade-restart', 'first-run', 'first-run-restart', 'warned', 'old-guest', 'upstream'];
 
 /** Things the preview frame can make happen, beside the user's own actions. */
 export type Demo = 'lease' | 'enter' | 'file' | 'release' | 'fail-next' | 'change';
@@ -93,6 +93,7 @@ export class FakeBackend implements Backend {
     switch (scene) {
       case 'calm': break;
       case 'update': d.release = NEXT_RELEASE; break;
+      case 'update-tip': d.release = NEXT_RELEASE; d.autoUpdateTip = true; break;
       // A nightly build's version carries its whole commit (finding 18).
       case 'update-nightly': d.prefs.channel = 'nightly'; d.release = NIGHTLY_RELEASE; for (const h of d.hosts) h.channel = 'nightly'; break;
       // Update everything while a host updates: each part's detail wraps under its name (FatPC 2026-11-22, a version ran
@@ -1110,7 +1111,9 @@ export class FakeBackend implements Backend {
 
   /* --- this device --- */
 
-  setPrefs(patch: Partial<Prefs>) { this.set(d => { d.prefs = { ...d.prefs, ...patch }; }); }
+  setPrefs(patch: Partial<Prefs>) { this.set(d => { d.prefs = { ...d.prefs, ...patch }; if (patch.autoUpdate) d.autoUpdateTip = false; }); }
+  dismissAutoUpdateTip() { this.set(d => { d.autoUpdateTip = false; }); }
+  enableAutoUpdateFromTip() { this.set(d => { d.autoUpdateTip = false; d.prefs = { ...d.prefs, autoUpdate: true }; }, 'Automatic updates enabled'); }
 
   showRecoveryCode() { return RECOVERY_CODE; }
   exportRecoveryCode(how: 'file' | 'print') { this.set(() => {}, how === 'file' ? 'Saved as a file' : 'Printing'); }

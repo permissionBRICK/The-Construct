@@ -453,6 +453,8 @@ export interface State {
   upstream?: Upstream | null;
   /** True while the first read from the agent and its engines has not produced VMs or finished yet. */
   loading?: boolean;
+  /** True when the one-time automatic-update discovery tooltip is eligible to show off the Update button. */
+  autoUpdateTip?: boolean;
 }
 
 /** The linked upstream config repos as the last refresh found them. */
@@ -672,6 +674,10 @@ export interface Backend {
 
   /* This device and Construct */
   setPrefs(patch: Partial<Prefs>): void;
+  /** Permanently dismisses the one-time automatic-update discovery tooltip without changing preferences. */
+  dismissAutoUpdateTip(): void;
+  /** Enables automatic updates and permanently dismisses the one-time discovery tooltip. */
+  enableAutoUpdateFromTip(): void;
   /** The recovery code to show in place. A backend with `code-reveal` in `na` issues a new one instead. */
   showRecoveryCode(): string[] | Promise<string[]>;
   /** Hand the recovery code to the shell: a file picker for saving, or the print dialog. */

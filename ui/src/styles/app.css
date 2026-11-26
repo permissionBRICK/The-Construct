@@ -284,7 +284,7 @@ html[data-surf="alone"] body { background: transparent; }
 .app .who { flex: 1; position: relative; }
 .app .who summary { display: inline-flex; align-items: center; gap: 9px; font-size: 18px; font-weight: 600; padding: 4px 2px; }
 .app .who summary svg { color: var(--dim); }
-.app .vml { position: absolute; z-index: 5; top: 100%; left: 0; min-width: 210px; display: flex; flex-direction: column; padding: 4px; background: var(--pn); border: 1px solid var(--ln); border-radius: 8px; box-shadow: 0 10px 24px rgba(0,0,0,.18); }
+.app .vml { position: absolute; z-index: 10; top: 100%; left: 0; min-width: 210px; display: flex; flex-direction: column; padding: 4px; background: var(--pn); border: 1px solid var(--ln); border-radius: 8px; box-shadow: 0 10px 24px rgba(0,0,0,.18); }
 .app .vml button { display: flex; align-items: center; gap: 9px; height: 34px; padding: 0 10px; border: 0; background: none; border-radius: 5px; text-align: left; white-space: nowrap; }
 .app .vml button:hover { background: var(--bg); }
 .app .vml .d { margin-left: auto; font-size: 12px; padding-left: 12px; }
@@ -304,6 +304,16 @@ html[data-surf="alone"] body { background: transparent; }
 .app .two > .split { display: flex; }
 .app .two > .split > .b { flex: 1; }
 .app .split > .b.pri + .more summary { color: var(--prifg); }
+/* one-time automatic-update discovery tooltip anchored below the Update button */
+.app .tippop { position: absolute; z-index: 8; top: calc(100% + 9px); right: 0; width: 280px; max-width: calc(100vw - 32px); display: flex; flex-direction: column; gap: 10px; padding: 12px 14px; border: 1px solid var(--pri); border-radius: var(--radc); background: var(--pn); color: var(--fg); box-shadow: 0 12px 28px rgba(0, 0, 0, .24); font-size: 13px; line-height: 1.45; white-space: normal; text-align: left; }
+.app .tippop::before, .app .tippop::after { content: ""; position: absolute; right: 24px; width: 0; height: 0; border-style: solid; }
+.app .tippop::before { top: -7px; border-width: 0 7px 7px 7px; border-color: transparent transparent var(--pri) transparent; }
+.app .tippop::after { top: -5.5px; right: 25px; border-width: 0 6px 6px 6px; border-color: transparent transparent var(--pn) transparent; }
+.app .tilewrap .tippop { left: 0; right: auto; width: 296px; }
+.app .tilewrap .tippop::before { left: 28px; right: auto; }
+.app .tilewrap .tippop::after { left: 29px; right: auto; }
+.app .tippop p { margin: 0; color: var(--fg); }
+.app .tippop .acts { justify-content: flex-end; }
 .app .sft { display: flex; gap: 4px; border-top: 1px solid var(--ln); padding-top: 10px; margin-top: 2px; }
 .app .sft button { position: relative; display: flex; align-items: center; gap: 8px; border: 0; background: none; color: var(--dim); padding: 6px 8px; border-radius: 6px; }
 .app .sft button:hover { color: var(--fg); background: var(--pn); }

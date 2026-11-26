@@ -128,8 +128,9 @@ function closeOpenMenus(root: ParentNode, keep?: Node | null): boolean {
     window to it instead of a fixed height (finding 7). A menu open below its button counts too, and open menus close
     whenever the surface hides, loses focus, or gets a click outside them. */
 function useFit() {
-  const { shell } = useApp();
+  const { s, shell } = useApp();
   const ref = useRef<HTMLDivElement>(null);
+  const measureRef = useRef<(() => void) | null>(null);
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
@@ -139,14 +140,15 @@ function useFit() {
       if (!shell.fit) return;
       const top = el.getBoundingClientRect().top;
       let h = el.getBoundingClientRect().height;
-      for (const m of el.querySelectorAll('details[open] > .vml')) {
-        // An open menu is placed over the page, so the page's own size does not change with it: watched as well.
+      for (const m of el.querySelectorAll('details[open] > .vml, .tippop')) {
+        // An open menu or discovery tooltip is placed over the page, so the page's own size does not change with it: watched as well.
         ro?.observe(m);
         h = Math.max(h, m.getBoundingClientRect().bottom - top + 12);
       }
       h = Math.ceil(h);
       if (h > 0 && (force || h !== last)) { last = h; shell.fit(h); }
     };
+    measureRef.current = () => measure();
     const onToggle = () => measure();
     if (shell.fit && typeof ResizeObserver !== 'undefined') {
       ro = new ResizeObserver(() => measure());
@@ -173,6 +175,7 @@ function useFit() {
     const offHide = shell.onHide?.(closeMenus);
     const offShow = shell.onShow?.(onShow);
     return () => {
+      measureRef.current = null;
       ro?.disconnect();
       el.removeEventListener('toggle', onToggle, true);
       removeEventListener('blur', closeMenus);
@@ -185,6 +188,7 @@ function useFit() {
       offShow?.();
     };
   }, [shell]);
+  useEffect(() => { measureRef.current?.(); }, [s.autoUpdateTip, s.release, s.prefs.autoUpdate, s.everything?.running]);
   return ref;
 }
 
