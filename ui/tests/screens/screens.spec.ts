@@ -732,15 +732,32 @@ test('host configuration uses full GUI controls with validation instead of raw J
   await expect(network.getByRole('radiogroup', { name: 'Default VM mode' })).toBeVisible();
 });
 
-test('the overview shuts down and starts a child VM in place', async ({ page }) => {
+test('the overview shuts down and starts a child VM with a compact power button and cascades on primary shutdown', async ({ page }) => {
   await open(page, 'win', 'calm', 'dark');
+  const mainPower = page.locator('.vp1 button.ic');
   const children = page.locator('section.sec', { has: page.locator('.cap > span', { hasText: /^Child VMs$/ }) });
   const row = children.locator('tbody tr', { hasText: 'win-test' });
-  await expect(row).toBeVisible();
-  await row.getByRole('button', { name: 'Shut down' }).click();
-  await expect(row.getByRole('button', { name: 'Cancel' })).toBeVisible();
-  await row.getByRole('button', { name: 'Shut down' }).click();
-  await expect(row.getByRole('button', { name: 'Start' })).toBeVisible();
-  await row.getByRole('button', { name: 'Start' }).click();
-  await expect(row.getByRole('button', { name: 'Shut down' })).toBeVisible();
+  const childPower = row.getByRole('button', { name: 'Shut down win-test' });
+  await expect(childPower).toBeVisible();
+
+  // Child power icon is smaller than the primary VM power button.
+  const mainBox = (await mainPower.boundingBox())!;
+  const childBox = (await childPower.boundingBox())!;
+  expect(childBox.width).toBeLessThan(mainBox.width);
+  expect(childBox.height).toBeLessThan(mainBox.height);
+
+  // Narrow desktop window stacks cards and keeps actions inside the card without clipping.
+  await page.setViewportSize({ width: 820, height: 680 });
+  const secBox = (await children.boundingBox())!;
+  const consoleBox = (await row.getByRole('button', { name: 'Console' }).boundingBox())!;
+  expect(consoleBox.x + consoleBox.width).toBeLessThanOrEqual(secBox.x + secBox.width + 1);
+
+  await childPower.click();
+  await expect(row.getByRole('button', { name: 'Start win-test' })).toBeVisible();
+  await row.getByRole('button', { name: 'Start win-test' }).click();
+  await expect(row.getByRole('button', { name: 'Shut down win-test' })).toBeVisible();
+
+  // Shutting down the primary VM also shuts down its non-shared running child VM.
+  await mainPower.click();
+  await expect(row.getByRole('button', { name: 'Start win-test' })).toBeVisible();
 });

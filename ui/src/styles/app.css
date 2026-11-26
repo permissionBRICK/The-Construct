@@ -43,6 +43,9 @@ html[data-surf="alone"] body { background: transparent; }
 .app .upb { margin-top: -5px; color: var(--dim); font: 500 11px var(--mono); overflow: hidden; text-overflow: ellipsis; }
 .app .upv svg { width: 15px; height: 15px; stroke-width: 2.5; }
 .app .ic { width: 34px; height: 34px; display: inline-grid; place-items: center; border: 1px solid var(--ln); border-radius: var(--rad); background: var(--pn); padding: 0; flex: none; }
+.app .ic.sm { width: 26px; height: 26px; }
+.app .ic.sm svg { width: 13px; height: 13px; }
+.app .ic[disabled] { opacity: .5; cursor: default; }
 .app .ic.lit { color: var(--ok); border-color: var(--ok); }
 /* A VM that is off: its power button is the coloured Start. */
 .app .ic.go { width: auto; padding: 0 12px; display: inline-flex; gap: 6px; background: var(--pri); border-color: var(--pri); color: var(--prifg); font-weight: 600; }
@@ -354,6 +357,7 @@ html[data-surf="alone"] body { background: transparent; }
 .app .strip b small { font: 400 12px var(--font); color: var(--dim); margin-left: 6px; }
 .app .strip .bar { width: 100%; height: 4px; }
 .app .g2 { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 14px; align-items: start; }
+@media (max-width: 900px) { .app.s-win .g2 { grid-template-columns: 1fr; } }
 
 /* window: dark sidebar, VM tabs on top, pages */
 .app .shell { display: grid; grid-template-columns: 208px minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); height: 100%; }

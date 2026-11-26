@@ -1537,12 +1537,25 @@ export class ApiBackend implements Backend {
   power(vmId: string, on: boolean) {
     const ref = this.vmRef(vmId);
     if (!ref) return;
-    this.transit.set(vmId, { power: on ? 'starting' : 'stopping', until: Date.now() + 120000 });
+    const until = Date.now() + 120000;
+    this.transit.set(vmId, { power: on ? 'starting' : 'stopping', until });
+    // Shutting down the primary VM via its power button also shuts down its non-shared running child VMs.
+    const cascade = on ? [] : ref.vm.children.filter(c => !c.shared && (c.power === 'on' || c.power === 'starting'));
+    for (const c of cascade) this.transit.set(`child:${ref.engine}/${c.name.toLowerCase()}`, { power: 'stopping', until });
     this.compose();
-    void this.run(async () => {
-      const r = await ok(this.engine(ref.engine).POST('/api/v1/vms/{name}/lifecycle', { params: { path: { name: ref.name } }, body: { action: on ? 'start' : 'shutdown' } as never }));
+    const client = this.engine(ref.engine);
+    const primary = this.run(async () => {
+      const r = await ok(client.POST('/api/v1/vms/{name}/lifecycle', { params: { path: { name: ref.name } }, body: { action: on ? 'start' : 'shutdown' } as never }));
       void r;
-    }, undefined, ref.engine).then(okay => { if (!okay) { this.transit.delete(vmId); this.compose(); } });
+    }, undefined, cascade.length ? undefined : ref.engine).then(okay => { if (!okay) { this.transit.delete(vmId); this.compose(); } });
+    if (!cascade.length) return;
+    const kids = cascade.map(c => {
+      const ck = `child:${ref.engine}/${c.name.toLowerCase()}`;
+      return this.run(
+        () => ok(client.POST('/api/v1/vms/{name}/lifecycle', { params: { path: { name: c.name } }, body: { action: 'shutdown' } as never })),
+      ).then(okay => { if (!okay) { this.transit.delete(ck); this.compose(); } });
+    });
+    void Promise.all([primary, ...kids]).finally(() => { void this.refreshEngine(ref.engine); });
   }
 
   childPower(vmId: string, child: string, on: boolean) {

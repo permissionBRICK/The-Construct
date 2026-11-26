@@ -53,7 +53,7 @@ export interface SignIn {
 
 /** Input to a sign-in's terminal: text followed by Enter (empty: Enter alone), or an arrow key for a list. */
 export type SignInInput = { text: string } | { key: 'up' | 'down' };
-export interface ChildVm { name: string; os: string; left: string; power: Power }
+export interface ChildVm { name: string; os: string; left: string; power: Power; shared?: boolean }
 /** A forward of this device to a VM; `closable`: this device opened it and can close it. */
 export interface Forward { id: string; port: number; label: string; to: 'This device' | 'LAN'; url: string; closable?: boolean; status?: string }
 /** `protected`: kept by the retention rule whatever `keep` says (the newest host-requested backup past the horizon). */

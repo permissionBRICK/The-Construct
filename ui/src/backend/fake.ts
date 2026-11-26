@@ -415,13 +415,32 @@ export class FakeBackend implements Backend {
   setVmPassword(vmId: string, password: string) { if (password.length >= 8) this.set(() => {}, `Password of ${this.vmName(vmId)} changed`); }
 
   power(vmId: string, on: boolean) {
-    this.set(d => { this.vm(d, vmId).power = on ? 'starting' : 'stopping'; });
+    const cascade: string[] = [];
+    this.set(d => {
+      const v = this.vm(d, vmId);
+      v.power = on ? 'starting' : 'stopping';
+      if (!on) {
+        for (const c of v.children) {
+          if (!c.shared && (c.power === 'on' || c.power === 'starting')) {
+            c.power = 'stopping';
+            cascade.push(c.name);
+          }
+        }
+      }
+    });
     const done = () => this.set(d => {
       const v = this.vm(d, vmId);
       v.power = on ? 'on' : 'off';
       if (!on) v.usage.cpuPct = 0;
-      const hv = d.hosts.find(h => h.id === v.hostId)?.vms.find(x => x.name === v.name);
+      const host = d.hosts.find(h => h.id === v.hostId);
+      const hv = host?.vms.find(x => x.name === v.name);
       if (hv) hv.power = v.power;
+      for (const name of cascade) {
+        const c = v.children.find(x => x.name === name);
+        if (c) c.power = 'off';
+        const hcv = host?.vms.find(x => x.name === name);
+        if (hcv) hcv.power = 'off';
+      }
     }, `${this.vmName(vmId)} ${on ? 'runs' : 'is off'}`);
     if (this.timers) this.after(3, done); else done();
   }
