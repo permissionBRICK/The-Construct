@@ -156,31 +156,73 @@ function useFit() {
       el.addEventListener('toggle', onToggle, true);
       measure();
     }
-    const closeMenus = () => { if (closeOpenMenus(el)) measure(); };
-    const onShow = () => {
-      measure(true);
-      if (typeof requestAnimationFrame === 'function') requestAnimationFrame(() => measure());
+    const isEditable = (node: EventTarget | null) =>
+      node instanceof HTMLElement && (node.matches('input, textarea, select') || node.isContentEditable);
+    // Focusing the container briefly before blurring resets Chromium's sequential focus navigation starting point
+    // back to the top of the surface, so pressing Tab after dropping an auto-focus still lands on the first control.
+    const resetFocus = () => {
+      el.tabIndex = -1;
+      el.focus({ preventScroll: true });
+      el.blur();
+      el.removeAttribute('tabindex');
     };
-    const onVisibility = () => { if (document.hidden) closeMenus(); else onShow(); };
+    const blurFocused = (onlyNonEditable: boolean) => {
+      const active = document.activeElement;
+      if (active instanceof HTMLElement && active !== el && el.contains(active) && (!onlyNonEditable || !isEditable(active))) {
+        resetFocus();
+      }
+    };
+    // Suppress host-injected initial focus (e.g. WebView2 focusing the first control on first show) until the user
+    // interacts by keyboard or pointer, so the VM dropdown never opens with a focus outline by default.
+    let suppressAutoFocus = true;
+    blurFocused(true);
+    const allowFocus = () => { suppressAutoFocus = false; };
+    const onFocusIn = (e: FocusEvent) => {
+      if (suppressAutoFocus && e.target instanceof HTMLElement && e.target !== el && !isEditable(e.target)) resetFocus();
+    };
+    const closeMenus = () => { if (closeOpenMenus(el)) measure(); };
+    const onHide = () => {
+      closeMenus();
+      blurFocused(false);
+      suppressAutoFocus = true;
+    };
+    const onShow = () => {
+      suppressAutoFocus = true;
+      blurFocused(true);
+      measure(true);
+      if (typeof requestAnimationFrame === 'function') {
+        requestAnimationFrame(() => {
+          if (suppressAutoFocus) blurFocused(true);
+          measure();
+        });
+      }
+    };
+    const onVisibility = () => { if (document.hidden) onHide(); else onShow(); };
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') closeMenus(); };
     // Capture-phase pointerup also dismisses when clicking disabled controls (which suppress click);
     // the toggle event updates the fitted height afterwards so click delivery is unaffected.
     const onOutside = (e: Event) => { closeOpenMenus(el, e.target as Node | null); };
-    addEventListener('blur', closeMenus);
-    addEventListener('pagehide', closeMenus);
+    addEventListener('blur', onHide);
+    addEventListener('pagehide', onHide);
     addEventListener('keydown', onKey);
+    document.addEventListener('keydown', allowFocus, true);
+    document.addEventListener('pointerdown', allowFocus, true);
+    el.addEventListener('focusin', onFocusIn, true);
     document.addEventListener('visibilitychange', onVisibility);
     document.addEventListener('pointerup', onOutside, true);
     document.addEventListener('click', onOutside);
-    const offHide = shell.onHide?.(closeMenus);
+    const offHide = shell.onHide?.(onHide);
     const offShow = shell.onShow?.(onShow);
     return () => {
       measureRef.current = null;
       ro?.disconnect();
       el.removeEventListener('toggle', onToggle, true);
-      removeEventListener('blur', closeMenus);
-      removeEventListener('pagehide', closeMenus);
+      removeEventListener('blur', onHide);
+      removeEventListener('pagehide', onHide);
       removeEventListener('keydown', onKey);
+      document.removeEventListener('keydown', allowFocus, true);
+      document.removeEventListener('pointerdown', allowFocus, true);
+      el.removeEventListener('focusin', onFocusIn, true);
       document.removeEventListener('visibilitychange', onVisibility);
       document.removeEventListener('pointerup', onOutside, true);
       document.removeEventListener('click', onOutside);
