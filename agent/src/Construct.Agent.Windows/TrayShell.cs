@@ -42,6 +42,7 @@ internal sealed class TrayShell : ApplicationContext, IAgentShell
     private bool _showOnClick;
     private bool _attention;
     private bool _polling;
+    private bool _exiting;
 
     public TrayShell(DeviceAgent agent, DeviceServices device, Uri origin, string token, string profile, Action<Exception> log)
     {
@@ -126,6 +127,11 @@ internal sealed class TrayShell : ApplicationContext, IAgentShell
         window = new AgentWindow(surface, _origin, _token, _runtime, Open, _log);
         if (surface == "pop") window.FocusLost += () => _gesture.FocusLost((Control.MouseButtons & MouseButtons.Left) != 0 && _trayHitArea is { } area && area.Contains(Cursor.Position));
         if (surface is "pop" or "alone") window.ContentHeight += css => Fit(surface, window, css);
+        // Once the user closes the last open surface, switch immediately to any staged automatic update in the background.
+        window.VisibleChanged += (_, _) =>
+        {
+            if (!_exiting && !window.Visible && Visible().Count == 0) _device.Updater.TryAutoInstall();
+        };
         _windows[surface] = window;
         return window;
     }
@@ -146,8 +152,6 @@ internal sealed class TrayShell : ApplicationContext, IAgentShell
 
     private void Show(string surface, string? route)
     {
-        // A new release shows when the pop-out opens, not only after the six-hourly check (finding 16).
-        if (surface == "pop") _device.Updater.CheckIfStale();
         Renew(surface);
         var window = GetOrCreate(surface);
 
@@ -164,6 +168,8 @@ internal sealed class TrayShell : ApplicationContext, IAgentShell
         _attention = false;
         DrawIcon();
         window.Present(route);
+        // Check after presenting so Visible("pop") is already true and an automatic update stages silently without closing the pop-out.
+        if (surface == "pop") _device.Updater.CheckIfStale();
     }
 
     /// <summary>A floating surface's page measured its content: the window takes that height, still at the tray.</summary>
@@ -397,6 +403,7 @@ internal sealed class TrayShell : ApplicationContext, IAgentShell
 
     protected override void ExitThreadCore()
     {
+        _exiting = true;
         _vaultTimer.Stop();
         _placeTimer.Stop();
         _warmTimer.Stop();

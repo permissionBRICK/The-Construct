@@ -91,8 +91,11 @@ public sealed class AgentUpdater : IAsyncDisposable
     /// <summary>Delay before the first automatic channel check after start.</summary>
     public TimeSpan FirstCheck { get; init; } = TimeSpan.FromMinutes(1);
 
-    /// <summary>How often the background loop checks the channel, matching the engine's hourly check.</summary>
+    /// <summary>How often the background loop checks the channel when automatic updates are off, matching the engine's hourly check.</summary>
     public TimeSpan CheckEvery { get; init; } = TimeSpan.FromHours(1);
+
+    /// <summary>How often the background loop checks the channel when automatic updates are on, so updates apply ahead of time in the background.</summary>
+    public TimeSpan AutoCheckEvery { get; init; } = TimeSpan.FromMinutes(5);
 
     /// <summary>How long a check counts as fresh for <see cref="CheckIfStale"/>.</summary>
     public TimeSpan FreshFor { get; init; } = TimeSpan.FromMinutes(15);
@@ -121,7 +124,7 @@ public sealed class AgentUpdater : IAsyncDisposable
         {
             try { await Task.Delay(wait, _options.Time, _lifetime.Token).ConfigureAwait(false); }
             catch (OperationCanceledException) { return; }
-            wait = CheckEvery;
+            wait = _settings.Read().AutoUpdate ? AutoCheckEvery : CheckEvery;
             try
             {
                 await CheckAsync(_lifetime.Token).ConfigureAwait(false);
@@ -276,17 +279,21 @@ public sealed class AgentUpdater : IAsyncDisposable
 
     /// <summary>
     /// Starts the install when automatic updates are on, the agent is not currently busy, an update is on offer,
-    /// and that version has not already failed automatically.
+    /// and that version has not already failed automatically. When a UI surface is open, an un-staged package is
+    /// still downloaded and unpacked silently in the background, while the process switch waits until all surfaces close.
     /// </summary>
     public bool TryAutoInstall()
     {
         if (_lifetime.IsCancellationRequested || Running is null || !_settings.Read().AutoUpdate || _busy() is not null) return false;
+        // Read visible surfaces outside _gate: on Windows this marshals onto the UI thread.
+        var surfacesOpen = HasOpenSurfaces();
         AgentPackage offer;
         TaskCompletionSource gate;
         lock (_gate)
         {
             if (_lifetime.IsCancellationRequested || _offer is null || !_work.IsCompleted) return false;
             if (string.Equals(_autoFailedVersion, _offer.Version, StringComparison.Ordinal)) return false;
+            if (surfacesOpen && Directory.Exists(_install.DirectoryOf(_offer.Version))) return false;
             offer = _offer;
             _state = "waiting";
             _error = null;
@@ -302,6 +309,8 @@ public sealed class AgentUpdater : IAsyncDisposable
         gate.SetResult();
         return true;
     }
+
+    private bool HasOpenSurfaces() => (OpenSurfaces?.Invoke() ?? []).Count > 0;
 
     /// <summary>The install itself; awaitable by tests.</summary>
     public Task Work
@@ -336,6 +345,14 @@ public sealed class AgentUpdater : IAsyncDisposable
                 {
                     if (File.Exists(download)) File.Delete(download);
                 }
+            }
+
+            if (automatic && HasOpenSurfaces())
+            {
+                // The package is now downloaded and unpacked on disk; defer restarting the agent until the user closes
+                // the pop-out/window so an open pop-out is never yanked away and reopened out of place.
+                Set("idle");
+                return;
             }
 
             Set("installing");
