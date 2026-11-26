@@ -731,3 +731,16 @@ test('host configuration uses full GUI controls with validation instead of raw J
   const network = page.locator('section.sec', { has: page.locator('.cap > span', { hasText: /^Network$/ }) });
   await expect(network.getByRole('radiogroup', { name: 'Default VM mode' })).toBeVisible();
 });
+
+test('the overview shuts down and starts a child VM in place', async ({ page }) => {
+  await open(page, 'win', 'calm', 'dark');
+  const children = page.locator('section.sec', { has: page.locator('.cap > span', { hasText: /^Child VMs$/ }) });
+  const row = children.locator('tbody tr', { hasText: 'win-test' });
+  await expect(row).toBeVisible();
+  await row.getByRole('button', { name: 'Shut down' }).click();
+  await expect(row.getByRole('button', { name: 'Cancel' })).toBeVisible();
+  await row.getByRole('button', { name: 'Shut down' }).click();
+  await expect(row.getByRole('button', { name: 'Start' })).toBeVisible();
+  await row.getByRole('button', { name: 'Start' }).click();
+  await expect(row.getByRole('button', { name: 'Shut down' })).toBeVisible();
+});

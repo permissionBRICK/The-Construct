@@ -768,6 +768,12 @@ export class ApiBackend implements Backend {
         const t = this.transit.get(id);
         if (t && t.until > now && v.power !== (t.power === 'starting' ? 'on' : 'off')) v.power = t.power;
         else this.transit.delete(id);
+        for (const c of v.children) {
+          const ck = `child:${engine}/${c.name.toLowerCase()}`;
+          const ct = this.transit.get(ck);
+          if (ct && ct.until > now && c.power !== (ct.power === 'starting' ? 'on' : 'off')) c.power = ct.power;
+          else this.transit.delete(ck);
+        }
         vms.push(v);
         // The newest VM job of this VM decides what its pages show.
         const newest = this.newestJob(sl, r.name);
@@ -1537,6 +1543,22 @@ export class ApiBackend implements Backend {
       const r = await ok(this.engine(ref.engine).POST('/api/v1/vms/{name}/lifecycle', { params: { path: { name: ref.name } }, body: { action: on ? 'start' : 'shutdown' } as never }));
       void r;
     }, undefined, ref.engine).then(okay => { if (!okay) { this.transit.delete(vmId); this.compose(); } });
+  }
+
+  childPower(vmId: string, child: string, on: boolean) {
+    const ref = this.vmRef(vmId);
+    if (!ref) return;
+    const key = `child:${ref.engine}/${child.toLowerCase()}`;
+    this.transit.set(key, { power: on ? 'starting' : 'stopping', until: Date.now() + 120000 });
+    this.compose();
+    void this.run(async () => {
+      await ok(this.engine(ref.engine).POST('/api/v1/vms/{name}/lifecycle', {
+        params: { path: { name: child } },
+        body: { action: on ? 'start' : 'shutdown', ...(on ? { lifetime: '12h' } : {}) } as never,
+      }));
+    }, on ? `Starting ${child}` : `Shutting down ${child}`, ref.engine).then(okay => {
+      if (!okay) { this.transit.delete(key); this.compose(); }
+    });
   }
 
   restart(vmId: string) {

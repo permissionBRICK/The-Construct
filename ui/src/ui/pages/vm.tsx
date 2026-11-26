@@ -105,7 +105,21 @@ export function Overview({ vm }: { vm: Vm }) {
         </Sec>
         <Sec title="Child VMs">
           <Table cols={[{ h: 'Name' }, { h: 'System', cls: 'x' }, { h: 'Left', cls: 'm' }, { h: '', cls: 'e' }]}
-            rows={vm.children.map(c => [<><Dot s={c.power === 'on' ? 'on' : 'off'} />{c.name}</>, c.os, c.left, <Btn sm onClick={() => be.openChildConsole(vm.id, c.name)} disabled={na(s, 'console')}>Console</Btn>])} />
+            rows={vm.children.map(c => [
+              <><Dot s={c.power === 'on' ? 'on' : c.power === 'starting' || c.power === 'stopping' ? 'busy' : 'off'} />{c.name}</>,
+              c.os,
+              c.left,
+              <span class="acts">
+                {c.power === 'on'
+                  ? <Confirm label="Shut down" onYes={() => be.childPower(vm.id, c.name, false)} />
+                  : c.power === 'stopping'
+                    ? <Btn sm disabled>Stopping…</Btn>
+                    : c.power === 'starting'
+                      ? <Btn sm disabled>Starting…</Btn>
+                      : <Btn sm onClick={() => be.childPower(vm.id, c.name, true)}>Start</Btn>}
+                <Btn sm onClick={() => be.openChildConsole(vm.id, c.name)} disabled={na(s, 'console')}>Console</Btn>
+              </span>,
+            ])} />
         </Sec>
       </div>
     </Page>

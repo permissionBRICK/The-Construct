@@ -761,6 +761,39 @@ describe('ApiBackend host administration', () => {
     expect(calls.filter(c => c.method === 'DELETE').length).toBe(before + 1);
     expect(be.snapshot().notice?.text).toContain('changed');
   });
+
+  it('shuts down and starts a child VM from the primary overview and clears transit on error', async () => {
+    const { be, calls, on, settle } = world();
+    const p = `/api/engines/${E1}/api/v1`;
+    on('GET', `${p}/vms`, { json: [vmResponse('atlas', 'alex'), vmResponse('kid', 'alex', { kind: 'child', parent: 'atlas', state: 'running' })] });
+    on('POST', `${p}/vms/kid/lifecycle`, { status: 202, json: { jobId: 'lc1' } });
+    await be.start();
+    expect(be.snapshot().vms[0].children).toEqual([expect.objectContaining({ name: 'kid', power: 'on' })]);
+
+    be.childPower('atlas', 'kid', false);
+    expect(be.snapshot().vms[0].children[0].power).toBe('stopping');
+    on('GET', `${p}/vms`, { json: [vmResponse('atlas', 'alex'), vmResponse('kid', 'alex', { kind: 'child', parent: 'atlas', state: 'off' })] });
+    await settle();
+    expect(calls.filter(c => c.path === `${p}/vms/kid/lifecycle`).map(c => c.body)).toEqual([{ action: 'shutdown' }]);
+    expect(be.snapshot().vms[0].children[0].power).toBe('off');
+
+    be.childPower('atlas', 'kid', true);
+    expect(be.snapshot().vms[0].children[0].power).toBe('starting');
+    on('POST', `${p}/vms/kid/lifecycle`, { status: 200, json: { state: 'running' } });
+    on('GET', `${p}/vms`, { json: [vmResponse('atlas', 'alex'), vmResponse('kid', 'alex', { kind: 'child', parent: 'atlas', state: 'running' })] });
+    await settle();
+    expect(calls.filter(c => c.path === `${p}/vms/kid/lifecycle`).map(c => c.body)).toEqual([
+      { action: 'shutdown' },
+      { action: 'start', lifetime: '12h' },
+    ]);
+    expect(be.snapshot().vms[0].children[0].power).toBe('on');
+
+    on('POST', `${p}/vms/kid/lifecycle`, { status: 409, json: { title: 'VM operation refused: operation in progress.', status: 409, code: 'operation-in-progress' } });
+    be.childPower('atlas', 'kid', false);
+    expect(be.snapshot().vms[0].children[0].power).toBe('stopping');
+    await settle();
+    expect(be.snapshot().vms[0].children[0].power).toBe('on');
+  });
 });
 
 describe('SseParser', () => {
