@@ -227,6 +227,10 @@ describe('FakeBackend', () => {
     expect(be.snapshot().hosts.find(h => h.id === 'pc')!.vms.find(v => v.name === 'win-test')!.power).toBe('off');
     be.childPower('atlas', 'win-test', true);
     expect(be.snapshot().vms.find(v => v.id === 'atlas')!.children.find(c => c.name === 'win-test')!.power).toBe('on');
+    // Shutting down the primary VM cascades to non-shared running children.
+    be.power('atlas', false);
+    expect(be.snapshot().vms.find(v => v.id === 'atlas')!.children.find(c => c.name === 'win-test')!.power).toBe('off');
+    expect(be.snapshot().hosts.find(h => h.id === 'pc')!.vms.find(v => v.name === 'win-test')!.power).toBe('off');
     be.hostVmAction('orchard', 'harbor', 'shutdown');
     expect(be.snapshot().vms.find(v => v.id === 'harbor')!.power).toBe('off');
     be.hostVmAction('orchard', 'harbor', 'delete');

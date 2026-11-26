@@ -181,7 +181,7 @@ export function toVm(id: string, engine: string, r: VmResponse, all: VmResponse[
     diskPath: r.diskPath ?? null,
     agents: toAgents(p.agents),
     children: all.filter(c => c.kind === 'child' && c.parent === r.name).map(c => ({
-      name: c.name, os: '', left: c.lease?.expiresAt ? when(c.lease.expiresAt) : '–', power: power(c.state),
+      name: c.name, os: '', left: c.lease?.expiresAt ? when(c.lease.expiresAt) : '–', power: power(c.state), shared: c.sharing === 'host',
     })),
     projectsOn: [...(p.desired?.desired?.projects ?? [])],
     forwards: [],

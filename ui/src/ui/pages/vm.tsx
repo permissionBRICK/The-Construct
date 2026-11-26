@@ -1,5 +1,5 @@
 import { useState } from 'preact/hooks';
-import type { Agent, Profile, SettingsPatch, Upstream, UpstreamRepoFiles, Vm, VmSettings } from '../../backend/types';
+import type { Agent, ChildVm, Profile, SettingsPatch, Upstream, UpstreamRepoFiles, Vm, VmSettings } from '../../backend/types';
 import { activeJob, running, vmDot, vmWord, newer, vmUpdateTarget, warnedJob } from '../../model/vm';
 import { AGENTS, groupApplies, hwChange, swapSize } from '../../model/settings';
 import { profileError } from '../../model/profile';
@@ -40,6 +40,19 @@ export function AgentActions({ vm, a, busy }: { vm: Vm; a: Agent; busy: boolean 
       {agentBehind(a) && <Btn sm kind="amber" icon="up" title={`Update to ${a.latest}`} disabled={busy} onClick={() => be.updateAgents(vm.id, a.id)}>Update</Btn>}
       {out && <Btn sm icon="key" disabled={signing} onClick={() => be.signIn(vm.id, id.id)}>Sign in</Btn>}
     </span>
+  );
+}
+
+/** Compact power symbol button for a child VM, slightly smaller than the main VM's PowerBtn. */
+function ChildPowerBtn({ vmId, c }: { vmId: string; c: ChildVm }) {
+  const { be } = useApp();
+  const on = c.power === 'on' || c.power === 'starting';
+  const busy = c.power === 'starting' || c.power === 'stopping';
+  const label = on ? `Shut down ${c.name}` : `Start ${c.name}`;
+  return (
+    <button type="button" class={`ic sm ${on ? 'lit' : ''}`} disabled={busy} title={label} aria-label={label} onClick={() => be.childPower(vmId, c.name, !on)}>
+      <Icon n="power" />
+    </button>
   );
 }
 
@@ -104,22 +117,24 @@ export function Overview({ vm }: { vm: Vm }) {
           {panel && <SignInBlock si={panel} />}
         </Sec>
         <Sec title="Child VMs">
-          <Table cols={[{ h: 'Name' }, { h: 'System', cls: 'x' }, { h: 'Left', cls: 'm' }, { h: '', cls: 'e' }]}
-            rows={vm.children.map(c => [
-              <><Dot s={c.power === 'on' ? 'on' : c.power === 'starting' || c.power === 'stopping' ? 'busy' : 'off'} />{c.name}</>,
-              c.os,
-              c.left,
-              <span class="acts">
-                {c.power === 'on'
-                  ? <Confirm label="Shut down" onYes={() => be.childPower(vm.id, c.name, false)} />
-                  : c.power === 'stopping'
-                    ? <Btn sm disabled>Stopping…</Btn>
-                    : c.power === 'starting'
-                      ? <Btn sm disabled>Starting…</Btn>
-                      : <Btn sm onClick={() => be.childPower(vm.id, c.name, true)}>Start</Btn>}
-                <Btn sm onClick={() => be.openChildConsole(vm.id, c.name)} disabled={na(s, 'console')}>Console</Btn>
-              </span>,
-            ])} />
+          {(() => {
+            const hasOs = vm.children.some(c => c.os);
+            const cols = hasOs
+              ? [{ h: 'Name', cls: 't' }, { h: 'System', cls: 'x' }, { h: 'Left', cls: 'm' }, { h: '', cls: 'e' }]
+              : [{ h: 'Name', cls: 't' }, { h: 'Left', cls: 'm' }, { h: '', cls: 'e' }];
+            return (
+              <Table cols={cols} rows={vm.children.map(c => {
+                const name = <span title={c.name}><Dot s={c.power === 'on' ? 'on' : c.power === 'starting' || c.power === 'stopping' ? 'busy' : 'off'} />{c.name}{c.shared && <> <Tag>shared</Tag></>}</span>;
+                const acts = (
+                  <span class="acts one">
+                    <ChildPowerBtn vmId={vm.id} c={c} />
+                    <Btn sm onClick={() => be.openChildConsole(vm.id, c.name)} disabled={na(s, 'console')}>Console</Btn>
+                  </span>
+                );
+                return hasOs ? [name, c.os, c.left, acts] : [name, c.left, acts];
+              })} />
+            );
+          })()}
         </Sec>
       </div>
     </Page>

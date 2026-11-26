@@ -794,6 +794,47 @@ describe('ApiBackend host administration', () => {
     await settle();
     expect(be.snapshot().vms[0].children[0].power).toBe('on');
   });
+
+  it('shutting down a primary VM cascades to non-shared running children and spares shared or stopped ones', async () => {
+    const { be, calls, on, settle } = world();
+    const p = `/api/engines/${E1}/api/v1`;
+    on('GET', `${p}/vms`, {
+      json: [
+        vmResponse('atlas', 'alex', { state: 'running' }),
+        vmResponse('priv-kid', 'alex', { kind: 'child', parent: 'atlas', state: 'running', sharing: 'private' }),
+        vmResponse('shared-kid', 'alex', { kind: 'child', parent: 'atlas', state: 'running', sharing: 'host' }),
+        vmResponse('off-kid', 'alex', { kind: 'child', parent: 'atlas', state: 'off', sharing: 'private' }),
+      ],
+    });
+    on('POST', `${p}/vms/atlas/lifecycle`, { status: 202, json: { jobId: 'lc-p' } });
+    on('POST', `${p}/vms/priv-kid/lifecycle`, { status: 202, json: { jobId: 'lc-c' } });
+    await be.start();
+
+    be.power('atlas', false);
+    const snap = be.snapshot().vms[0];
+    expect(snap.power).toBe('stopping');
+    expect(snap.children.find(c => c.name === 'priv-kid')!.power).toBe('stopping');
+    expect(snap.children.find(c => c.name === 'shared-kid')!.power).toBe('on');
+    expect(snap.children.find(c => c.name === 'off-kid')!.power).toBe('off');
+
+    on('GET', `${p}/vms`, {
+      json: [
+        vmResponse('atlas', 'alex', { state: 'off' }),
+        vmResponse('priv-kid', 'alex', { kind: 'child', parent: 'atlas', state: 'off', sharing: 'private' }),
+        vmResponse('shared-kid', 'alex', { kind: 'child', parent: 'atlas', state: 'running', sharing: 'host' }),
+        vmResponse('off-kid', 'alex', { kind: 'child', parent: 'atlas', state: 'off', sharing: 'private' }),
+      ],
+    });
+    await settle();
+    expect(calls.filter(c => c.path.endsWith('/lifecycle')).map(c => [c.path.replace(`${p}/vms/`, ''), c.body])).toEqual([
+      ['atlas/lifecycle', { action: 'shutdown' }],
+      ['priv-kid/lifecycle', { action: 'shutdown' }],
+    ]);
+    const after = be.snapshot().vms[0];
+    expect(after.power).toBe('off');
+    expect(after.children.find(c => c.name === 'priv-kid')!.power).toBe('off');
+    expect(after.children.find(c => c.name === 'shared-kid')!.power).toBe('on');
+  });
 });
 
 describe('SseParser', () => {
