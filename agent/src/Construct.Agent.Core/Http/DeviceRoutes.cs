@@ -59,7 +59,7 @@ public static class DeviceRoutes
             }
             else if (request.AutoUpdate == true)
             {
-                device.Updater.TryAutoInstall();
+                device.Updater.CheckIfStale();
                 if (device.T3Desktop.Supported) _ = Task.Run(() => device.T3Desktop.CheckAndAutoApplyAsync(allowFreshInstallWithoutAutoUpdate: false, CancellationToken.None));
             }
             return TypedResults.Ok(Settings(device));

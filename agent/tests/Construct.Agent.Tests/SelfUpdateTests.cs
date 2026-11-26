@@ -134,6 +134,38 @@ public sealed class SelfUpdateTests : IAsyncLifetime
 
         Assert.Equal(1, Reads());
         Assert.Equal(TimeSpan.FromHours(1), device.Updater.CheckEvery);
+        Assert.Equal(TimeSpan.FromMinutes(5), device.Updater.AutoCheckEvery);
+    }
+
+    [Fact]
+    public async Task Automatic_install_stages_while_popout_is_open_and_switches_once_surfaces_close()
+    {
+        var device = Device();
+        device.Settings.Update(s => s with { AutoUpdate = true });
+        string[] open = ["pop"];
+        device.Updater.OpenSurfaces = () => open;
+
+        device.Updater.CheckIfStale();
+        await FakeDevice.WaitAsync(() => Directory.Exists(device.Install.DirectoryOf(New)) && device.Updater.View().State == "idle", "package staged while pop-out is open");
+        await device.Updater.Work.WaitAsync(TimeSpan.FromSeconds(10));
+
+        // The running agent was NOT interrupted while the pop-out was open.
+        Assert.Empty(device.Platform.Launched);
+        Assert.Equal(0, device.Stopped);
+        int Downloads() { lock (_channel!.Requests) return _channel.Requests.Count(r => r.AbsoluteUri.EndsWith(".zip", StringComparison.Ordinal)); }
+        Assert.Equal(1, Downloads());
+
+        // While the pop-out stays open and the version is already staged, TryAutoInstall is a no-op.
+        Assert.False(device.Updater.TryAutoInstall());
+
+        // Once the user closes the pop-out, TryAutoInstall switches immediately using the staged directory with no extra download.
+        open = [];
+        Assert.True(device.Updater.TryAutoInstall());
+        await device.Updater.Work.WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.Equal([device.Install.ExecutableOf(New)], device.Platform.Launched);
+        Assert.Equal([[]], device.Platform.LaunchedSurfaces);
+        Assert.Equal(1, device.Stopped);
+        Assert.Equal(1, Downloads());
     }
 
     [Fact]
