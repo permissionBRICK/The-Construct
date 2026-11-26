@@ -296,28 +296,33 @@ public sealed class AgentSetup(ISetupPlatform platform, HttpClient web, HttpClie
 
     /// <summary>
     /// The old client ran a VM on this PC, by the converter's rule (<c>LegacyState.Instances()</c>): a registry without
-    /// instances is the single default VM; in a registry, an entry whose backend is <c>hyperv-local</c> or missing, or the
-    /// default VM the old client adds itself while its key is in <c>~/.ssh</c> and no entry (a null one included) names it.
-    /// Without a registry, an install folder means the default VM of older installs. Then the move installs the engine here.
+    /// instances is the single default VM when its key is in <c>~/.ssh</c>; in a registry, a named entry whose backend
+    /// is <c>hyperv-local</c> or missing, or the default <c>agent-vm</c> (absent or materialized as <c>hyperv-local</c>
+    /// by <c>Save-ConstructInstances</c>) when its SSH key exists in <c>~/.ssh</c>. Without a registry, legacy state
+    /// with the default VM's key means the default VM of older installs. Then the move installs the engine here.
     /// </summary>
     public bool OldInstallRunsVmHere()
     {
         var root = Path.Combine(platform.LocalAppData, "The-Construct");
+        bool HasKey(string keyName) => File.Exists(Path.Combine(platform.Home, ".ssh", keyName));
         if (ReadJson(Path.Combine(root, "instances.json")) is { } registry)
         {
-            if (!registry.TryGetProperty("instances", out var instances) || instances.ValueKind != JsonValueKind.Object) return true;
-            if (!instances.TryGetProperty(DefaultInstance, out _) && File.Exists(Path.Combine(platform.Home, ".ssh", "agent_vm_ed25519"))) return true;
-            return instances.EnumerateObject().Any(i => i.Value.ValueKind == JsonValueKind.Object && InstanceName.IsMatch(i.Name)
-                && !i.Name.StartsWith("construct-", StringComparison.OrdinalIgnoreCase)
-                && (Text(i.Value, "backend")?.ToLowerInvariant() ?? "hyperv-local") == "hyperv-local");
+            if (!registry.TryGetProperty("instances", out var instances) || instances.ValueKind != JsonValueKind.Object)
+                return HasKey("agent_vm_ed25519");
+            if (!instances.TryGetProperty(DefaultInstance, out _) && HasKey("agent_vm_ed25519")) return true;
+            return instances.EnumerateObject().Any(i =>
+            {
+                if (i.Value.ValueKind != JsonValueKind.Object || !InstanceName.IsMatch(i.Name)
+                    || i.Name.StartsWith("construct-", StringComparison.OrdinalIgnoreCase)) return false;
+                if ((Text(i.Value, "backend")?.ToLowerInvariant() ?? "hyperv-local") != "hyperv-local") return false;
+                var isDefault = i.Name == DefaultInstance;
+                var keyName = Text(i.Value, "keyName") ?? (isDefault ? "agent_vm_ed25519" : "construct_" + i.Name + "_ed25519");
+                if (!KeyFileRule.IsMatch(keyName)) return false;
+                return !isDefault || HasKey(keyName);
+            });
         }
 
-        try
-        {
-            return Directory.Exists(root) && Directory.EnumerateDirectories(root).SelectMany(Directory.EnumerateDirectories)
-                .Any(folder => File.Exists(Path.Combine(folder, ".construct-settings.json")));
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return false; }
+        return HasLegacyInstall() && HasKey("agent_vm_ed25519");
     }
 
     /// <summary>
@@ -347,6 +352,8 @@ public sealed class AgentSetup(ISetupPlatform platform, HttpClient web, HttpClie
     private const string DefaultInstance = "agent-vm";
 
     private static readonly Regex InstanceName = new(@"\A[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\z", RegexOptions.CultureInvariant);
+
+    private static readonly Regex KeyFileRule = new(@"\A[A-Za-z0-9._-]{1,128}\z", RegexOptions.CultureInvariant);
 
     /// <summary>The engine package downloaded and checked now; a failure only means the engine step downloads it later.</summary>
     private async Task PrefetchEngineAsync(SetupPackage engine, CancellationToken ct)

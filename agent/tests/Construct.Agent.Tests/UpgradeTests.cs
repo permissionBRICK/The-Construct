@@ -1602,6 +1602,102 @@ public sealed class UpgradeMovedHostTests
         Assert.False(afterRestart["legacy"]!.GetValue<bool>());
         Assert.Equal(BridgeState.Fresh, afterRestart["stage"]!.GetValue<string>());
     }
+
+    [Fact]
+    public async Task A_remote_only_install_with_materialized_default_agent_vm_and_no_ssh_key_skips_local_engine_and_converts()
+    {
+        // Save-ConstructInstances wrote the synthesized local `agent-vm` into instances.json alongside remote VMs even
+        // on PCs that never provisioned a local VM. Without ~/.ssh/agent_vm_ed25519, the upgrade must skip the local
+        // engine (and Hyper-V) and convert directly against the remote host.
+        using var remote = new EngineHost().WithSource();
+        var remoteToken = await remote.AddUserAsync("alice");
+        var installs = 0;
+        await using var rig = await UpgradeRig.CreateAsync(f =>
+        {
+            f.Settings(new JsonObject
+            {
+                ["constructRepo"] = "permissionBRICK/The-Construct", ["constructRef"] = "main", ["installedCommit"] = new string('a', 40),
+            });
+            f.ConfigRepo(MainProfiles);
+            f.Vault([("github", "ghp_Fixture_Secret_1", "octo")]);
+            f.SshKey("construct_far_ed25519");
+            f.Instances(new JsonObject
+            {
+                ["version"] = 1, ["defaultInstance"] = "far",
+                ["instances"] = new JsonObject
+                {
+                    ["agent-vm"] = new JsonObject
+                    {
+                        ["backend"] = "hyperv-local", ["vmName"] = "Agent-VM", ["sshHost"] = "agent-vm.mshome.net",
+                        ["sshPort"] = 22, ["hostAlias"] = "agent-vm", ["keyName"] = "agent_vm_ed25519", ["configBranch"] = "vm",
+                    },
+                    ["far"] = new JsonObject
+                    {
+                        ["backend"] = "hyperv-remote", ["sshHost"] = "127.0.0.1", ["sshPort"] = 2201,
+                        ["service"] = new JsonObject { ["url"] = remote.Url, ["auth"] = "token" },
+                    },
+                },
+            });
+            f.RemoteHost(remote.Url, remote.Pin, remoteToken);
+        });
+        rig.Agent.Host.Upgrade.EngineInstaller = _ =>
+        {
+            installs++;
+            throw new AgentFailure(500, "unexpected-local-install", "Local engine should not be installed for a remote-only PC.");
+        };
+
+        var before = await rig.Agent.GetAsync("api/upgrade");
+        Assert.True(before["legacy"]!.GetValue<bool>());
+        Assert.Empty(before["found"]!["localVms"]!.AsArray());
+        Assert.Equal(["far"], before["found"]!["remoteVms"]!.AsArray().Select(n => n!.GetValue<string>()));
+
+        await rig.Agent.PostAsync("api/upgrade/engine", null, HttpStatusCode.Accepted);
+        await rig.Agent.Host.Upgrade.Work;
+        var afterEngine = await rig.Agent.GetAsync("api/upgrade");
+        Assert.True(afterEngine["error"] is null, afterEngine.ToJsonString());
+        Assert.Equal("skipped", afterEngine["steps"]![0]!["state"]!.GetValue<string>());
+        Assert.Equal(0, installs);
+        Assert.Null(rig.Agent.Host.Upgrade.Bridge.Read().LocalEngine);
+        var host = (await rig.Agent.GetAsync("api/state"))["engines"]!.AsArray().Single(e => e!["url"]!.GetValue<string>() == remote.Url)!;
+        Assert.Equal(host["id"]!.GetValue<string>(), afterEngine["storeEngine"]!.GetValue<string>());
+
+        await rig.SetupAsync();
+        var converted = await rig.ConvertAsync();
+        Assert.Equal("converted", converted["stage"]!.GetValue<string>());
+        Assert.DoesNotContain(converted["items"]!.AsArray(), i => i!["id"]!.GetValue<string>() == "vm:agent-vm");
+        Assert.DoesNotContain(converted["items"]!.AsArray(), i => i!["state"]!.GetValue<string>() == "failed");
+    }
+
+    [Fact]
+    public async Task A_companion_only_install_without_instances_json_or_default_ssh_key_skips_local_engine()
+    {
+        using var remote = new EngineHost().WithSource();
+        var remoteToken = await remote.AddUserAsync("alice");
+        var installs = 0;
+        await using var rig = await UpgradeRig.CreateAsync(f =>
+        {
+            f.Vault([("github", "ghp_Fixture_Secret_1", "octo")]);
+            f.Write(Path.Combine("The-Construct", "companion", "hosts.json"),
+                new JsonObject { ["hosts"] = new JsonArray(new JsonObject { ["url"] = remote.Url }) }.ToJsonString());
+            f.RemoteHost(remote.Url, remote.Pin, remoteToken);
+        });
+        rig.Agent.Host.Upgrade.EngineInstaller = _ =>
+        {
+            installs++;
+            throw new AgentFailure(500, "unexpected-local-install", "Local engine should not be installed when no default SSH key exists.");
+        };
+
+        var before = await rig.Agent.GetAsync("api/upgrade");
+        Assert.True(before["legacy"]!.GetValue<bool>());
+        Assert.Empty(before["found"]!["localVms"]!.AsArray());
+
+        await rig.Agent.PostAsync("api/upgrade/engine", null, HttpStatusCode.Accepted);
+        await rig.Agent.Host.Upgrade.Work;
+        var afterEngine = await rig.Agent.GetAsync("api/upgrade");
+        Assert.True(afterEngine["error"] is null, afterEngine.ToJsonString());
+        Assert.Equal("skipped", afterEngine["steps"]![0]!["state"]!.GetValue<string>());
+        Assert.Equal(0, installs);
+    }
 }
 
 /// <summary>One upgrade under test: the old install, this PC's engine (fake Hyper-V and a guest that adopts), the agent.</summary>

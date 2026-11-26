@@ -145,20 +145,27 @@ public sealed class LegacyState
 
     /// <summary>
     /// The VMs the old client knew. Without <c>instances.json</c> the one default local VM (<c>agent-vm</c>),
-    /// as the old client synthesizes it; entries that break the old client's own rules are skipped with a problem.
+    /// as the old client synthesizes it, when this PC shows it had one (its root key from provisioning is in
+    /// <c>~/.ssh</c>); entries that break the old client's own rules are skipped with a problem. The old client's
+    /// <c>Save-ConstructInstances</c> also materialized the synthesized default <c>agent-vm</c> (<c>hyperv-local</c>)
+    /// into <c>instances.json</c> whenever a remote VM was saved, so a local <c>agent-vm</c> entry is likewise only
+    /// taken when its SSH key exists in <c>~/.ssh</c>.
     /// </summary>
     public IReadOnlyList<LegacyInstance> Instances()
     {
         var settings = InstallSettings();
         var path = Path.Combine(Root, "instances.json");
         var document = ReadObject(path);
+        var defaultKey = Path.Combine(Home, ".ssh", "agent_vm_ed25519");
         if (document?["instances"] is not JsonObject entries)
-            return [new LegacyInstance(DefaultInstance, true, "agent-vm.mshome.net", 22, "agent_vm_ed25519", "vm", null, settings, null)];
+            return File.Exists(defaultKey)
+                ? [new LegacyInstance(DefaultInstance, true, "agent-vm.mshome.net", 22, "agent_vm_ed25519", "vm", null, settings, null)]
+                : [];
 
         var list = new List<LegacyInstance>();
         // The old registry always synthesizes the default VM unless an entry `"agent-vm": null` removes it; it is
         // taken here when this PC shows it had one (its root key from provisioning is in ~/.ssh).
-        if (!entries.ContainsKey(DefaultInstance) && File.Exists(Path.Combine(Home, ".ssh", "agent_vm_ed25519")))
+        if (!entries.ContainsKey(DefaultInstance) && File.Exists(defaultKey))
             list.Add(new LegacyInstance(DefaultInstance, true, "agent-vm.mshome.net", 22, "agent_vm_ed25519", "vm", null, settings, null));
         foreach (var (name, node) in entries.OrderBy(e => e.Key, StringComparer.Ordinal))
         {
@@ -169,6 +176,9 @@ public sealed class LegacyState
             if (!local && backend != "hyperv-remote") continue;
             var keyName = Text(raw, "keyName") ?? (isDefault ? "agent_vm_ed25519" : "construct_" + name + "_ed25519");
             if (!KeyFileRule.IsMatch(keyName)) continue;
+            // Save-ConstructInstances materialized the synthesized local default `agent-vm` into instances.json
+            // even on remote-only PCs that never provisioned a local VM; only take it when its SSH key exists.
+            if (isDefault && local && !File.Exists(Path.Combine(Home, ".ssh", keyName))) continue;
             var host = Text(raw, "sshHost") ?? Text(raw, "vmHost") ?? (isDefault ? "agent-vm.mshome.net" : name + ".mshome.net");
             var port = raw["sshPort"] is JsonValue p && p.TryGetValue<double>(out var d) && d is >= 1 and <= 65535 ? (int)d : 22;
             var branch = Text(raw, "configBranch") ?? (isDefault ? "vm" : "vm-" + name);
