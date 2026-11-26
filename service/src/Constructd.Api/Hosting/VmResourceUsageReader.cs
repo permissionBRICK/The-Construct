@@ -39,7 +39,7 @@ public sealed class VmResourceUsageReader(IHypervisorInventory inventory, IClock
             return new(_sample!.ObservedAt, stale, actual.State,
                 actual.CpuUsagePercent is >= 0 and <= 100 ? actual.CpuUsagePercent : null,
                 actual.MemoryAssignedBytes, demand,
-                actual.Complete && actual.Disks.All(d => d.Readable)
+                actual.Complete && actual.Disks.All(d => d.Readable && d.AllocationKnown)
                     ? actual.Disks.DistinctBy(d => d.Path, StringComparer.OrdinalIgnoreCase).Sum(d => d.FileBytes) : null,
                 actual.UptimeSeconds is >= 0 ? actual.UptimeSeconds : null);
         }

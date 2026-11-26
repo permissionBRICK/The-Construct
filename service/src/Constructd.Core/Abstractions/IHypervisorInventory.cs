@@ -2,7 +2,7 @@ using Constructd.Core.Domain;
 
 namespace Constructd.Core.Abstractions;
 
-public sealed record HypervisorDiskInfo(string Path, long MaxBytes, long FileBytes, string? ParentPath, string Volume, bool Readable);
+public sealed record HypervisorDiskInfo(string Path, long MaxBytes, long FileBytes, string? ParentPath, string Volume, bool Readable, bool AllocationKnown = true);
 public sealed record HypervisorVmInfo(
     string Name,
     string Id,

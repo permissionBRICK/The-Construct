@@ -67,6 +67,21 @@ public sealed class VmResourceUsageTests
     }
 
     [Fact]
+    public async Task Unknown_disk_allocation_is_not_reported_as_zero_usage()
+    {
+        var clock = new MutableClock(); var inventory = new FakeHypervisorInventory();
+        inventory.Snapshot = inventory.Snapshot with
+        {
+            ObservedAt = clock.UtcNow,
+            Vms = [Sample() with { Disks = [new("crypt-vm:vm-100-disk-0", 200L << 30, 0, null, "crypt-vm", Readable: true, AllocationKnown: false)] }]
+        };
+        using var reader = new VmResourceUsageReader(inventory, clock);
+        var sample = await reader.ReadAsync("work-vm", default);
+        Assert.Null(sample.DiskFileBytes);
+        Assert.Equal(12, sample.CpuUsagePercent);
+    }
+
+    [Fact]
     public async Task Vm_inventory_exposes_usage_and_shutdown_for_primary_to_owner_only()
     {
         using var app = new TestApp();

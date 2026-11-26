@@ -46,7 +46,7 @@ public sealed partial class ProxmoxInventory(IProcessRunner runner, ConstructdOp
             }
 
             var snapshot = Parse(epoch, observedAt, status.Value, storages.Value, guests.Value, options.Proxmox.Storage, reservations);
-            return snapshot is null ? Unavailable(epoch) : await WithChildrenAsync(snapshot, guests.Value, reservations, ct);
+            return snapshot is null ? Unavailable(epoch) : await WithChildrenAsync(snapshot, storages.Value, guests.Value, reservations, ct);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -59,11 +59,10 @@ public sealed partial class ProxmoxInventory(IProcessRunner runner, ConstructdOp
     }
 
     /// <summary>
-    /// The snapshot out of the three answers, or null when a required number is missing. Pure.
-    /// Storage reservations that name a VM disk (<c>disk:…</c>) get evidence: present with the
-    /// guest's configured disk size when a VM of that name exists on the node, absent otherwise —
-    /// the placement is decided before the VM has a numeric id, so the evidence is keyed by the
-    /// reservation's own path rather than by the volume name Proxmox later assigns.
+    /// The snapshot out of the three node answers, or null when a required number is missing. Pure.
+    /// Disks start with unknown thin allocation (<c>FileBytes = 0</c>, <c>AllocationKnown = false</c>)
+    /// because <c>/nodes/{node}/qemu</c> only reports virtual <c>maxdisk</c>; <see cref="ReadAsync(IReadOnlyList{Reservation}, CancellationToken)"/>
+    /// fills in actual allocated bytes from storage afterwards.
     /// </summary>
     public static InventorySnapshot? Parse(long epoch, DateTimeOffset now, JsonElement status, JsonElement storages, JsonElement guests, string diskStorage,
         IReadOnlyList<Reservation>? reservations = null)
@@ -134,7 +133,7 @@ public sealed partial class ProxmoxInventory(IProcessRunner runner, ConstructdOp
                     MemoryAssignedBytes: state == VmState.Running ? maxMem : 0,
                     DynamicMemory: false,
                     MemoryMaximumBytes: null,
-                    Disks: [new HypervisorDiskInfo($"{diskStorage}:vm-{vmid}-disk-0", maxDisk, maxDisk, null, diskStorage, Readable: true)],
+                    Disks: [new HypervisorDiskInfo($"{diskStorage}:vm-{vmid}-disk-0", maxDisk, 0, null, diskStorage, Readable: true, AllocationKnown: false)],
                     SavedStateBytes: null,
                     // Suspend-to-disk state lands on the VM's disk storage; the ledger accounts it there.
                     ConfigVolume: diskStorage,
@@ -172,13 +171,20 @@ public sealed partial class ProxmoxInventory(IProcessRunner runner, ConstructdOp
     {
         var result = await runner.RunAsync(options.Proxmox.PveshPath, ["get", path, "--output-format", "json"],
             standardInput: null, QueryTimeout, standardOutputLines: null, ct).ConfigureAwait(false);
-        if (!result.Succeeded)
+        if (!result.Succeeded || string.IsNullOrWhiteSpace(result.StandardOutput))
         {
             return null;
         }
 
-        using var document = JsonDocument.Parse(result.StandardOutput);
-        return document.RootElement.Clone();
+        try
+        {
+            using var document = JsonDocument.Parse(result.StandardOutput);
+            return document.RootElement.Clone();
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
     }
 
     private static long Long(JsonElement element, string property) =>
