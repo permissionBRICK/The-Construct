@@ -7,13 +7,19 @@ namespace Constructd.Proxmox;
 
 public sealed partial class ProxmoxInventory
 {
-    // Keep the primary inventory parser unchanged. Child identities are SMBIOS UUIDs, and disk-0
-    // is usually EFI variables, not the guest disk. Resolve those facts from the tagged config.
-    private async Task<InventorySnapshot> WithChildrenAsync(InventorySnapshot snapshot, JsonElement guests,
+    // Keep the primary inventory parser pure. Tagged primary and child VMs resolve their SMBIOS UUID
+    // and real disk volumes from config, and actual storage allocation is queried in one pass after.
+    private async Task<InventorySnapshot> WithChildrenAsync(InventorySnapshot snapshot, JsonElement storages, JsonElement guests,
         IReadOnlyList<Reservation> reservations, CancellationToken ct)
     {
         var vms = snapshot.Vms.ToList(); var artifacts = snapshot.Artifacts!.ToList();
         var commands = new ProxmoxCommands(runner, options);
+        var diskSources = new Dictionary<int, DiskSource>();
+        for (var i = 0; i < vms.Count; i++)
+        {
+            if (int.TryParse(vms[i].Id, NumberStyles.Integer, CultureInfo.InvariantCulture, out var numericId))
+                diskSources[i] = new DiskSource(numericId, FromConfig: false, vms[i].Disks.Select(d => d.Path).ToList());
+        }
         foreach (var guest in guests.EnumerateArray().Where(g => ProxmoxCommands.HasChildTag(g) ||
                      (ProxmoxCommands.String(g, "tags") ?? "").Split(';').Contains("construct")))
         {
@@ -28,7 +34,41 @@ public sealed partial class ProxmoxInventory
             // Its inventory identity must agree, or capacity would count a managed primary twice.
             if (!ProxmoxCommands.HasChildTag(guest))
             {
-                vms[index] = old with { Id = uuid };
+                var primaryDisks = new List<HypervisorDiskInfo>();
+                var primaryNative = new List<string>();
+                var primarySystem = ProxmoxChildVmPlatform.DiskSlot(config);
+                foreach (var slot in new[] { primarySystem, "scsi0", "sata0", "virtio0", "efidisk0", "tpmstate0" }.Distinct(StringComparer.Ordinal))
+                {
+                    var text = ProxmoxCommands.String(config, slot);
+                    if (text is null || text.Contains("media=cdrom", StringComparison.Ordinal)) continue;
+                    var volume = text.Split(',')[0];
+                    if (!volume.Contains(':')) continue;
+                    var storage = volume.Split(':')[0];
+                    var size = Bytes(ProxmoxCommands.Property(text, "size"))
+                        ?? (slot == primarySystem && old.Disks.Count > 0 ? old.Disks[0].MaxBytes : (long?)null);
+                    if (size is null) continue;
+                    primaryDisks.Add(new(volume, size.Value, 0, null, storage, Readable: true, AllocationKnown: false));
+                    primaryNative.Add(volume);
+                }
+                if (primaryDisks.Count > 0)
+                {
+                    var primaryPlacement = $"{options.Proxmox.Storage}:vm-{old.Name}-disk-0";
+                    if (reservations.Any(r => string.Equals(r.VmName, old.Name, StringComparison.OrdinalIgnoreCase) &&
+                                              r.Artifact == "disk:" + primaryPlacement))
+                        primaryDisks[0] = primaryDisks[0] with { Path = primaryPlacement };
+                    vms[index] = old with { Id = uuid, Disks = primaryDisks, ConfigVolume = primaryDisks[0].Volume };
+                    diskSources[index] = new DiskSource(id, FromConfig: true, primaryNative);
+                    for (var i = 0; i < artifacts.Count; i++)
+                    {
+                        var row = reservations.First(r => r.Artifact == artifacts[i].Artifact);
+                        if (string.Equals(row.VmName, old.Name, StringComparison.OrdinalIgnoreCase))
+                            artifacts[i] = artifacts[i] with { Path = primaryDisks[0].Path, Volume = primaryDisks[0].Volume, FileBytes = 0 };
+                    }
+                }
+                else
+                {
+                    vms[index] = old with { Id = uuid };
+                }
                 continue;
             }
             var description = ProxmoxCommands.String(config, "description") ?? "";
@@ -38,6 +78,7 @@ public sealed partial class ProxmoxInventory
                 throw ProxmoxCommands.Failure();
             var state = await commands.StateAsync(id, ct);
             var disks = new List<HypervisorDiskInfo>();
+            var nativeVolumes = new List<string>();
             var system = ProxmoxChildVmPlatform.DiskSlot(config);
             foreach (var slot in new[] { system, "efidisk0", "tpmstate0" })
             {
@@ -46,9 +87,8 @@ public sealed partial class ProxmoxInventory
                 var volume = text.Split(',')[0]; var storage = volume.Split(':')[0];
                 if (!volume.Contains(':')) throw ProxmoxCommands.Failure();
                 var size = Bytes(ProxmoxCommands.Property(text, "size")) ?? throw ProxmoxCommands.Failure();
-                // Config gives virtual size, never thin allocation. Reserve its full possible growth
-                // until an allocation-aware storage reader is available.
-                disks.Add(new(volume, size, 0, null, storage, true));
+                disks.Add(new(volume, size, 0, null, storage, Readable: true, AllocationKnown: false));
+                nativeVolumes.Add(volume);
             }
             // Admission chose this logical path before a numeric VM ID existed. The ledger's
             // observed-disk hold must use the same key, otherwise it adds a second full disk hold.
@@ -68,6 +108,7 @@ public sealed partial class ProxmoxInventory
             vms[index] = old with { Id = uuid, State = state, RawState = state.ToString(), Disks = disks,
                 SavedStateBytes = savedBytes, ConfigVolume = savedVolume?.Split(':')[0] ?? disks[0].Volume,
                 MemoryAssignedBytes = state is VmState.Running or VmState.Paused ? old.MemoryStartupBytes : 0 };
+            diskSources[index] = new DiskSource(id, FromConfig: true, nativeVolumes);
             for (var i = 0; i < artifacts.Count; i++)
             {
                 var row = reservations.First(r => r.Artifact == artifacts[i].Artifact);
@@ -84,7 +125,7 @@ public sealed partial class ProxmoxInventory
                 File.Exists(Path.Combine(Path.GetDirectoryName(Path.GetFullPath(options.DatabasePath))!, "children", name + ".json")))
                 artifacts[i] = artifacts[i] with { Presence = ArtifactPresence.Unknown };
         }
-        return snapshot with { Vms = vms, Artifacts = artifacts };
+        return await ApplyDiskAllocationsAsync(snapshot with { Vms = vms, Artifacts = artifacts }, storages, diskSources, reservations, ct);
     }
     private static long? Bytes(string? size)
     {

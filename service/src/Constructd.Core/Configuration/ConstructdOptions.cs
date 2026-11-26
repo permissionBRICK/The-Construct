@@ -303,6 +303,15 @@ public sealed class ProxmoxOptions
 
     /// <summary>The <c>pvesh</c> command (read-only API queries).</summary>
     public string PveshPath { get; set; } = "pvesh";
+
+    /// <summary>The <c>zfs</c> command (reading zvol allocation on ZFS storage).</summary>
+    public string ZfsPath { get; set; } = "zfs";
+
+    /// <summary>The <c>lvs</c> command (reading thin LV allocation on LVM-thin storage).</summary>
+    public string LvsPath { get; set; } = "lvs";
+
+    /// <summary>The <c>stat</c> command (reading allocated blocks on file-based storage).</summary>
+    public string StatPath { get; set; } = "stat";
 }
 
 /// <summary>
