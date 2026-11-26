@@ -37,6 +37,8 @@ const WINDOWS_GAPS = API_GAPS.filter(f => f !== 'windows-sign-in');
 const NA = 'Not available yet';
 const RESTART_LINE = 'Windows has to restart to turn on Hyper-V.';
 const PREFS_KEY = 'construct.prefs';
+const AUTO_UPDATE_TIP_KEY = 'tip:auto-update';
+const AUTO_UPDATE_TIP_STORE = 'construct.autoUpdateTipDismissed';
 
 interface Started { kind: JobKind; from?: string; to?: string; freshImage?: boolean; backupId?: string; agents?: string[] }
 
@@ -165,6 +167,8 @@ export class ApiBackend implements Backend {
   private seq = 1;
   /** Notices put away on this device, as the agent keeps them for every surface (finding 45). */
   private dismissed = new Set<string>();
+  private dismissedLoaded = false;
+  private deviceLoaded = false;
   /** Job starts this page asked for that the engine has not answered yet, by VM: shown as working at once (finding 15). */
   private starting = new Map<string, JobKind>();
   /** Jobs this UI started, with the kind it shows them as, the version an update goes from and to, and how a reinstall was asked for. */
@@ -411,6 +415,7 @@ export class ApiBackend implements Backend {
   private async loadDismissed() {
     try {
       for (const key of await ok(this.agent.GET('/api/notices/dismissed'))) this.dismissed.add(key);
+      this.dismissedLoaded = true;
       this.compose();
     } catch { /* the notices stay as they were */ }
   }
@@ -443,6 +448,7 @@ export class ApiBackend implements Backend {
       prefs.channel = set.value.channel as Prefs['channel'];
       prefs.startWithOs = !!set.value.startWithOs;
       this.deviceAutoUpdate = set.value.autoUpdate;
+      this.deviceLoaded = true;
     }
     if (feat.status === 'fulfilled') {
       device.can = { mic: feat.value.microphone, share: feat.value.share, startWithOs: feat.value.startWithOs };
@@ -800,12 +806,16 @@ export class ApiBackend implements Backend {
     jobs.sort((a, b) => a.at.localeCompare(b.at));
     const auto = [...this.slices.values()].map(s => s.autoReprovision).filter(x => x !== null);
     const hostAuto = [...this.slices.values()].filter(s => s.me?.role === 'admin' && s.admin?.updates).map(s => s.admin!.updates!.auto);
+    const autoUpdate = this.deviceAutoUpdate && auto.every(Boolean) && hostAuto.every(Boolean);
+    const autoUpdateTip = this.dismissedLoaded && this.deviceLoaded && !autoUpdate && !this.deviceAutoUpdate
+      && !this.dismissed.has(AUTO_UPDATE_TIP_KEY) && !store.get(AUTO_UPDATE_TIP_STORE, false);
     this.emit({
       vms, hosts, jobs: jobs.map(({ at: _at, ...j }) => j),
       loading: this.isLoading(),
+      autoUpdateTip,
       // On only when this device, every engine's reprovision of the user's VMs and every host the user administers
       // update by themselves; the switch sets all of them.
-      prefs: { ...this.s.prefs, autoUpdate: this.deviceAutoUpdate && auto.every(Boolean) && hostAuto.every(Boolean) },
+      prefs: { ...this.s.prefs, autoUpdate },
     });
   }
 
@@ -2370,7 +2380,10 @@ export class ApiBackend implements Backend {
       // This device updates itself, and each engine reprovisions the user's VMs after a release.
       this.deviceAutoUpdate = patch.autoUpdate;
       void this.run(() => ok(this.agent.PUT('/api/device/settings', { body: { autoUpdate: patch.autoUpdate } }))).then(() => this.loadDevice());
-      for (const id of this.slices.keys()) void this.run(() => ok(this.engine(id).PUT('/api/v1/me/updates', { body: { autoReprovision: patch.autoUpdate! } })), undefined, id);
+      for (const [id, sl] of this.slices) {
+        if (sl.autoReprovision !== null) sl.autoReprovision = patch.autoUpdate;
+        void this.run(() => ok(this.engine(id).PUT('/api/v1/me/updates', { body: { autoReprovision: patch.autoUpdate! } })), undefined, id);
+      }
       this.setHostsAutoUpdate(patch.autoUpdate);
     }
     if (patch.channel !== undefined || patch.startWithOs !== undefined) {
@@ -2378,6 +2391,19 @@ export class ApiBackend implements Backend {
       void this.run(() => ok(this.agent.PUT('/api/device/settings', { body })), 'Saved').then(() => this.loadDevice());
     }
     if (patch.notifications !== undefined) this.note(NA);
+  }
+
+  dismissAutoUpdateTip() {
+    this.dismissed.add(AUTO_UPDATE_TIP_KEY);
+    store.set(AUTO_UPDATE_TIP_STORE, true);
+    this.compose();
+    void this.agent.POST('/api/notices/dismissed', { body: { key: AUTO_UPDATE_TIP_KEY } }).catch(() => { /* hidden here; the others keep it */ });
+  }
+
+  enableAutoUpdateFromTip() {
+    this.dismissAutoUpdateTip();
+    this.setPrefs({ autoUpdate: true });
+    this.note('Automatic updates enabled');
   }
 
   /** Each host the user administers updates itself with the switch (`updates.auto`), as this device and the user's VMs

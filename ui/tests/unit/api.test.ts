@@ -835,6 +835,85 @@ describe('ApiBackend host administration', () => {
     expect(after.children.find(c => c.name === 'priv-kid')!.power).toBe('off');
     expect(after.children.find(c => c.name === 'shared-kid')!.power).toBe('on');
   });
+
+  it('offers the one-time auto-update discovery tip only when auto-update is off and not dismissed, and permanently hides on dismiss or enable', async () => {
+    const clearStore = () => { try { localStorage.removeItem('construct.autoUpdateTipDismissed'); } catch { /* node */ } };
+    clearStore();
+
+    const a = world();
+    a.on('GET', '/api/notices/dismissed', { json: [] });
+    a.on('POST', '/api/notices/dismissed', b => ({ json: [(b as { key: string }).key] }));
+    await a.be.start();
+    // Auto-update is off and tip has not been dismissed yet.
+    expect(a.be.snapshot().prefs.autoUpdate).toBe(false);
+    expect(a.be.snapshot().autoUpdateTip).toBe(true);
+
+    // Dismissing hides the tip permanently without enabling auto-update.
+    a.be.dismissAutoUpdateTip();
+    await a.settle();
+    expect(a.be.snapshot().autoUpdateTip).toBe(false);
+    expect(a.be.snapshot().prefs.autoUpdate).toBe(false);
+    expect(a.calls.some(c => c.method === 'POST' && c.path === '/api/notices/dismissed' && (c.body as { key?: string })?.key === 'tip:auto-update')).toBe(true);
+
+    // When the agent already has tip:auto-update dismissed, it does not show again.
+    clearStore();
+    const b = world();
+    b.on('GET', '/api/notices/dismissed', { json: ['tip:auto-update'] });
+    await b.be.start();
+    expect(b.be.snapshot().autoUpdateTip).toBe(false);
+
+    // Enabling from the tip enables auto-update and permanently dismisses the tip even if later toggled off.
+    clearStore();
+    const c = world();
+    let devAuto = false;
+    let meAuto = false;
+    let hostAuto = false;
+    c.on('GET', '/api/notices/dismissed', { json: [] });
+    c.on('POST', '/api/notices/dismissed', body => ({ json: [(body as { key: string }).key] }));
+    c.on('GET', '/api/device/settings', () => ({ json: { channel: 'stable', autoUpdate: devAuto, startWithOs: false } }));
+    c.on('PUT', '/api/device/settings', body => {
+      const b2 = body as { autoUpdate?: boolean };
+      if (b2.autoUpdate !== undefined) devAuto = b2.autoUpdate;
+      return { json: { channel: 'stable', autoUpdate: devAuto, startWithOs: false } };
+    });
+    c.on('GET', `/api/engines/${E1}/api/v1/me/updates`, () => ({ json: { autoReprovision: meAuto } }));
+    c.on('PUT', `/api/engines/${E1}/api/v1/me/updates`, body => {
+      const b2 = body as { autoReprovision?: boolean };
+      if (b2.autoReprovision !== undefined) meAuto = b2.autoReprovision;
+      return { json: { autoReprovision: meAuto } };
+    });
+    c.on('GET', `/api/engines/${E1}/api/v1/host/updates/status`, () => ({
+      json: { supportsAutoApply: true, installed: { commit: 'c'.repeat(40), packageVersion: '3.1.0', installedAt: null, source: 'x' }, current: null, history: [], recoveryRecord: null, latestKnown: null, version: '3.1.0', channel: 'main', auto: hostAuto, available: { version: '3.2.0', commit: 'e'.repeat(40) }, availableError: null, databaseCopy: null },
+    }));
+    c.on('GET', `/api/engines/${E1}/api/v1/host/config`, () => ({
+      json: { updates: { repository: 'o/r', channel: 'main', auto: hostAuto, drainTimeoutMinutes: 60, healthTimeoutSeconds: 120, source: 'stored', updatedAt: null } },
+    }));
+    c.on('PUT', `/api/engines/${E1}/api/v1/host/config`, body => {
+      const u = (body as { updates?: { auto?: boolean } }).updates;
+      if (u?.auto !== undefined) hostAuto = u.auto;
+      return { json: {} };
+    });
+    await c.be.start();
+    expect(c.be.snapshot().autoUpdateTip).toBe(true);
+    c.be.enableAutoUpdateFromTip();
+    await c.settle();
+    expect(c.be.snapshot().autoUpdateTip).toBe(false);
+    expect(c.be.snapshot().prefs.autoUpdate).toBe(true);
+    expect(c.calls.some(x => x.method === 'PUT' && x.path === '/api/device/settings' && (x.body as { autoUpdate?: boolean })?.autoUpdate === true)).toBe(true);
+    expect(c.calls.some(x => x.method === 'POST' && x.path === '/api/notices/dismissed' && (x.body as { key?: string })?.key === 'tip:auto-update')).toBe(true);
+    c.be.setPrefs({ autoUpdate: false });
+    await c.settle();
+    expect(c.be.snapshot().autoUpdateTip).toBe(false);
+
+    // When auto-update is already enabled at startup, the tip does not show.
+    clearStore();
+    const d = world();
+    d.on('GET', '/api/notices/dismissed', { json: [] });
+    d.on('GET', '/api/device/settings', { json: { channel: 'stable', autoUpdate: true, startWithOs: true } });
+    await d.be.start();
+    expect(d.be.snapshot().autoUpdateTip).toBe(false);
+    clearStore();
+  });
 });
 
 describe('SseParser', () => {

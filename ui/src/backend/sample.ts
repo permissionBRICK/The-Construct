@@ -233,6 +233,7 @@ export function sampleState(): State {
     notice: null,
     na: [],
     firstRun: null,
+    autoUpdateTip: false,
   };
 }
 

@@ -357,6 +357,21 @@ export function ReinstallConfirm({ vm, onCancel }: { vm: Vm; onCancel: () => voi
   );
 }
 
+/** One-time discovery tooltip anchored off the Update button when an update is available and auto-update is off. */
+function AutoUpdateTip() {
+  const { s, be } = useApp();
+  if (!s.autoUpdateTip || s.prefs.autoUpdate || s.everything?.running) return null;
+  return (
+    <div class="tippop" role="dialog" aria-label="Automatic updates">
+      <p>Did you know Construct can update automatically? Enable automatic updates to keep Construct, your hosts, and your VMs up to date.</p>
+      <div class="acts one">
+        <Btn sm onClick={() => be.dismissAutoUpdateTip()}>Dismiss</Btn>
+        <Btn sm kind="pri" onClick={() => be.enableAutoUpdateFromTip()}>Enable</Btn>
+      </div>
+    </div>
+  );
+}
+
 /** "Only this VM", the secondary choice of Update. */
 function UpdateMore({ vm }: { vm: Vm }) {
   const { be } = useApp();
@@ -381,6 +396,7 @@ export function Tiles({ vm, onReinstall }: { vm: Vm; onReinstall: () => void }) 
             <span class="upv" title={a.to}><Icon n="up" /><span>{v.base}</span></span>{v.build && <span class="upb">{v.build}</span>}<span>Update</span>
           </button>
           <UpdateMore vm={vm} />
+          <AutoUpdateTip />
         </div>
       ) : (
         <button type="button" class="b tile" onClick={() => be.reprovision(vm.id)} title={a.waits ? `${a.waits} changed` : undefined}>
@@ -402,6 +418,7 @@ export function ActionButtons({ vm, busy, onReinstall }: { vm: Vm; busy: boolean
         <span class="split">
           <Btn icon="up" onClick={() => be.updateEverything()} disabled={busy}>Update<UpTag v={shortVersion(a.to, s.prefs.channel)} /></Btn>
           <UpdateMore vm={vm} />
+          <AutoUpdateTip />
         </span>
       ) : (
         <button type="button" class="b" onClick={() => be.reprovision(vm.id)} disabled={busy} title={a.waits ? `${a.waits} changed` : undefined}>

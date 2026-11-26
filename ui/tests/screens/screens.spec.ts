@@ -761,3 +761,21 @@ test('the overview shuts down and starts a child VM with a compact power button 
   await mainPower.click();
   await expect(row.getByRole('button', { name: 'Start win-test' })).toBeVisible();
 });
+
+test('the auto-update discovery tooltip shows off the Update button in pop-out and window, and dismisses or enables', async ({ page }) => {
+  // Pop-out: dismiss hides it without enabling auto-update.
+  await open(page, 'pop', 'update-tip', 'dark');
+  const popTip = page.getByRole('dialog', { name: 'Automatic updates' });
+  await expect(popTip).toBeVisible();
+  await popTip.getByRole('button', { name: 'Dismiss' }).click();
+  await expect(popTip).toHaveCount(0);
+
+  // Main window: Enable hides it and turns on Automatic updates.
+  await open(page, 'win', 'update-tip', 'dark');
+  const winTip = page.getByRole('dialog', { name: 'Automatic updates' });
+  await expect(winTip).toBeVisible();
+  await winTip.getByRole('button', { name: 'Enable' }).click();
+  await expect(winTip).toHaveCount(0);
+  await page.getByRole('button', { name: /Construct/ }).click();
+  await expect(page.getByRole('switch', { name: 'Automatic updates' })).toHaveAttribute('aria-checked', 'true');
+});
