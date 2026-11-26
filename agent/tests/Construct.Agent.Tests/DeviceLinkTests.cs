@@ -381,7 +381,34 @@ public sealed class DeviceLinkTests : IAsyncLifetime
         // On the engine's own machine the direct address; from elsewhere the forward.
         var connections = device.Links.Connections();
         Assert.Equal(new VmAddress("work.mshome.net", 22, "direct"), connections.Single(c => c.Engine == "local").Address);
+        Assert.Null(connections.Single(c => c.Engine == "local").PublicHost);
         Assert.Equal(new VmAddress("pc.example", 2201, "forwarded"), connections.Single(c => c.Engine == "remote").Address);
+        Assert.Equal("pc.example", connections.Single(c => c.Engine == "remote").PublicHost);
+    }
+
+    [Fact]
+    public async Task Forwarded_connections_expose_per_vm_public_host_distinct_from_ssh_host_when_running_and_stopped()
+    {
+        var engines = new FakeEngines().Add("remote", "https://construct.example:7462")
+            .On("remote", "GET whoami", """{"name":"alice"}""")
+            .On("remote", "GET vms", """
+                [{"name":"work","owner":"alice","kind":"primary","state":"running","publicHost":"work.example"},
+                 {"name":"sleepy","owner":"alice","kind":"primary","state":"off","publicHost":"sleepy.example"}]
+                """)
+            .On("remote", "GET vms/work/endpoint", """{"sshHost":"construct.example","sshPort":2201,"publicHost":"work.example"}""")
+            .On("remote", "GET vms/work/forwards", "[]")
+            .On("remote", "GET vms/work/forwards?via=work", "[]");
+        await using var device = new FakeDevice(_directory + "-pattern", engines, new FakePlatform());
+
+        await device.Links.RefreshAsync(CancellationToken.None);
+
+        var connections = device.Links.Connections();
+        var work = connections.Single(c => c.Vm == "work");
+        Assert.Equal(new VmAddress("construct.example", 2201, "forwarded"), work.Address);
+        Assert.Equal("work.example", work.PublicHost);
+        var sleepy = connections.Single(c => c.Vm == "sleepy");
+        Assert.Null(sleepy.Address);
+        Assert.Equal("sleepy.example", sleepy.PublicHost);
     }
 
     [Fact]

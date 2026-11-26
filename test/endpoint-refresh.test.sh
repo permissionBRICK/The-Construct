@@ -67,4 +67,5 @@ CONSTRUCT_AI_TOOLS_FUNCS_ONLY=true REPO_DIR="${repo}" CONSTRUCT_EXTERNAL_HOST=vm
   bash -c 'source "$1/bin/install-ai-tools.sh"; render_agent_system_prompt' _ "${repo}" >"${work}/prompt"
 grep -q 'under the DNS name:' "${work}/prompt"
 grep -qx 'Restart=on-failure' "${repo}/systemd/construct-endpoint-refresh.service"
+! grep -q 'cloud-final.service' "${repo}/systemd/construct-endpoint-refresh.service"
 echo 'Endpoint refresh: local no-op, direct/relayed updates, idempotence, failures, token handling and prompt rendering passed.'

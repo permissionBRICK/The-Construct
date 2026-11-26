@@ -29,15 +29,16 @@ def pairing_script(instance):
 
 
 class PairingForwardTests(unittest.TestCase):
-    def run_pairing(self, client, *, host_exit=0, client_exit=0, tls=True,
+    def run_pairing(self, client, *, host_exit=0, client_exit=0, tls=True, t3_https=None,
                     managed=True, client_url='http://user-pc:18807/', host_url='http://host.example:29991/',
-                    external=None, direct=None, proxy=None):
+                    external=None, direct=None, proxy=None, reject_https_flag=False):
         with tempfile.TemporaryDirectory() as directory:
             tmp = Path(directory)
             config = tmp / 'config.env'
             config.write_text('T3CODE_PORT=5177\nT3CODE_HTTPS_PORT=5443\n' +
                               ('CONSTRUCT_SERVICE_URL=https://host.example:7462\n' if managed else '') +
                               ('T3CODE_PUBLIC_BASE_URL=https://host.example:5443\n' if tls else '') +
+                              (f'T3CODE_HTTPS={t3_https}\n' if t3_https is not None else '') +
                               (f'CONSTRUCT_EXTERNAL_HOST={external}\n' if external else '') +
                               (f'CONSTRUCT_DIRECT_HOST={direct}\n' if direct else '') +
                               (f'T3CODE_PROXY_URL={proxy}\n' if proxy else ''))
@@ -50,6 +51,8 @@ class PairingForwardTests(unittest.TestCase):
                     import json, os, sys
                     args = sys.argv[1:]
                     with open(os.environ['PAIR_LOG'], 'a') as f: f.write(json.dumps(args) + '\\n')
+                    if os.environ.get('REJECT_HTTPS_FLAG') == '1' and '--https-if-available' in args:
+                        sys.exit(1)
                     target = args[args.index('--to') + 1]
                     code = int(os.environ[target.upper() + '_EXIT'])
                     if code == 0: print(os.environ[target.upper() + '_URL'])
@@ -75,7 +78,8 @@ class PairingForwardTests(unittest.TestCase):
                 path.chmod(0o755)
             env = dict(os.environ, PATH=str(bindir) + os.pathsep + os.environ['PATH'],
                        PAIR_CONFIG=str(config), PAIR_LOG=str(log), HOST_EXIT=str(host_exit), CLIENT_EXIT=str(client_exit),
-                       HOST_URL=host_url, CLIENT_URL=client_url)
+                       HOST_URL=host_url, CLIENT_URL=client_url,
+                       REJECT_HTTPS_FLAG='1' if reject_https_flag else '0')
             if client == 'desktop':
                 self.assertIsNotNone(shutil.which('pwsh'), 'CI must provide PowerShell')
                 command = ['pwsh', '-NoProfile', '-File', str(ROOT / 'Get-ConstructT3PairingLink.ps1')]
@@ -173,6 +177,35 @@ class PairingForwardTests(unittest.TestCase):
                     self.assertEqual(data['pairUrl'], 'https://host.example:29991/pair#token=TEST-PAIRING')
                     self.assertEqual(data['links'][1]['pairUrl'], data['pairUrl'])
                     self.assertEqual(len(calls), 1)
+
+    def test_host_https_forward_reuses_https_origin_with_or_without_port(self):
+        for host_url, expected in (
+            ('https://vm.example/', 'https://vm.example/pair#token=TEST-PAIRING'),
+            ('https://vm.example:29991/', 'https://vm.example:29991/pair#token=TEST-PAIRING'),
+        ):
+            with self.subTest(host_url=host_url):
+                result, calls = self.run_pairing('extension', host_url=host_url)
+                self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+                self.assertEqual(json.loads(result.stdout)['pairUrl'], expected)
+                self.assertEqual(len(calls), 1)
+                self.assertIn('--https-if-available', calls[0])
+                self.assertIn('--upstream-tls', calls[0])
+
+    def test_t3_https_off_with_host_https_forward_exposes_plain_port(self):
+        result, calls = self.run_pairing('extension', tls=True, t3_https='false', host_url='https://vm.example/')
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        self.assertEqual(json.loads(result.stdout)['pairUrl'], 'https://vm.example/pair#token=TEST-PAIRING')
+        self.assertEqual(calls[0][1], '5177')
+        self.assertIn('--https-if-available', calls[0])
+        self.assertIn('--upstream-plain', calls[0])
+
+    def test_older_cli_without_https_flag_falls_back_to_plain_host_forward(self):
+        result, calls = self.run_pairing('extension', reject_https_flag=True)
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        self.assertEqual(json.loads(result.stdout)['pairUrl'], 'https://host.example:29991/pair#token=TEST-PAIRING')
+        self.assertEqual(len(calls), 2)
+        self.assertIn('--https-if-available', calls[0])
+        self.assertNotIn('--https-if-available', calls[1])
 
     def test_invalid_proxy_address_is_ignored(self):
         for client in ('extension',):

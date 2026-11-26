@@ -237,12 +237,18 @@ public sealed class ProvisionJobs(IVmRepository vms, IJobStore jobs, IJobQuerySt
                 serviceCaB64 = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(pem));
         }
 
+        var publicHost = options.PublicHostFor(vm.Name);
         var externalHost = s.ExternalHost;
         var externalSshPort = s.ExternalSshPort;
-        if (!options.Solo && string.IsNullOrWhiteSpace(externalHost) && vm.SshForwardPort is int sshPort
-            && !string.IsNullOrWhiteSpace(options.PublicHost))
+        // Converge VMs whose stored ExternalHost still carries the shared SSH host (options.PublicHost)
+        // when PublicHostPattern assigns a per-VM public name. Compat cleanup deadline: 2027-03-01.
+        var staleSharedHost = !string.IsNullOrWhiteSpace(options.PublicHost)
+            && !string.Equals(publicHost, options.PublicHost, StringComparison.OrdinalIgnoreCase)
+            && string.Equals(externalHost, options.PublicHost, StringComparison.OrdinalIgnoreCase);
+        if (!options.Solo && vm.SshForwardPort is int sshPort && !string.IsNullOrWhiteSpace(publicHost)
+            && (string.IsNullOrWhiteSpace(externalHost) || staleSharedHost))
         {
-            externalHost = options.PublicHost;
+            externalHost = publicHost;
             externalSshPort ??= sshPort;
         }
 

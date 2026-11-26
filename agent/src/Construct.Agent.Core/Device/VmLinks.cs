@@ -13,11 +13,12 @@ public sealed record VmAddress(string Host, int Port, string Kind);
 
 /// <summary>One of the user's own VMs on one engine, as the device sees it.</summary>
 /// <param name="Generation">The VM's creation time and incarnation: another value is another machine under the same name.</param>
-public sealed record VmTarget(string Engine, string Vm, string Alias, string State, VmAddress? Address, bool Ipv4, string Generation = "");
+/// <param name="PublicHost">The name the engine advertises this VM's web forwards under (may differ from <see cref="Address"/>'s SSH host when <c>PublicHostPattern</c> is set); null for direct local VMs.</param>
+public sealed record VmTarget(string Engine, string Vm, string Alias, string State, VmAddress? Address, bool Ipv4, string Generation = "", string? PublicHost = null);
 
 /// <summary>A VM on the Connections page: its address, its local forwards and the microphone.</summary>
 public sealed record ConnectionView(string Engine, string Vm, string Alias, string State, VmAddress? Address, bool Linked,
-    IReadOnlyList<ForwardView> Forwards, AudioView Mic, string? SshConfig);
+    IReadOnlyList<ForwardView> Forwards, AudioView Mic, string? SshConfig, string? PublicHost = null);
 
 /// <summary>A forward as the Companion's panel listed it (<see cref="ForwardPlanner.ToPanelForwards"/>): <c>client</c> ones are this device's.</summary>
 public sealed record ForwardView(string Id, string Label, string Target, string Status, int? VmPort, int? LocalPort, string? Url, string Message, bool Closable, string? Child)
@@ -169,6 +170,7 @@ public sealed class VmLinks : IAsyncDisposable
             // The rebuilt machine is tried with the device key as soon as it is back.
             if (rebuilding) lock (_keyProbes) _keyProbes.Remove(Key(engine.Id, name));
             VmAddress? address = null;
+            string? publicHost = null;
             if (state == "running" && !rebuilding)
             {
                 try
@@ -176,16 +178,27 @@ public sealed class VmLinks : IAsyncDisposable
                     // The engine says how SSH is reached (7.2): its own machine dials the VM's direct address where the driver knows one.
                     var endpoint = await _engines.GetAsync(engine.Id, $"vms/{Uri.EscapeDataString(name)}/endpoint", ct).ConfigureAwait(false);
                     if (local && endpoint?["direct"] is JsonObject direct && Text(direct, "host") is { Length: > 0 } directHost && direct["port"]?.GetValue<int>() is int directPort)
+                    {
                         address = new(directHost, directPort, "direct");
+                    }
                     else if (endpoint?["sshHost"]?.GetValue<string>() is { Length: > 0 } host && endpoint["sshPort"]?.GetValue<int>() is int port)
+                    {
                         address = new(host, port, "forwarded");
+                        publicHost = endpoint["publicHost"] is JsonValue ph && ph.TryGetValue<string>(out var s) && s.Length > 0 ? s : null;
+                    }
                 }
                 catch (AgentFailure) { /* no endpoint yet: no link this round */ }
             }
 
+            if (address?.Kind != "direct" && publicHost is null && (!local || address?.Kind == "forwarded"))
+            {
+                var fromVm = Text(vm, "publicHost");
+                if (fromVm.Length > 0) publicHost = fromVm;
+            }
+
             // A host service's forward listens on IPv4 only (SshArgs); a literal IPv6 endpoint is dialled as it is.
             var ipv4 = address is { Kind: "forwarded" } && !(System.Net.IPAddress.TryParse(address.Host, out var ip) && ip.AddressFamily == System.Net.Sockets.AddressFamily.InterNetworkV6);
-            targets.Add(new(engine.Id, name, name, state, address, ipv4, Text(vm, "created") + "/" + Text(vm, "incarnation")));
+            targets.Add(new(engine.Id, name, name, state, address, ipv4, Text(vm, "created") + "/" + Text(vm, "incarnation"), publicHost));
         }
 
         return targets;
@@ -297,7 +310,7 @@ public sealed class VmLinks : IAsyncDisposable
                     : [];
                 var audio = link?.Audio?.Status;
                 return new ConnectionView(t.Engine, t.Vm, t.Alias, t.State, t.Address, link is not null, forwards,
-                    new AudioView(audio?.Enabled ?? false, audio?.Capturing ?? false, audio?.Error ?? link?.MicError), link?.SshConfig);
+                    new AudioView(audio?.Enabled ?? false, audio?.Capturing ?? false, audio?.Error ?? link?.MicError), link?.SshConfig, t.PublicHost);
             }).ToArray();
         }
     }

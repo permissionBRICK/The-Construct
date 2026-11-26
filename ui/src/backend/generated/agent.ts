@@ -1357,6 +1357,7 @@ export interface components {
             forwards: components["schemas"]["ForwardView"][];
             mic: components["schemas"]["AudioView"];
             sshConfig: null | string;
+            publicHost?: null | string;
         };
         ConvertRequest: {
             from?: null | string;

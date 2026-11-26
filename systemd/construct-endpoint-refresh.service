@@ -1,7 +1,7 @@
 [Unit]
 Description=Refresh the Construct guest endpoint and agent prompt
 Wants=network-online.target
-After=network-online.target cloud-final.service
+After=network-online.target
 StartLimitIntervalSec=0
 
 [Service]
