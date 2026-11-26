@@ -542,6 +542,8 @@ export interface Backend {
   /** Open a forwarded port in the browser. */
   openForward(vmId: string, port: number): void;
   openChildConsole(vmId: string, child: string): void;
+  /** Starts or shuts down a child VM owned by this primary VM. */
+  childPower(vmId: string, child: string, on: boolean): void;
   setVmPassword(vmId: string, password: string): void;
   power(vmId: string, on: boolean): void;
   restart(vmId: string): void;

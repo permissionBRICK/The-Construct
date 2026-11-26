@@ -397,6 +397,21 @@ export class FakeBackend implements Backend {
 
   openForward(vmId: string, port: number) { this.set(() => {}, `${this.vmName(vmId)}:${port} opens in the browser`); }
   openChildConsole(_vmId: string, child: string) { this.set(() => {}, `Console of ${child} opens`); }
+
+  childPower(vmId: string, child: string, on: boolean) {
+    this.set(d => {
+      const c = this.vm(d, vmId).children.find(x => x.name === child);
+      if (c) c.power = on ? 'starting' : 'stopping';
+    });
+    const done = () => this.set(d => {
+      const v = this.vm(d, vmId);
+      const c = v.children.find(x => x.name === child);
+      if (c) c.power = on ? 'on' : 'off';
+      const hv = d.hosts.find(h => h.id === v.hostId)?.vms.find(x => x.name === child);
+      if (hv) hv.power = on ? 'on' : 'off';
+    }, `${child} ${on ? 'runs' : 'is off'}`);
+    if (this.timers) this.after(3, done); else done();
+  }
   setVmPassword(vmId: string, password: string) { if (password.length >= 8) this.set(() => {}, `Password of ${this.vmName(vmId)} changed`); }
 
   power(vmId: string, on: boolean) {
