@@ -233,17 +233,27 @@ public sealed class SetupTests : IDisposable
 
     // ---- the engine of a move (R18) ----
 
-    private void OldInstall(string registry)
+    private void OldInstall(string registry, bool defaultKey = false)
     {
         var root = Path.Combine(_windows.LocalAppData, "The-Construct");
         Directory.CreateDirectory(root);
         File.WriteAllText(Path.Combine(root, "instances.json"), registry);
+        var key = Path.Combine(_windows.Home, ".ssh", "agent_vm_ed25519");
+        if (defaultKey)
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(key)!);
+            File.WriteAllText(key, "key");
+        }
+        else if (File.Exists(key))
+        {
+            File.Delete(key);
+        }
     }
 
     [Fact]
     public async Task A_move_from_an_old_install_with_a_local_vm_downloads_the_engine_in_the_console_before_the_agent_starts()
     {
-        OldInstall("""{"version":1,"instances":{"agent-vm":{"backend":"hyperv-local","vmName":"Agent-VM"},"work":{"backend":"hyperv-remote"}}}""");
+        OldInstall("""{"version":1,"instances":{"agent-vm":{"backend":"hyperv-local","vmName":"Agent-VM"},"work":{"backend":"hyperv-remote"}}}""", defaultKey: true);
 
         await Setup().RunAsync("nightly");
 
@@ -267,12 +277,18 @@ public sealed class SetupTests : IDisposable
         Assert.DoesNotContain(_web.Requests, r => r.Url == EngineUrl);
         Assert.False(File.Exists(Path.Combine(AgentHome, AgentSetup.EnginePackageFile)));
         Assert.False(File.Exists(Path.Combine(AgentHome, "bridge.json")));
+
+        // Save-ConstructInstances materialized the default local agent-vm on remote-only PCs without creating its key.
+        OldInstall("""{"version":1,"instances":{"agent-vm":{"backend":"hyperv-local","vmName":"Agent-VM"},"work":{"backend":"hyperv-remote"}}}""");
+        await Setup().RunAsync("nightly");
+        Assert.DoesNotContain(_web.Requests, r => r.Url == EngineUrl);
+        Assert.False(File.Exists(Path.Combine(AgentHome, AgentSetup.EnginePackageFile)));
     }
 
     [Fact]
     public async Task An_engine_download_that_fails_its_check_leaves_nothing_and_the_setup_goes_on()
     {
-        OldInstall("""{"version":1,"instances":{"agent-vm":{"backend":"hyperv-local"}}}""");
+        OldInstall("""{"version":1,"instances":{"agent-vm":{"backend":"hyperv-local"}}}""", defaultKey: true);
         _engineSha = new string('0', 64);
 
         var outcome = await Setup().RunAsync("nightly");
@@ -287,29 +303,43 @@ public sealed class SetupTests : IDisposable
     [Fact]
     public void Whether_the_old_install_runs_a_vm_here_follows_the_converters_defaults()
     {
-        var key = Path.Combine(_windows.Home, ".ssh", "agent_vm_ed25519");
         bool RunsVm(string registry, bool defaultKey = false)
         {
-            OldInstall(registry);
-            if (defaultKey) { Directory.CreateDirectory(Path.GetDirectoryName(key)!); File.WriteAllText(key, "key"); }
-            else if (File.Exists(key)) File.Delete(key);
+            OldInstall(registry, defaultKey);
             return Setup().OldInstallRunsVmHere();
         }
 
         const string Remote = "\"work\":{\"backend\":\"hyperv-remote\",\"service\":{\"url\":\"https://host.example\"}}";
-        Assert.True(RunsVm("""{"version":1,"instances":{"agent-vm":{}}}"""));          // backend omitted: local
+        // Materialized default agent-vm without its SSH key was written by Save-ConstructInstances on remote-only PCs.
+        Assert.False(RunsVm("""{"version":1,"instances":{"agent-vm":{}}}"""));
+        Assert.True(RunsVm("""{"version":1,"instances":{"agent-vm":{}}}""", defaultKey: true));
+        Assert.False(RunsVm("{\"version\":1,\"instances\":{\"agent-vm\":{\"backend\":\"hyperv-local\"}," + Remote + "}}"));
+        Assert.True(RunsVm("{\"version\":1,\"instances\":{\"agent-vm\":{\"backend\":\"hyperv-local\"}," + Remote + "}}", defaultKey: true));
         Assert.True(RunsVm("""{"version":1,"instances":{"box":{"backend":"HyperV-Local"}}}"""));
-        Assert.True(RunsVm("""{"version":1}"""));                                       // no instances: the default VM
+        Assert.False(RunsVm("""{"version":1}"""));                                       // no instances: only with default key
+        Assert.True(RunsVm("""{"version":1}""", defaultKey: true));
         Assert.False(RunsVm("{\"version\":1,\"instances\":{" + Remote + "}}"));
         Assert.True(RunsVm("{\"version\":1,\"instances\":{" + Remote + "}}", defaultKey: true)); // implicit default VM
         Assert.False(RunsVm("{\"version\":1,\"instances\":{\"agent-vm\":null," + Remote + "}}", defaultKey: true)); // removed
         Assert.False(RunsVm("""{"version":1,"instances":{"construct-box":{"backend":"hyperv-local"},"Box":{}}}"""));
+
+        // Without instances.json, legacy files alone do not imply a local VM unless the default key exists.
+        File.Delete(Path.Combine(_windows.LocalAppData, "The-Construct", "instances.json"));
+        var installFolder = Path.Combine(_windows.LocalAppData, "The-Construct", "repo-main", "construct-main");
+        Directory.CreateDirectory(installFolder);
+        File.WriteAllText(Path.Combine(installFolder, ".construct-settings.json"), "{}");
+        var key = Path.Combine(_windows.Home, ".ssh", "agent_vm_ed25519");
+        if (File.Exists(key)) File.Delete(key);
+        Assert.False(Setup().OldInstallRunsVmHere());
+        Directory.CreateDirectory(Path.GetDirectoryName(key)!);
+        File.WriteAllText(key, "key");
+        Assert.True(Setup().OldInstallRunsVmHere());
     }
 
     [Fact]
     public async Task A_cached_engine_package_that_cannot_be_read_does_not_stop_the_setup()
     {
-        OldInstall("""{"version":1,"instances":{"agent-vm":{}}}""");
+        OldInstall("""{"version":1,"instances":{"agent-vm":{}}}""", defaultKey: true);
         Directory.CreateDirectory(AgentHome);
         var cached = Path.Combine(AgentHome, AgentSetup.EnginePackageFile);
         File.WriteAllText(cached, "an older package");
