@@ -405,6 +405,44 @@ test('floating surfaces close open dropdown menus when blurred, hidden, escaped,
   await expect.poll(async () => (await sizes()).at(-1)).toBe(baseHeight);
 });
 
+test('pop-out drops host-injected initial focus until the user tabs or clicks', async ({ page }) => {
+  await page.addInitScript(() => {
+    const listeners = new Set<(e: { data?: unknown }) => void>();
+    (window as unknown as { __emitHost: (data: unknown) => void }).__emitHost = data => {
+      for (const fn of listeners) fn({ data });
+    };
+    (window as unknown as { chrome: unknown }).chrome = {
+      webview: {
+        postMessage: () => {},
+        addEventListener: (type: string, fn: (e: { data?: unknown }) => void) => { if (type === 'message') listeners.add(fn); },
+        removeEventListener: (type: string, fn: (e: { data?: unknown }) => void) => { if (type === 'message') listeners.delete(fn); },
+      },
+    };
+  });
+  await open(page, 'pop', 'calm', 'dark');
+  const summary = page.locator('details.who summary');
+
+  // Unsolicited focus (like WebView2 MoveFocus(Next) on first show) is cleared instead of drawing a focus outline.
+  await summary.evaluate(el => (el as HTMLElement).focus());
+  await expect(summary).not.toBeFocused();
+
+  // Keyboard Tab still starts from the first control and shows :focus-visible.
+  await page.keyboard.press('Tab');
+  await expect(summary).toBeFocused();
+  expect(await summary.evaluate(el => el.matches(':focus-visible'))).toBe(true);
+
+  // Hiding and re-showing the pop-out clears stale focus and suppresses host auto-focus again.
+  await page.evaluate(() => (window as unknown as { __emitHost: (d: unknown) => void }).__emitHost({ type: 'hide' }));
+  await expect(summary).not.toBeFocused();
+  await page.evaluate(() => (window as unknown as { __emitHost: (d: unknown) => void }).__emitHost({ type: 'show' }));
+  await summary.evaluate(el => (el as HTMLElement).focus());
+  await expect(summary).not.toBeFocused();
+
+  // Clicking the dropdown still opens it normally.
+  await summary.click();
+  await expect(page.locator('details.who')).toHaveAttribute('open', '');
+});
+
 test('the overview updates or signs in a coding agent in one click', async ({ page }) => {
   await open(page, 'win', 'calm', 'light');
   const codex = page.locator('tr', { hasText: 'Codex' });

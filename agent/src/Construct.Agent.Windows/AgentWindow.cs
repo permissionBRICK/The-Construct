@@ -52,7 +52,9 @@ internal sealed class AgentWindow : Form
         return new Icon(stream);
     });
 
-    private readonly WebView2 _web = new() { Dock = DockStyle.Fill };
+    // TabStop = false keeps WinForms's first Show() from tab-selecting the WebView2 (MoveFocus(Next)),
+    // which otherwise focuses the first DOM control with :focus-visible on open. Present() focuses it programmatically.
+    private readonly WebView2 _web = new() { Dock = DockStyle.Fill, TabStop = false };
     private readonly string _surface;
     private readonly Uri _origin;
     private readonly string _token;
@@ -170,6 +172,7 @@ internal sealed class AgentWindow : Form
         Show();
         Activate();
         SetForegroundWindow(Handle);
+        _web.Focus();
         NotifyShell("show");
     }
 
@@ -275,7 +278,11 @@ internal sealed class AgentWindow : Form
                     _ = core.ExecuteScriptAsync("location.hash = " + JsonSerializer.Serialize(route));
                 }
 
-                if (Visible) NotifyShell("show");
+                if (Visible)
+                {
+                    _web.Focus();
+                    NotifyShell("show");
+                }
             };
 
             // The token travels in the fragment, which never reaches a server; the UI takes it out at once.
