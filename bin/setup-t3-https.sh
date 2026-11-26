@@ -137,7 +137,7 @@ t3_https_public_base_url() {
 # verbatim against the one a later run wants (that comparison is what decides
 # whether the leaf is regenerated).
 t3_https_san_list() {
-  local hostname="$1" external="$2" primary_ip="$3"
+  local hostname="$1" external="$2" primary_ip="$3" extra_host="${4:-}"
   local -a sans=()
   local candidate entry seen
   _t3_san_push() {
@@ -151,7 +151,7 @@ t3_https_san_list() {
   [[ -n "${hostname}" ]] && _t3_san_push "DNS:${hostname}"
   _t3_san_push "DNS:localhost"
   _t3_san_push "IP:127.0.0.1"
-  for candidate in "${external}" "${primary_ip}"; do
+  for candidate in "${external}" "${extra_host}" "${primary_ip}"; do
     [[ -n "${candidate}" ]] || continue
     # A scoped IPv6 literal (fe80::1%12) is not a valid SAN value; skip it rather
     # than emit a certificate request openssl will reject.
@@ -445,7 +445,7 @@ vm_hostname="$(hostname 2>/dev/null || echo vm)"
 primary_ip="$(ip -o -4 route get 1.1.1.1 2>/dev/null | awk '{for (i=1; i<=NF; i++) if ($i == "src") {print $(i+1); exit}}' || true)"
 [[ -n "${primary_ip}" ]] || primary_ip="$(hostname -I 2>/dev/null | awk '{print $1}' || true)"
 public_host="$(t3_https_public_host "${CONSTRUCT_EXTERNAL_HOST}" "${vm_hostname}")"
-want_sans="$(t3_https_san_list "${vm_hostname}" "${CONSTRUCT_EXTERNAL_HOST}" "${primary_ip}")"
+want_sans="$(t3_https_san_list "${vm_hostname}" "${CONSTRUCT_EXTERNAL_HOST}" "${primary_ip}" "${T3CODE_PUBLIC_HOST_STATED}")"
 
 if [[ ! -s "${CA_KEY}" || ! -s "${CA_CRT}" ]]; then
   step "Creating the Construct local CA (${TLS_DIR}/ca.crt)"

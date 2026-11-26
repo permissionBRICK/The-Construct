@@ -1,7 +1,7 @@
 # Sourced into both Windows Desktop and VS Code pairing scripts. cfgget and
 # T3CODE_PORT are supplied by the caller; only the chosen origin goes to stdout.
 t3base() {
-  local direct_host="$1" public scheme=http port="$T3CODE_PORT" link rc=0 authority
+  local direct_host="$1" public scheme=http port="$T3CODE_PORT" link rc=0 authority upstream_flag="--upstream-plain"
   public="$(cfgget T3CODE_PUBLIC_BASE_URL)"
   if [[ -z "$(cfgget CONSTRUCT_SERVICE_URL)" ]]; then
     if [[ -n "$public" ]]; then printf '%s' "$public"; else printf 'http://%s:%s' "$direct_host" "$port"; fi
@@ -9,16 +9,24 @@ t3base() {
   fi
 
   # Use the effective TLS state, not the preference: a failed TLS setup leaves
-  # the plain T3 listener running. The certificate includes localhost as a SAN.
-  if [[ "$public" == https://* ]]; then
+  # the plain T3 listener running. When T3CODE_HTTPS=false the VM serves plain
+  # HTTP on T3CODE_PORT even if the host terminates TLS on its HTTPS forward.
+  if [[ "$public" == https://* && "$(cfgget T3CODE_HTTPS)" != "false" ]]; then
     scheme=https
+    upstream_flag="--upstream-tls"
     port="$(cfgget T3CODE_HTTPS_PORT)"; port="${port:-5178}"
   fi
   [[ "$port" =~ ^[0-9]{1,5}$ ]] && (( 10#$port >= 1 && 10#$port <= 65535 )) || {
     echo 'Invalid T3 listener port' >&2; return 1;
   }
   command -v construct >/dev/null 2>&1 || { echo 'Update Construct on the VM to enable client forwarding.' >&2; return 1; }
-  link="$(construct expose "$port" --to host --reuse --label 'T3 Code')" || rc=$?
+  link="$(construct expose "$port" --to host --reuse --label 'T3 Code' --https-if-available "$upstream_flag")" || rc=$?
+  # Older VM CLIs predating --https-if-available exit 1 on unknown options.
+  # Compat cleanup deadline: 2027-03-01.
+  if (( rc == 1 )); then
+    rc=0
+    link="$(construct expose "$port" --to host --reuse --label 'T3 Code')" || rc=$?
+  fi
   if (( rc == 7 )); then
     echo 'Host forwarding refused; opening T3 Code on the user PC.' >&2
     link="$(construct expose "$port" --to client --reuse --wait 45 --label 'T3 Code')" || {
@@ -34,7 +42,18 @@ t3base() {
   elif (( rc != 0 )); then
     echo "Could not open the T3 host forward (exit $rc)." >&2; return 1
   else
-    if [[ "$link" =~ ^http://(\[[0-9a-fA-F:.]+\]|[A-Za-z0-9._-]+):([0-9]{1,5})/?$ ]]; then
+    # A host-terminated HTTPS forward already returns its https:// origin (with
+    # or without an explicit port, e.g. shared port 443).
+    if [[ "$link" =~ ^https://(\[[0-9a-fA-F:.]+\]|[A-Za-z0-9._-]+)(:([0-9]{1,5}))?/?$ ]]; then
+      local https_host="${BASH_REMATCH[1]}" https_port="${BASH_REMATCH[3]}"
+      if [[ -n "$https_port" ]]; then
+        (( 10#$https_port >= 1 && 10#$https_port <= 65535 )) || { echo 'The forward returned an invalid port.' >&2; return 1; }
+        printf 'https://%s:%s' "$https_host" "$https_port"
+      else
+        printf 'https://%s' "$https_host"
+      fi
+      return 0
+    elif [[ "$link" =~ ^http://(\[[0-9a-fA-F:.]+\]|[A-Za-z0-9._-]+):([0-9]{1,5})/?$ ]]; then
       authority="${BASH_REMATCH[1]}:${BASH_REMATCH[2]}"
     else
       echo 'The host forward returned an invalid endpoint.' >&2; return 1
@@ -68,7 +87,7 @@ t3pair() {
   direct_host="$(cfgget CONSTRUCT_DIRECT_HOST)"
   if [[ -n "$direct_host" ]]; then
     public="$(cfgget T3CODE_PUBLIC_BASE_URL)"
-    if [[ "$public" == https://* ]]; then
+    if [[ "$public" == https://* && "$(cfgget T3CODE_HTTPS)" != "false" ]]; then
       scheme=https
       port="$(cfgget T3CODE_HTTPS_PORT)"; port="${port:-5178}"
     fi

@@ -199,4 +199,43 @@ public sealed class CreateWithSettingsTests
         Assert.True(JobState.Succeeded == second.State, second.Error);
         Assert.DoesNotContain(h.Ssh.Calls, c => c.StandardInput?.Contains("CONSTRUCT_VM_TOKEN_B64=", StringComparison.Ordinal) == true);
     }
+
+    [Fact]
+    public async Task PublicHostPattern_sets_per_vm_external_host_and_converges_stale_shared_host_on_reprovision()
+    {
+        var settings = new Dictionary<string, string?> { ["Constructd:PublicHostPattern"] = "{name}.vms.test" };
+        await using var h = await ProvisionHarness.StartAsync(settings: settings);
+        ((FakeReleaseInfo)h.App.Service<IReleaseInfo>()).Installed = new(ProvisionHarness.Commit, "1.0.0", null, "release");
+
+        // New VM gets its per-VM public host, not the host's shared SSH name.
+        var create = await CreateAsync(h, "fresh", new { projects = Array.Empty<string>(), settings = new { t3Code = "true" } });
+        Assert.Equal(HttpStatusCode.Accepted, create.StatusCode);
+        var createJob = await h.Client.WaitForJobAsync((await create.ReadAsync<JobAcceptedResponse>()).JobId);
+        Assert.True(JobState.Succeeded == createJob.State, createJob.Error);
+        var createProvision = h.Ssh.Calls.Single(c => c.Command.Contains("bin/provision.sh", StringComparison.Ordinal));
+        Assert.Equal("fresh.vms.test", FakeSshRunner.Variable(createProvision.Command, "CONSTRUCT_EXTERNAL_HOST"));
+
+        // Existing VM whose stored desired state still carries the shared PublicHost ("buildbox.test")
+        // converges to its per-VM public host on reprovision.
+        var desiredStore = h.App.Service<IVmDesiredStateSource>();
+        var vm = (await h.App.Vms.GetAsync(ProvisionHarness.Vm, default))!;
+        var stale = new VmDesiredState(["web"], new ProvisionSettings
+        {
+            ServiceUrl = "https://buildbox.test:7462",
+            ExternalHost = "buildbox.test",
+            ExternalSshPort = vm.SshForwardPort,
+            T3Code = "true",
+        });
+        await desiredStore.SetDesiredAsync(vm.Name, new StoredDesiredState(stale, Constructd.Core.Logic.ProvisionScript.DesiredHash(stale), DateTimeOffset.UtcNow, "alice", vm.Created), default);
+        h.Ssh.Calls.Clear();
+
+        var reprovision = await h.Client.WaitForJobAsync((await (await h.Client.PostJsonAsync($"/api/v1/vms/{vm.Name}/jobs",
+            new { kind = "provision", requestId = "converge-ext", commit = ProvisionHarness.Commit })).ReadAsync<VmJobAcceptedResponse>()).JobId);
+        Assert.True(JobState.Succeeded == reprovision.State, reprovision.Error);
+
+        var reprovCall = h.Ssh.Calls.Single(c => c.Command.Contains("bin/provision.sh", StringComparison.Ordinal));
+        Assert.Equal($"{vm.Name}.vms.test", FakeSshRunner.Variable(reprovCall.Command, "CONSTRUCT_EXTERNAL_HOST"));
+        var stored = await (await h.Client.GetAsync($"/api/v1/vms/{vm.Name}/desired")).ReadAsync<VmDesiredStateResponse>();
+        Assert.Equal($"{vm.Name}.vms.test", stored.Desired!.Settings.ExternalHost);
+    }
 }

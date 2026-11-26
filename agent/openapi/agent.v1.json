@@ -3831,6 +3831,12 @@
               "null",
               "string"
             ]
+          },
+          "publicHost": {
+            "type": [
+              "null",
+              "string"
+            ]
           }
         }
       },

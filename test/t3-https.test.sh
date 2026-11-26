@@ -110,6 +110,12 @@ ok "sans: duplicates are dropped (the list is compared verbatim later)" \
 sans_scoped="$(t3_https_san_list testvm "fe80::1%12" "")"
 ok "sans: a scope-qualified IPv6 literal is skipped (openssl rejects it)" \
   test "${sans_scoped}" = "DNS:testvm.mshome.net,DNS:testvm,DNS:localhost,IP:127.0.0.1"
+sans_pub="$(t3_https_san_list testvm construct.example.com "" testvm.example.com)"
+ok "sans: an explicit T3 public host is included alongside CONSTRUCT_EXTERNAL_HOST" \
+  test "${sans_pub}" = "DNS:testvm.mshome.net,DNS:testvm,DNS:localhost,IP:127.0.0.1,DNS:construct.example.com,DNS:testvm.example.com"
+sans_pub_dup="$(t3_https_san_list testvm testvm.example.com "" testvm.example.com)"
+ok "sans: duplicate T3 public host is deduplicated" \
+  test "${sans_pub_dup}" = "DNS:testvm.mshome.net,DNS:testvm,DNS:localhost,IP:127.0.0.1,DNS:testvm.example.com"
 
 # Public host / URL rules (same precedence as the pairing script).
 ok "public-host: CONSTRUCT_EXTERNAL_HOST wins" \
@@ -387,10 +393,14 @@ else
   ok "https + forwarded port: nginx still LISTENS on T3CODE_HTTPS_PORT, not the forward" \
     sh -c "grep -q 'listen 0.0.0.0:5178 ssl' '${SITE}' && ! grep -q ':2302' '${SITE}'"
   # A forward served under its own name (an HTTPS forward on the host's shared port that is not
-  # the VM's main one, docs/https-forwards.md): the origin uses THAT host, not the VM's.
-  T3CODE_HTTPS=true T3CODE_PUBLIC_PORT=443 T3CODE_PUBLIC_HOST=work-vm-5178.vms.example run_setup >"${tmp}/run6d.out" 2>&1
+  # the VM's main one, docs/https-forwards.md): the origin uses THAT host, not the VM's, and the
+  # VM's own leaf certificate also covers it even if CONSTRUCT_EXTERNAL_HOST is the shared SSH host.
+  T3CODE_HTTPS=true T3CODE_PUBLIC_PORT=443 CONSTRUCT_EXTERNAL_HOST=construct.vms.example \
+    T3CODE_PUBLIC_HOST=work-vm-5178.vms.example run_setup >"${tmp}/run6d.out" 2>&1
   ok "https + forwarded host: the advertised origin uses the forward's own host" \
     test "$(cfgval T3CODE_PUBLIC_BASE_URL)" = "https://work-vm-5178.vms.example"
+  ok "https + forwarded host: the leaf certificate covers T3CODE_PUBLIC_HOST as a SAN" \
+    sh -c "openssl x509 -in '${TLS}/t3.crt' -noout -text | grep -q 'DNS:work-vm-5178.vms.example'"
   # The control: no forwarded port -> the listener's own port, byte-identical to before.
   T3CODE_HTTPS=true run_setup >"${tmp}/run6c.out" 2>&1
   ok "https without a forwarded port: the advertised origin is the listener's port" \

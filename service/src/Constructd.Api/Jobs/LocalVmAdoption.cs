@@ -112,7 +112,7 @@ public static class LocalVmAdoption
             {
                 ServiceUrl = serviceUrl,
                 ServiceCaB64 = Convert.ToBase64String(Encoding.UTF8.GetBytes(certificate)),
-                ExternalHost = options.PublicHost,
+                ExternalHost = options.PublicHostFor(name),
                 ExternalSshPort = port,
             },
             CodingAgents = guest.CodingAgents,
@@ -222,7 +222,7 @@ public static class LocalVmAdoption
         foreach (var helper in GuestHelpers) files[helper] = await File.ReadAllTextAsync(Path.Combine(GuestDirectory, helper), ct);
         var payload = JsonSerializer.Serialize(new
         {
-            name, owner, machineId, serviceUrl, publicHost = options.PublicHost, sshPort = port, vmToken = token, certificate, files,
+            name, owner, machineId, serviceUrl, publicHost = options.PublicHostFor(name), sshPort = port, vmToken = token, certificate, files,
         });
         var code = Convert.ToBase64String(await File.ReadAllBytesAsync(Path.Combine(GuestDirectory, "adopt-host.py"), ct));
         var said = new Lines();
