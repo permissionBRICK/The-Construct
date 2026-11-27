@@ -23,13 +23,13 @@ the workspace share of a VM on this PC, start with the OS, and updating itself (
 | `src/Construct.Agent.Core/Repair.cs` | `construct-agent repair` |
 | `src/Construct.Agent.Core/Device/` | The device features: VM links (forwards, notifications, microphone), the SSH config, open actions, the platform seam (`IDevicePlatform`) and the Linux platform |
 | `src/Construct.Agent.Core/Device/Runtime/` | Moved unchanged from the Companion's host: SSH supervisor, process runner, SSH transport, port reservations, loopback audio server |
-| `src/Construct.Agent.Core/Update/` | Self-update (`install.json`, `versions/`), "update everything" |
+| `src/Construct.Agent.Core/Update/` | Self-update (`install.json`, `app/`, `next/`, `previous/`), "update everything" |
 | `src/Construct.Agent.Core/Http/DeviceRoutes.cs` | The device routes |
 | `src/Construct.Agent.Core/Upgrade/` | The one-time upgrade from the old client: the reader of its files (`LegacyState`, `LegacyConfigRepo`), the converter, the dialog's steps, `bridge.json` |
 | `src/construct-agent/` | The console host (Linux) |
 | `src/Construct.Agent.Windows/` | The Windows tray app: tray, WebView2 surfaces, single instance, DPAPI, toasts, WASAPI, `net use`, the Run value |
 | `install/` | Per-user install scripts: `install-construct-agent.sh` (Linux), `Install-ConstructAgent.ps1` (Windows) |
-| `src/Construct.Agent.Setup/` | The Windows setup's install logic: `install.ps1`'s steps (channel manifest, SHA-256, `versions/`, `install.json`, `device.json`, the Run value, the VS Code extension, the old Companion, the hand-over to a running agent) behind a platform seam the tests fake |
+| `src/Construct.Agent.Setup/` | The Windows setup's install logic: `install.ps1`'s steps (channel manifest, SHA-256, `app/`, `install.json`, `device.json`, the Run value, the VS Code extension, the old Companion, the hand-over to a running agent) behind a platform seam the tests fake |
 | `src/Construct.Agent.Setup.Windows/` | `ConstructSetup.exe`: that logic as one trimmed self-contained file of about 12 MB, the channel built in (`-p:ConstructChannel=stable\|nightly`) |
 | `openapi/agent.v1.json` | The local API's contract, generated; a test fails on drift |
 | `tests/Construct.Agent.Tests/` | Agents in process against the real engine (fake mode) on a loopback HTTPS port |
@@ -82,9 +82,11 @@ first `ui/dist` above it.
 | `endpoint.json` (0600) | The token file: port, token, pid, start time, version. A new token every start; deleted at stop. |
 | `open.html` (0600) | Written by `open`: a page that sends the browser to the UI with the token. |
 | `device.json` (0600) | The device's settings: release channel, automatic updates, the VMs with the microphone on. |
-| `install.json` (0600) | The installed versions: `current`, `previous` and `pending` (12.2). |
-| `versions/<version>/` | One unpacked package per version; the current and the previous one are kept. |
-| `webview2/`, `shell.log`, `construct.png` | Windows only: the WebView2 profile, the tray app's error log, the toast icon. The executable and its windows carry `construct.ico` (the tray's disc). |
+| `install.json` (0600) | The installed versions: `current`, `previous` (only while `current` is on trial), `pending` (12.2) and `failed` (a version whose move into `app/` failed; not installed automatically again). |
+| `app/` | The installed package, whatever its version: the agent always runs from here, so the Run value or systemd unit, the `construct://` handler, the tray icon's place and antivirus exclusions stay across updates. `.version` names the version. |
+| `next/`, `previous/` | Only during an update: the new package, started from here to move itself into `app/`, and the version it replaced, for the way back until the new one passed its self-test. Installs made before `app/` had `versions/<version>/`; the first update moves out of it and removes it. |
+| `shell.log` | Every start and stop of the agent with its reason (Quit in the tray menu, a shutdown request on the local API, an update's switch, the session ending, a stop signal), the moves into `app/`, self-test results and (Windows) unhandled exceptions; a start without a stop line means the process was ended from outside. Starts over above 1 MB. |
+| `webview2/`, `construct.png`, `tray-placed` | Windows only: the WebView2 profile, the toast icon, and the mark that the tray icon got its first place. The executable and its windows carry `construct.ico` (the tray's disc). |
 | `engine-install.log`, `engine-install.json` | Windows: the last engine setup's installer output and its outcome (`{result, message}`); no token |
 | `bridge.json` (0600) | The one-time upgrade: `stage` (`new`, `converting`, `converted`, written last), the previous install folder, the engines it chose, the items already copied, the last run's items and notes (with the account they are for and whether they were read), the shared hosts still on the old stack. No secret. |
 | `legacy-upstream.json` (0600) | The old config repository's company upstream links (`manifest/`, `bases/`), kept as data until the new stack has upstream links. |
@@ -257,21 +259,28 @@ are not plain JSON (comments).
 
 **Updates.** The agent reads its channel's manifest a minute after start and every six hours, and
 offers its package (`agentWindows`, `agentLinux`) when the version differs. Installing downloads it,
-compares its SHA-256 with the manifest's, unpacks it into `versions/<version>/` and, when no pairing
-and no "update everything" runs, writes `install.json` (new version current and pending, the running
-one previous), starts the new version and stops. The new version passes its self-test when its API
-answers its own health route; it then clears `pending`, removes older versions and installs the
-package's `construct.vsix` into VS Code where VS Code is installed (in the background; a failure
-there changes nothing, an older extension keeps working). When it fails,
-it writes the previous version back as current and starts it. Under the systemd unit the unit is
-pointed at the new version and restarted; on Windows the Run value follows the new executable. The
-install scripts mark a version installed over another one pending as well, so it self-tests too. An
-agent not running from `versions/` (a development build) does not update itself. Windows 11 remembers a
-tray icon's taskbar place per executable path (`HKCU\Control Panel\NotifyIconSettings`), so each version
-copies the previous version's choice to its own entry once Windows has made it (or a taskbar place an
-earlier version or the old Companion had), unless the user chose for this version already, and removes
-the entries of versions no longer on disk. A fixed icon GUID would need every build signed by one
-publisher.
+compares its SHA-256 with the manifest's, unpacks it into `next/` and, when no pairing and no "update
+everything" runs, writes `install.json` (new version current and pending, the running one previous),
+starts the copy in `next/` and stops. The agent always runs from `app/`: a copy started anywhere else in
+its directory (`next/`, `previous/`, an old `versions/<v>/`) waits for the agent in `app/` to exit, moves
+what `app/` held to `previous/`, puts itself into `app/` and starts the agent there with the surfaces that
+were open. When that move fails, `app/` keeps what it had, `install.json` goes back to it with the new
+version marked `failed`, and that agent starts again. The new version passes its self-test when its API
+answers its own health route; it then clears `pending` and `previous`, removes `next/`, `previous/` and
+an old `versions/` folder (only `app/` is left), and installs the package's `construct.vsix` into VS Code
+where VS Code is installed (in the background; a failure there changes nothing, an older extension keeps
+working). When it fails, it writes the previous version back as current and starts the copy in
+`previous/`, which moves back into `app/` the same way (the first version after an install from before
+`app/` starts the old `versions/<v>/` folder instead). Under the systemd unit, or with the unit enabled,
+the unit is pointed at `app/` and restarted; on Windows the Run value names `app\`. The install scripts
+and the setup put the package into `app/` themselves (the agent is stopped first), keep the replaced
+version in `previous/` and mark the new one pending, so it self-tests too. An agent not running from
+`app/` (a development build) does not update itself. Windows 11 remembers a tray icon's taskbar place
+per executable path (`HKCU\Control Panel\NotifyIconSettings`), and `app\` never changes, so the place
+stays wherever the user puts it. The first start from `app\` gives the icon a place once (`tray-placed`):
+the one the version before had in its `versions\` folder (or an earlier one, or the old Companion), else
+the taskbar, and removes the entries of the old folders. A fixed icon GUID would need every build signed
+by one publisher.
 
 **Update everything.** For each engine: when the user is its admin and it offers an update, `POST
 /host/updates/run`, then its job is followed through the engine's restart; then `POST

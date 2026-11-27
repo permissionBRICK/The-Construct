@@ -25,7 +25,7 @@ public static class AgentRoutes
 
         api.MapPost("/shutdown", () =>
         {
-            app.Lifetime.StopApplication();
+            host.Stop("a shutdown request on the local API (an installer, the setup or construct-agent repair)");
             return TypedResults.NoContent();
         }).WithName("Shutdown");
 

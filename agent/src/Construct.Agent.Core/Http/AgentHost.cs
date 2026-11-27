@@ -58,6 +58,18 @@ public sealed class AgentHost : IAsyncDisposable
     /// <summary>This run's API token (also in the token file).</summary>
     public string Token { get; }
 
+    /// <summary>Why this agent stops, in words for its log (the first reason given wins); null while nobody asked it to.</summary>
+    public string? StopReason => _stopReason;
+
+    private string? _stopReason;
+
+    /// <summary>Stops the agent and records why (an update's switch, a shutdown request on the local API).</summary>
+    public void Stop(string reason)
+    {
+        Interlocked.CompareExchange(ref _stopReason, reason, null);
+        App.Lifetime.StopApplication();
+    }
+
     public int Port => new Uri(App.Urls.First()).Port;
 
     public string BaseUrl => $"http://127.0.0.1:{Port}";
@@ -82,7 +94,8 @@ public sealed class AgentHost : IAsyncDisposable
 
         var app = builder.Build();
         var token = Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(32));
-        var stop = () => app.Lifetime.StopApplication();
+        AgentHost? self = null;
+        var stop = () => self?.Stop("it switched to the updated version");
         var services = device?.Invoke(agent, stop) ?? DeviceServices.Create(agent, options, options.Platform ?? new LinuxPlatform(), stop);
         var upgradePlatform = options.Upgrade ?? new Upgrade.DefaultUpgradePlatform(Path.Combine(options.DataDirectory, "legacy_known_hosts"));
         var engineSetup = new Engines.LocalEngineSetup(agent, options, upgradePlatform, services.Settings);
@@ -94,6 +107,7 @@ public sealed class AgentHost : IAsyncDisposable
         services.Everything.Connect = upgrade.ConnectHostAsync;
         var upstream = new Upstream.UpstreamSync(agent, new AgentEngines(agent), options.DataDirectory, options.Time);
         var host = new AgentHost(app, agent, options, token, services, upgrade, engineSetup, upstream);
+        self = host;
         var startedAt = options.Time.GetUtcNow();
 
         app.Lifetime.ApplicationStarted.Register(() =>

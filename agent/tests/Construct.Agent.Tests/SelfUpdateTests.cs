@@ -7,7 +7,10 @@ using Construct.Agent.Update;
 
 namespace Construct.Agent.Tests;
 
-/// <summary>The agent updating itself against a fake channel: hash check, switch, self-test at start and the way back.</summary>
+/// <summary>
+/// The agent updating itself against a fake channel: hash check, the package in next/, the move into app/ (the one path the
+/// agent runs from), self-test at start, the way back, and the first update of an install made before app/.
+/// </summary>
 public sealed class SelfUpdateTests : IAsyncLifetime
 {
     private const string Old = "1.0.0+1111111111111111111111111111111111111111";
@@ -48,13 +51,18 @@ public sealed class SelfUpdateTests : IAsyncLifetime
         _device.Settings.Update(s => s with { Channel = Channel });
         if (running is not null)
         {
-            // The running version as the install script left it.
-            Directory.CreateDirectory(_device.Install.DirectoryOf(running));
-            File.WriteAllText(_device.Install.ExecutableOf(running), "old");
-            _device.Install.Write(new InstallState(running, null));
+            // The running version as the install left it.
+            InstallApp(_device.Install, running);
         }
 
         return _device;
+    }
+
+    private static void InstallApp(AgentInstall install, string version)
+    {
+        Directory.CreateDirectory(install.AppDirectory);
+        File.WriteAllText(install.AppExecutable, "old");
+        install.Write(new InstallState(version, null));
     }
 
     [Fact]
@@ -71,7 +79,7 @@ public sealed class SelfUpdateTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task The_install_checks_the_hash_unpacks_beside_the_running_version_switches_and_stops()
+    public async Task The_install_checks_the_hash_unpacks_into_next_starts_it_there_and_stops()
     {
         var device = Device();
         await device.Updater.CheckAsync(CancellationToken.None);
@@ -79,11 +87,13 @@ public sealed class SelfUpdateTests : IAsyncLifetime
         device.Updater.StartInstall();
         await device.Updater.Work.WaitAsync(TimeSpan.FromSeconds(10));
 
-        Assert.Equal("agent v2", File.ReadAllText(device.Install.ExecutableOf(New)));
+        Assert.Equal("agent v2", File.ReadAllText(device.Install.NextExecutable));
+        Assert.Equal(New, device.Install.StagedVersion());
+        Assert.Equal("old", File.ReadAllText(device.Install.AppExecutable));
         Assert.Equal(new InstallState(New, Old, Pending: true), device.Install.Read());
-        Assert.Equal([device.Install.ExecutableOf(New)], device.Platform.Launched);
+        Assert.Equal([device.Install.NextExecutable], device.Platform.Launched);
         Assert.Equal(1, device.Stopped);
-        Assert.DoesNotContain(Directory.EnumerateFileSystemEntries(device.Install.VersionsDirectory), p => Path.GetFileName(p).StartsWith('.') || p.EndsWith(".partial", StringComparison.Ordinal));
+        Assert.DoesNotContain(Directory.EnumerateFileSystemEntries(_directory), p => Path.GetFileName(p).StartsWith(".download-", StringComparison.Ordinal) || p.EndsWith(".partial", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -100,7 +110,7 @@ public sealed class SelfUpdateTests : IAsyncLifetime
         await device.Updater.Work.WaitAsync(TimeSpan.FromSeconds(10));
 
         // Still busy, but the limit (two seconds here, ten minutes by default) passed: the switch happened.
-        Assert.Equal([device.Install.ExecutableOf(New)], device.Platform.Launched);
+        Assert.Equal([device.Install.NextExecutable], device.Platform.Launched);
         Assert.Null(device.Updater.View().Waiting);
     }
 
@@ -146,7 +156,7 @@ public sealed class SelfUpdateTests : IAsyncLifetime
         device.Updater.OpenSurfaces = () => open;
 
         device.Updater.CheckIfStale();
-        await FakeDevice.WaitAsync(() => Directory.Exists(device.Install.DirectoryOf(New)) && device.Updater.View().State == "idle", "package staged while pop-out is open");
+        await FakeDevice.WaitAsync(() => device.Install.StagedVersion() == New && device.Updater.View().State == "idle", "package staged while pop-out is open");
         await device.Updater.Work.WaitAsync(TimeSpan.FromSeconds(10));
 
         // The running agent was NOT interrupted while the pop-out was open.
@@ -162,7 +172,7 @@ public sealed class SelfUpdateTests : IAsyncLifetime
         open = [];
         Assert.True(device.Updater.TryAutoInstall());
         await device.Updater.Work.WaitAsync(TimeSpan.FromSeconds(10));
-        Assert.Equal([device.Install.ExecutableOf(New)], device.Platform.Launched);
+        Assert.Equal([device.Install.NextExecutable], device.Platform.Launched);
         Assert.Equal([[]], device.Platform.LaunchedSurfaces);
         Assert.Equal(1, device.Stopped);
         Assert.Equal(1, Downloads());
@@ -178,7 +188,7 @@ public sealed class SelfUpdateTests : IAsyncLifetime
         await FakeDevice.WaitAsync(() => device.Platform.Launched.Count == 1, "automatic install after stale check");
         await device.Updater.Work.WaitAsync(TimeSpan.FromSeconds(10));
 
-        Assert.Equal([device.Install.ExecutableOf(New)], device.Platform.Launched);
+        Assert.Equal([device.Install.NextExecutable], device.Platform.Launched);
         Assert.Equal(1, device.Stopped);
     }
 
@@ -207,7 +217,7 @@ public sealed class SelfUpdateTests : IAsyncLifetime
         await device.Updater.CheckAsync(CancellationToken.None);
         device.Updater.StartInstall();
         await device.Updater.Work.WaitAsync(TimeSpan.FromSeconds(10));
-        Assert.Equal([device.Install.ExecutableOf(New)], device.Platform.Launched);
+        Assert.Equal([device.Install.NextExecutable], device.Platform.Launched);
     }
 
     private sealed class DelayedManifestHandler(string url, string sha256, TaskCompletionSource entered, TaskCompletionSource release) : HttpMessageHandler
@@ -246,9 +256,7 @@ public sealed class SelfUpdateTests : IAsyncLifetime
         using var handler = new DelayedManifestHandler(Channel, _published, manifestEntered, releaseManifest);
         _device = new FakeDevice(_directory, channel: handler, running: Old, version: Old);
         _device.Settings.Update(s => s with { Channel = Channel, AutoUpdate = true });
-        Directory.CreateDirectory(_device.Install.DirectoryOf(Old));
-        File.WriteAllText(_device.Install.ExecutableOf(Old), "old");
-        _device.Install.Write(new InstallState(Old, null));
+        InstallApp(_device.Install, Old);
 
         var checkTask = _device.Updater.CheckAsync(CancellationToken.None);
         await manifestEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
@@ -299,9 +307,7 @@ public sealed class SelfUpdateTests : IAsyncLifetime
         });
         _device = new FakeDevice(_directory, channel: handler, running: Old, version: Old);
         _device.Settings.Update(s => s with { Channel = Channel, AutoUpdate = true });
-        Directory.CreateDirectory(_device.Install.DirectoryOf(Old));
-        File.WriteAllText(_device.Install.ExecutableOf(Old), "old");
-        _device.Install.Write(new InstallState(Old, null));
+        InstallApp(_device.Install, Old);
 
         await _device.Updater.CheckAsync(CancellationToken.None);
         Assert.True(_device.Updater.TryAutoInstall());
@@ -324,49 +330,144 @@ public sealed class SelfUpdateTests : IAsyncLifetime
         var view = device.Updater.View();
         Assert.Equal("failed", view.State);
         Assert.Contains("SHA-256", view.Error, StringComparison.Ordinal);
-        Assert.False(Directory.Exists(device.Install.DirectoryOf(New)));
+        Assert.False(Directory.Exists(device.Install.NextDirectory));
         Assert.Equal(new InstallState(Old, null), device.Install.Read());
         Assert.Empty(device.Platform.Launched);
         Assert.Equal(0, device.Stopped);
-        Assert.Single(Directory.GetFileSystemEntries(device.Install.VersionsDirectory));
+        Assert.DoesNotContain(Directory.GetFileSystemEntries(_directory).Select(Path.GetFileName),
+            n => n is "next" || n!.StartsWith(".download-", StringComparison.Ordinal) || n.EndsWith(".partial", StringComparison.Ordinal));
     }
 
     [Fact]
-    public async Task A_new_version_that_fails_its_self_test_starts_the_previous_one_again()
+    public async Task The_copy_in_next_moves_into_app_and_keeps_the_replaced_version_for_the_way_back()
     {
         var device = Device();
         await device.Updater.CheckAsync(CancellationToken.None);
         device.Updater.StartInstall();
         await device.Updater.Work.WaitAsync(TimeSpan.FromSeconds(10));
+        var lines = new List<string>();
+
+        Assert.True(await AgentUpdater.InstallStartedCopyAsync(device.Install, device.Install.NextExecutable, ["win"], device.Platform, null, lines.Add));
+
+        Assert.Equal("agent v2", File.ReadAllText(device.Install.AppExecutable));
+        Assert.Equal("old", File.ReadAllText(Path.Combine(device.Install.PreviousDirectory, device.Install.ExecutableName)));
+        Assert.Equal([device.Install.NextExecutable, device.Install.AppExecutable], device.Platform.Launched);
+        Assert.Equal(["win"], device.Platform.LaunchedSurfaces.Last());
+        Assert.Contains(lines, l => l.StartsWith("moved ", StringComparison.Ordinal));
+        Assert.Equal(AgentInstall.Place.App, device.Install.PlaceOf(device.Install.AppExecutable));
+        Assert.Equal(AgentInstall.Place.Staged, device.Install.PlaceOf(device.Install.NextExecutable));
+    }
+
+    [Fact]
+    public async Task A_new_version_that_fails_its_self_test_starts_the_previous_one_which_moves_back_into_app()
+    {
+        var device = Device();
+        await device.Updater.CheckAsync(CancellationToken.None);
+        device.Updater.StartInstall();
+        await device.Updater.Work.WaitAsync(TimeSpan.FromSeconds(10));
+        await AgentUpdater.InstallStartedCopyAsync(device.Install, device.Install.NextExecutable, [], device.Platform, null, _ => { });
+        var previous = Path.Combine(device.Install.PreviousDirectory, device.Install.ExecutableName);
 
         var ok = await AgentUpdater.StartupAsync(device.Install, New, () => throw new InvalidOperationException("no health"), device.Platform);
 
         Assert.False(ok);
         Assert.Equal(new InstallState(Old, null), device.Install.Read());
-        Assert.Equal([device.Install.ExecutableOf(New), device.Install.ExecutableOf(Old)], device.Platform.Launched);
-        // The previous one then starts as a plain start.
+        Assert.Equal(previous, device.Platform.Launched.Last());
+        // The previous copy moves back into app/ (the failed version is dropped) and then starts as a plain start that cleans up.
+        Assert.True(await AgentUpdater.InstallStartedCopyAsync(device.Install, previous, [], device.Platform, null, _ => { }));
+        Assert.Equal("old", File.ReadAllText(device.Install.AppExecutable));
         Assert.True(await AgentUpdater.StartupAsync(device.Install, Old, () => Task.CompletedTask, device.Platform));
+        Assert.Equal(["app"], Directory.GetDirectories(_directory).Select(Path.GetFileName));
     }
 
     [Fact]
-    public async Task A_new_version_that_passes_confirms_itself_and_keeps_only_itself_and_the_previous_one()
+    public async Task A_new_version_that_passes_confirms_itself_and_only_app_is_left()
     {
         var device = Device();
-        Directory.CreateDirectory(device.Install.DirectoryOf("0.9.0+older"));
         await device.Updater.CheckAsync(CancellationToken.None);
         device.Updater.StartInstall();
         await device.Updater.Work.WaitAsync(TimeSpan.FromSeconds(10));
+        await AgentUpdater.InstallStartedCopyAsync(device.Install, device.Install.NextExecutable, [], device.Platform, null, _ => { });
 
         var confirmed = new List<string>();
         Assert.True(await AgentUpdater.StartupAsync(device.Install, New, () => Task.CompletedTask, device.Platform, confirmed: confirmed.Add));
 
-        // What follows the agent (the VS Code extension) is told once, with the new version's directory.
-        Assert.Equal([device.Install.DirectoryOf(New)], confirmed);
+        // What follows the agent (the VS Code extension) is told once, with app/.
+        Assert.Equal([device.Install.AppDirectory], confirmed);
         Assert.True(await AgentUpdater.StartupAsync(device.Install, New, () => Task.CompletedTask, device.Platform, confirmed: confirmed.Add));
         Assert.Single(confirmed);
-        Assert.Equal(new InstallState(New, Old), device.Install.Read());
-        Assert.Equal([AgentInstall.DirectoryName(New), AgentInstall.DirectoryName(Old)],
-            Directory.GetDirectories(device.Install.VersionsDirectory).Select(Path.GetFileName).Order(StringComparer.Ordinal).Reverse());
+        Assert.Equal(new InstallState(New, null), device.Install.Read());
+        Assert.Equal(["app"], Directory.GetDirectories(_directory).Select(Path.GetFileName));
+    }
+
+    [Fact]
+    public async Task The_first_update_of_an_install_from_before_app_moves_in_keeps_the_old_folder_for_the_way_back_and_then_drops_versions()
+    {
+        // The old updater unpacked into versions/<new>/, switched install.json and started the new version there.
+        var install = new AgentInstall(_directory, "construct-agent");
+        foreach (var (version, content) in new[] { (Old, "old"), (New, "agent v2"), ("0.9.0+older", "older") })
+        {
+            Directory.CreateDirectory(Path.Combine(install.LegacyVersionsDirectory, version));
+            File.WriteAllText(Path.Combine(install.LegacyVersionsDirectory, version, "construct-agent"), content);
+        }
+
+        install.Write(new InstallState(New, Old, Pending: true));
+        var platform = new FakePlatform();
+        var started = Path.Combine(install.LegacyVersionsDirectory, New, "construct-agent");
+        Assert.Equal(AgentInstall.Place.Staged, install.PlaceOf(started));
+
+        Assert.True(await AgentUpdater.InstallStartedCopyAsync(install, started, [], platform, null, _ => { }));
+
+        Assert.Equal("agent v2", File.ReadAllText(install.AppExecutable));
+        Assert.Equal([install.AppExecutable], platform.Launched);
+        // The way back during the trial is the old folder itself (the old version starts as it always did).
+        Assert.Equal(Path.Combine(install.LegacyVersionsDirectory, Old, "construct-agent"), install.PreviousExecutable(install.Read()));
+        Assert.True(await AgentUpdater.StartupAsync(install, New, () => Task.CompletedTask, platform));
+        Assert.Equal(["app"], Directory.GetDirectories(_directory).Select(Path.GetFileName));
+    }
+
+    [Fact]
+    public async Task The_first_update_from_before_app_that_fails_its_self_test_starts_the_old_folder_again()
+    {
+        var install = new AgentInstall(_directory, "construct-agent");
+        foreach (var version in new[] { Old, New })
+        {
+            Directory.CreateDirectory(Path.Combine(install.LegacyVersionsDirectory, version));
+            File.WriteAllText(Path.Combine(install.LegacyVersionsDirectory, version, "construct-agent"), version);
+        }
+
+        install.Write(new InstallState(New, Old, Pending: true));
+        var platform = new FakePlatform();
+        await AgentUpdater.InstallStartedCopyAsync(install, Path.Combine(install.LegacyVersionsDirectory, New, "construct-agent"), [], platform, null, _ => { });
+
+        Assert.False(await AgentUpdater.StartupAsync(install, New, () => throw new InvalidOperationException("no health"), platform));
+
+        Assert.Equal(Path.Combine(install.LegacyVersionsDirectory, Old, "construct-agent"), platform.Launched.Last());
+        Assert.Equal(new InstallState(Old, null), install.Read());
+    }
+
+    [Fact]
+    public async Task A_copy_that_cannot_move_into_app_starts_the_agent_there_again_and_is_not_installed_automatically_again()
+    {
+        var device = Device();
+        device.Settings.Update(s => s with { AutoUpdate = true });
+        await device.Updater.CheckAsync(CancellationToken.None);
+        device.Updater.StartInstall();
+        await device.Updater.Work.WaitAsync(TimeSpan.FromSeconds(10));
+        // Something in the way of the copy: a file where app.incoming/ would go.
+        File.WriteAllText(Path.Combine(_directory, "app.incoming"), "");
+        var lines = new List<string>();
+
+        Assert.True(await AgentUpdater.InstallStartedCopyAsync(device.Install, device.Install.NextExecutable, [], device.Platform, null, lines.Add));
+
+        Assert.Equal("old", File.ReadAllText(device.Install.AppExecutable));
+        Assert.Equal(new InstallState(Old, null, Pending: false, Failed: New), device.Install.Read());
+        Assert.Equal(device.Install.AppExecutable, device.Platform.Launched.Last());
+        Assert.Contains(lines, l => l.StartsWith("could not move", StringComparison.Ordinal));
+        // The agent that starts again does not try that version on its own (each try would restart it).
+        await using var again = new FakeDevice(_directory, channel: _channel, running: Old, version: Old);
+        await again.Updater.CheckAsync(CancellationToken.None);
+        Assert.False(again.Updater.TryAutoInstall());
     }
 
     [Fact]
@@ -380,12 +481,13 @@ public sealed class SelfUpdateTests : IAsyncLifetime
     }
 
     [Fact]
-    public void Running_version_is_read_from_the_executables_place()
+    public void Only_a_process_in_app_runs_as_the_installed_version()
     {
         var install = new Update.AgentInstall(_directory, "construct-agent");
-        install.Write(new InstallState(New, Old));
-        Assert.Equal(New, install.RunningVersion(install.ExecutableOf(New)));
-        Assert.Null(install.RunningVersion("/usr/local/bin/construct-agent"));
+        Assert.Equal(New, install.RunningVersion(install.AppExecutable, New));
+        Assert.Null(install.RunningVersion(install.NextExecutable, New));
+        Assert.Null(install.RunningVersion("/usr/local/bin/construct-agent", New));
+        Assert.Equal(AgentInstall.Place.Elsewhere, install.PlaceOf("/usr/local/bin/construct-agent"));
     }
 
     private static byte[] Package()

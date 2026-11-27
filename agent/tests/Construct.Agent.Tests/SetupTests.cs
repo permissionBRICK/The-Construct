@@ -51,7 +51,7 @@ public sealed class SetupTests : IDisposable
 
     private string AgentHome => _windows.AgentHome;
 
-    private string Installed(string version) => Path.Combine(AgentHome, "versions", version, AgentSetup.AgentExecutable);
+    private string Installed => Path.Combine(AgentHome, "app", AgentSetup.AgentExecutable);
 
     private AgentSetup Setup() => new(_windows, _web.Client, _web.Client, _output)
     {
@@ -72,21 +72,22 @@ public sealed class SetupTests : IDisposable
 
         Assert.Equal(new SetupOutcome(Version, HandedOver: false), outcome);
         Assert.Equal([NightlyManifest, PackageUrl], _web.Requests.Where(r => r.Url.StartsWith("https://", StringComparison.Ordinal)).Select(r => r.Url));
-        // The package as it was published, in versions\<version>\.
-        Assert.Equal("agent", File.ReadAllText(Installed(Version)));
-        Assert.True(File.Exists(Path.Combine(AgentHome, "versions", Version, "ui", "index.html")));
-        Assert.False(Directory.Exists(Path.Combine(AgentHome, "versions", Version + ".partial")));
+        // The package as it was published, in app\ (the one folder the agent runs from), with its version.
+        Assert.Equal("agent", File.ReadAllText(Installed));
+        Assert.True(File.Exists(Path.Combine(AgentHome, "app", "ui", "index.html")));
+        Assert.Equal(Version, File.ReadAllText(Path.Combine(AgentHome, "app", ".version")));
+        Assert.False(Directory.Exists(Path.Combine(AgentHome, "app.incoming")));
         var state = ReadJson("install.json");
         Assert.Equal((Version, JsonValueKind.Null, false), (state.GetProperty("current").GetString(), state.GetProperty("previous").ValueKind, state.GetProperty("pending").GetBoolean()));
         Assert.Equal("nightly", ReadJson("device.json").GetProperty("channel").GetString());
         Assert.False(File.ReadAllBytes(Path.Combine(AgentHome, "install.json")).AsSpan().StartsWith(Encoding.UTF8.Preamble), "no BOM");
         // The extension it carries went into VS Code, before the agent started.
-        Assert.Equal([("/vscode/bin/code.cmd", $"--install-extension {Path.Combine(AgentHome, "versions", Version, "construct.vsix")} --force")], _windows.Ran);
+        Assert.Equal([("/vscode/bin/code.cmd", $"--install-extension {Path.Combine(AgentHome, "app.incoming", "construct.vsix")} --force")], _windows.Ran);
         // Starts with Windows, in the background, and was started the way a user starts it.
-        Assert.Equal($"\"{Installed(Version)}\" --background", _windows.RunValues[AgentSetup.AgentRunValue]);
+        Assert.Equal($"\"{Installed}\" --background", _windows.RunValues[AgentSetup.AgentRunValue]);
         // Started the way a user starts it, which opens its window; a just started agent answers its API before its window
         // exists and would refuse a request for it.
-        Assert.Equal([(Installed(Version), "")], _windows.Started);
+        Assert.Equal([(Installed, "")], _windows.Started);
         Assert.DoesNotContain(_web.Requests, r => r.Url.EndsWith("/api/shell/open", StringComparison.Ordinal));
         Assert.False(_windows.RunValues.ContainsKey(AgentSetup.CompanionRunValue));
         Assert.Contains("Its window finishes the setup", _output.ToString(), StringComparison.Ordinal);
@@ -109,6 +110,21 @@ public sealed class SetupTests : IDisposable
         // No VS Code here: no failure.
         Assert.Empty(_windows.Ran);
         Assert.Contains("VS Code is not installed", _output.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Over_an_agent_in_app_the_replaced_version_waits_in_previous_for_the_way_back()
+    {
+        Directory.CreateDirectory(Path.Combine(AgentHome, "app"));
+        File.WriteAllText(Installed, "old agent");
+        File.WriteAllText(Path.Combine(AgentHome, "app", ".version"), "1.0.0+aaaa");
+        File.WriteAllText(Path.Combine(AgentHome, "install.json"), """{"current":"1.0.0+aaaa","previous":null,"pending":false}""");
+
+        await Setup().RunAsync("nightly");
+
+        Assert.Equal("agent", File.ReadAllText(Installed));
+        Assert.Equal("old agent", File.ReadAllText(Path.Combine(AgentHome, "previous", AgentSetup.AgentExecutable)));
+        Assert.Equal(("1.0.0+aaaa", true), (ReadJson("install.json").GetProperty("previous").GetString(), ReadJson("install.json").GetProperty("pending").GetBoolean()));
     }
 
     [Fact]
@@ -135,7 +151,7 @@ public sealed class SetupTests : IDisposable
         var failure = await Assert.ThrowsAsync<SetupFailure>(() => Setup().RunAsync("nightly"));
 
         Assert.Contains("does not match the SHA-256", failure.Message, StringComparison.Ordinal);
-        Assert.False(Directory.Exists(Path.Combine(AgentHome, "versions", Version)));
+        Assert.False(Directory.Exists(Path.Combine(AgentHome, "app")));
         Assert.False(File.Exists(Path.Combine(AgentHome, "install.json")));
         Assert.Empty(_windows.RunValues);
         Assert.Empty(_windows.Started);
@@ -156,7 +172,7 @@ public sealed class SetupTests : IDisposable
         var failure = await Assert.ThrowsAsync<SetupFailure>(() => Setup().RunAsync("nightly"));
 
         Assert.Equal("The nightly channel offers no Construct agent for Windows.", failure.Message);
-        Assert.False(Directory.Exists(Path.Combine(AgentHome, "versions")));
+        Assert.False(Directory.Exists(Path.Combine(AgentHome, "app")));
     }
 
     [Fact]
@@ -368,7 +384,7 @@ public sealed class SetupTests : IDisposable
         // It quit before the agent was started, and stays off: the agent holds its mutex now.
         Assert.True(_web.Requests.IndexOf(quit) < _web.Requests.FindIndex(r => r.Url == PackageUrl));
         Assert.False(_windows.RunValues.ContainsKey(AgentSetup.CompanionRunValue));
-        Assert.Equal([Installed(Version)], _windows.Started.Select(s => s.Executable));
+        Assert.Equal([Installed], _windows.Started.Select(s => s.Executable));
     }
 
     [Fact]
@@ -453,7 +469,7 @@ public sealed class SetupTests : IDisposable
         var failure = await Assert.ThrowsAsync<SetupFailure>(() => Setup().RunAsync("stable"));
 
         Assert.StartsWith("The Construct agent did not start", failure.Message, StringComparison.Ordinal);
-        Assert.Equal([Installed(Version), companionExe], _windows.Started.Select(s => s.Executable));
+        Assert.Equal([Installed, companionExe], _windows.Started.Select(s => s.Executable));
     }
 
     [Fact]

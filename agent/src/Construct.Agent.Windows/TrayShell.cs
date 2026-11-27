@@ -326,7 +326,11 @@ internal sealed class TrayShell : ApplicationContext, IAgentShell
         }
 
         _menu.Items.Add(new ToolStripSeparator());
-        _menu.Items.Add("Quit", null, (_, _) => ExitThread());
+        _menu.Items.Add("Quit", null, (_, _) =>
+        {
+            QuitReason ??= "Quit in the tray menu";
+            ExitThread();
+        });
     }
 
     /// <summary>A green disc (the Companion's tray colour), with a yellow dot while a popped card waits (11.2: only the vault and a lost sign-in ask for attention).</summary>
@@ -362,9 +366,8 @@ internal sealed class TrayShell : ApplicationContext, IAgentShell
     }
 
     /// <summary>
-    /// Gives this version's icon the taskbar place the user chose for the previous one (<see cref="TrayIconCarryOver"/>):
-    /// asks every two seconds, for up to a minute, until Windows has an entry for the icon. When the entry changed, the
-    /// icon is added again so the taskbar reads it.
+    /// Gives the icon its first place (<see cref="TrayIconCarryOver"/>): asks every two seconds, for up to a minute, until
+    /// Windows has an entry for the icon. When the entry changed, the icon is added again so the taskbar reads it.
     /// </summary>
     public void KeepTrayPlace(Func<TrayIconCarryOver.Outcome> apply)
     {
@@ -388,6 +391,9 @@ internal sealed class TrayShell : ApplicationContext, IAgentShell
         };
         _placeTimer.Start();
     }
+
+    /// <summary>Why the message loop ended when the user ended it (the tray menu's Quit); null otherwise.</summary>
+    public string? QuitReason { get; private set; }
 
     /// <summary>Closes every window and ends the message loop; called on the UI thread or marshalled to it.</summary>
     public void Quit()

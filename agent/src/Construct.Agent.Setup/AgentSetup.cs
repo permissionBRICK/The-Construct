@@ -15,8 +15,9 @@ public sealed record SetupOutcome(string? Version, bool HandedOver);
 
 /// <summary>
 /// What <c>ConstructSetup.exe</c> does: the steps of install.ps1, for this user and without elevation. It reads the
-/// channel manifest, downloads the agent package, checks its SHA-256 against the manifest, unpacks it into
-/// <c>versions\&lt;version&gt;\</c> of the agent's folder, installs the VS Code extension the package carries where
+/// channel manifest, downloads the agent package, checks its SHA-256 against the manifest, puts it into <c>app\</c> of
+/// the agent's folder (the one folder the agent always runs from; the version it replaces waits in <c>previous\</c>
+/// until the new one passed its self-test), installs the VS Code extension the package carries where
 /// VS Code is installed (VS Code refusing it fails the setup), writes <c>install.json</c> and, when the agent has no
 /// settings yet, <c>device.json</c> with the channel, lets the agent start with Windows (the Run value), starts it
 /// and opens its window. The window then runs the first-run setup or the one-time upgrade of an old install; it
@@ -55,6 +56,12 @@ public sealed class AgentSetup(ISetupPlatform platform, HttpClient web, HttpClie
     public Action<long, long?>? Progress { get; init; }
 
     private string InstallPath => Path.Combine(platform.AgentHome, "install.json");
+
+    /// <summary>The one folder the agent runs from, whatever its version.</summary>
+    private string AppFolder => Path.Combine(platform.AgentHome, "app");
+
+    /// <summary>How long the setup tries to move <c>app\</c> aside (a scanner may hold a file of the agent that just quit).</summary>
+    public TimeSpan MoveLimit { get; init; } = TimeSpan.FromSeconds(10);
 
     public async Task<SetupOutcome> RunAsync(string channel, CancellationToken ct = default)
     {
@@ -117,7 +124,8 @@ public sealed class AgentSetup(ISetupPlatform platform, HttpClient web, HttpClie
         // The extension of the installed version goes into VS Code first, so an old control panel left in VS Code is replaced here too.
         if (InstalledVersion() is { } current && SetupChannel.IsVersion(current))
         {
-            var folder = Path.Combine(platform.AgentHome, "versions", current);
+            // app\, or for an install from before app\ its version's folder.
+            var folder = File.Exists(Path.Combine(AppFolder, VsixName)) ? AppFolder : Path.Combine(platform.AgentHome, "versions", current);
             if (File.Exists(Path.Combine(folder, VsixName))) await InstallVsCodeExtensionAsync(folder, ct).ConfigureAwait(false);
         }
 
@@ -233,9 +241,11 @@ public sealed class AgentSetup(ISetupPlatform platform, HttpClient web, HttpClie
 
         var package = SetupChannel.Package(manifest, manifestUrl, channel, Repository);
         Directory.CreateDirectory(platform.AgentHome);
-        var target = Path.Combine(platform.AgentHome, "versions", package.Version);
-        if (!File.Exists(Path.Combine(target, AgentExecutable)))
+        var previous = InstalledVersion();
+        if (previous == package.Version) previous = null;
+        if (ReadText(Path.Combine(AppFolder, ".version")) != package.Version || !File.Exists(Path.Combine(AppFolder, AgentExecutable)))
         {
+            var incoming = Path.Combine(platform.AgentHome, "app.incoming");
             var work = Path.Combine(Path.GetTempPath(), "construct-agent-" + Guid.NewGuid().ToString("n"));
             Directory.CreateDirectory(work);
             try
@@ -243,26 +253,41 @@ public sealed class AgentSetup(ISetupPlatform platform, HttpClient web, HttpClie
                 var zip = Path.Combine(work, "agent.zip");
                 output.WriteLine($"==> Downloading the Construct agent {package.Version} ...");
                 await DownloadAsync(package, zip, ct).ConfigureAwait(false);
-                var partial = target + ".partial";
-                if (Directory.Exists(partial)) Directory.Delete(partial, recursive: true);
-                try { ZipFile.ExtractToDirectory(zip, partial); }
+                if (Directory.Exists(incoming)) Directory.Delete(incoming, recursive: true);
+                try { ZipFile.ExtractToDirectory(zip, incoming); }
                 catch (InvalidDataException) { throw new SetupFailure("The agent package could not be unpacked."); }
-                if (!File.Exists(Path.Combine(partial, AgentExecutable))) throw new SetupFailure("The agent package has no construct-agent.exe.");
-                if (Directory.Exists(target)) Directory.Delete(target, recursive: true);
-                Directory.Move(partial, target);
+                if (!File.Exists(Path.Combine(incoming, AgentExecutable))) throw new SetupFailure("The agent package has no construct-agent.exe.");
+                File.WriteAllText(Path.Combine(incoming, ".version"), package.Version);
             }
             finally
             {
                 try { Directory.Delete(work, recursive: true); }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { /* the temp folder's own cleanup */ }
             }
+
+            // Before app\ changes: VS Code refusing the extension leaves the install as it was.
+            await InstallVsCodeExtensionAsync(incoming, ct).ConfigureAwait(false);
+
+            // No agent runs (a running one is handed over above). What app\ held stays in previous\ for the way back
+            // while the new version is on trial; an install from before app\ keeps its versions\ folder for that instead.
+            // The agent removes both once the new version passed its self-test.
+            if (Directory.Exists(AppFolder))
+            {
+                var aside = Path.Combine(platform.AgentHome, previous is null ? "app.failed" : "previous");
+                if (Directory.Exists(aside)) Directory.Delete(aside, recursive: true);
+                await MoveAsync(AppFolder, aside, ct).ConfigureAwait(false);
+            }
+
+            Directory.Move(incoming, AppFolder);
+        }
+        else
+        {
+            await InstallVsCodeExtensionAsync(AppFolder, ct).ConfigureAwait(false);
         }
 
-        await InstallVsCodeExtensionAsync(target, ct).ConfigureAwait(false);
+        var target = AppFolder;
 
         // With a previous version the new one is on trial: its first start self-tests and goes back when it fails (12.2).
-        var previous = InstalledVersion();
-        if (previous == package.Version) previous = null;
         WriteJson(InstallPath, json =>
         {
             json.WriteString("current", package.Version);
@@ -437,6 +462,30 @@ public sealed class AgentSetup(ISetupPlatform platform, HttpClient web, HttpClie
     }
 
     // ---- helpers ----
+
+    private async Task MoveAsync(string from, string to, CancellationToken ct)
+    {
+        var until = DateTime.UtcNow + MoveLimit;
+        while (true)
+        {
+            try
+            {
+                Directory.Move(from, to);
+                return;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                if (DateTime.UtcNow >= until) throw new SetupFailure($"The agent's folder is still in use ({ex.Message}). Quit the Construct agent and run the setup again.");
+                await Task.Delay(Poll, ct).ConfigureAwait(false);
+            }
+        }
+    }
+
+    private static string? ReadText(string path)
+    {
+        try { return File.Exists(path) ? File.ReadAllText(path).Trim() : null; }
+        catch (IOException) { return null; }
+    }
 
     /// <summary><c>current</c> of <c>install.json</c>, or null.</summary>
     private string? InstalledVersion() => ReadJson(InstallPath) is { } state ? Text(state, "current") : null;

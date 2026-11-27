@@ -84,7 +84,7 @@ public sealed class DeviceServices : IAsyncDisposable
                 new SshConfiguration(target.Address!.Host, target.Alias, "root", "", target.Address.Port, 12, target.Ipv4), platform.SshExecutable, key),
             new SshProcessSupervisor(clock), new LoopbackAudioServerFactory(), clock, agent.Events);
         var install = new AgentInstall(options.DataDirectory, OperatingSystem.IsWindows() ? "construct-agent.exe" : "construct-agent");
-        var running = install.RunningVersion(Environment.ProcessPath);
+        var running = install.RunningVersion(Environment.ProcessPath, options.Version);
         UpdateEverything? everything = null;
         var t3Desktop = new T3DesktopUpdater(platform.T3Desktop, engines, settings, new HttpClient { Timeout = TimeSpan.FromMinutes(10) },
             () => agent.Events.Publish("update"), options.Time, agent.Events);
@@ -96,7 +96,7 @@ public sealed class DeviceServices : IAsyncDisposable
         everything = new UpdateEverything(engines, updater, () => agent.Events.Publish("update"), options.Time, t3Desktop);
         var services = new DeviceServices(platform, settings, ssh, links, updater, everything, engines, agent.Events, options.Time, t3Desktop)
         {
-            StartExecutable = running is not null ? install.ExecutableOf(running) : Environment.ProcessPath,
+            StartExecutable = running is not null ? install.AppExecutable : Environment.ProcessPath,
         };
         updater.OpenSurfaces = () => services.Shell?.Visible() ?? [];
         return services;

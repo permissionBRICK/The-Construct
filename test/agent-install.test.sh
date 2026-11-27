@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # The Linux install script of the device agent (agent/install/install-construct-agent.sh): a local package
-# lands in versions/<version>/, install.json names it current and the one before as previous, and nothing
-# needs root. systemd is faked away; the start itself is not run (--no-start). The package's VS Code
+# lands in app/ (the one path the agent runs from), the version it replaces waits in previous/, install.json
+# names it current and the one before as previous, and nothing needs root. systemd is faked away; the start itself is not run (--no-start). The package's VS Code
 # extension goes into VS Code when there is one (a fake `code`), a refusal fails the install, no VS Code is
 # fine; and scripts/package-agent.py's construct.vsix holds what the extension runs, with the install scripts.
 set -euo pipefail
@@ -23,22 +23,26 @@ agent="$XDG_DATA_HOME/construct-agent"
 fail() { echo "FAIL: $*" >&2; exit 1; }
 
 bash agent/install/install-construct-agent.sh --package "$work/agent.zip" --version "1.0.0+aaaa" --no-start >/dev/null
-[[ -x "$agent/versions/1.0.0+aaaa/construct-agent" ]] || fail "the executable was not unpacked executable"
-[[ -f "$agent/versions/1.0.0+aaaa/ui/index.html" ]] || fail "the UI bundle is missing"
+[[ -x "$agent/app/construct-agent" ]] || fail "the executable was not unpacked executable"
+[[ -f "$agent/app/ui/index.html" ]] || fail "the UI bundle is missing"
+[[ "$(cat "$agent/app/.version")" == "1.0.0+aaaa" ]] || fail "app/ does not name its version"
+[[ ! -e "$agent/previous" && ! -e "$agent/app.incoming" ]] || fail "a fresh install left previous/ or app.incoming/"
 [[ "$(stat -c %a "$agent")" == 700 ]] || fail "the agent directory is not 0700"
 [[ "$(stat -c %a "$agent/install.json")" == 600 ]] || fail "install.json is not 0600"
 python3 -c 'import json,sys; s=json.load(open(sys.argv[1])); assert s=={"current":"1.0.0+aaaa","previous":None,"pending":False}, s' "$agent/install.json"
 
 bash agent/install/install-construct-agent.sh --package "$work/agent.zip" --version "1.1.0+bbbb" --no-start >/dev/null
 python3 -c 'import json,sys; s=json.load(open(sys.argv[1])); assert s=={"current":"1.1.0+bbbb","previous":"1.0.0+aaaa","pending":True}, s' "$agent/install.json"
+[[ "$(cat "$agent/app/.version")" == "1.1.0+bbbb" && "$(cat "$agent/previous/.version")" == "1.0.0+aaaa" ]] || fail "the replaced version is not in previous/"
 
 # VS Code present: the package's extension is installed; VS Code refusing it fails the install.
 printf '#!/bin/sh\necho "$@" >> "%s/code-calls"\necho warning >&2\nexit "${CODE_EXIT:-0}"\n' "$work" > "$work/bin/code"; chmod +x "$work/bin/code"
 bash agent/install/install-construct-agent.sh --package "$work/agent.zip" --version "1.2.0+cccc" --no-start >/dev/null
-[[ "$(cat "$work/code-calls")" == "--install-extension $agent/versions/1.2.0+cccc/construct.vsix --force" ]] || fail "VS Code did not get the package's extension: $(cat "$work/code-calls")"
+[[ "$(cat "$work/code-calls")" == "--install-extension $agent/app.incoming/construct.vsix --force" ]] || fail "VS Code did not get the package's extension: $(cat "$work/code-calls")"
 if CODE_EXIT=1 bash agent/install/install-construct-agent.sh --package "$work/agent.zip" --version "1.3.0+dddd" --no-start >/dev/null 2>"$work/err"; then fail "a refused extension did not fail the install"; fi
 grep -q 'did not install the Construct extension' "$work/err" || fail "the failure does not say what failed"
 python3 -c 'import json,sys; s=json.load(open(sys.argv[1])); assert s["current"]=="1.2.0+cccc", s' "$agent/install.json" || fail "a failed install changed install.json"
+[[ "$(cat "$agent/app/.version")" == "1.2.0+cccc" ]] || fail "a failed install changed app/"
 rm "$work/bin/code"
 
 # The packager's VSIX: the extension's run-time files and the agent's install scripts, nothing of the VM's.

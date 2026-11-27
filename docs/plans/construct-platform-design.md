@@ -1031,7 +1031,7 @@ SETTLED (owner, 2026-11-20, S32, S34, S36).
 | Topic | Rule |
 |---|---|
 | Engine rollback | Files only, automatic when the new version fails its health check (12.1). The database copy from before the update is for a manual restore. Because the database is never rolled back automatically, the replica needs no special handling. |
-| Agent rollback | Previous install kept; failed `--selftest` relaunches it. |
+| Agent rollback | The agent always runs from `app/`; the version an update replaced waits in `previous/` until the new one passes its self-test, which then leaves only `app/`. A failed self-test starts the previous copy, which moves back into `app/`. |
 | Guest | Reprovision replaces scripts and restarts services in place (`provision.sh:1281`, `:1515`); a failed run is "partially applied" with per-step results and a repair job; no old-version rollback. |
 | Skew | A client and a host work together when they are on the same release or one apart; otherwise the newer side names the module to update. A replaced route is removed one release later, except the routes old-stack clients use, which stay until phase 6. Record payloads: 9.8. |
 

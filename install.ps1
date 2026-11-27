@@ -8,9 +8,10 @@
     Installs the Construct device agent for this user, without elevation, and starts it.
     Standalone: it needs no agent and none of the old client's scripts. It reads the
     channel manifest (main = stable, any other ref = nightly), downloads the agent
-    package, checks its SHA-256 against the manifest, unpacks it into
-    %LOCALAPPDATA%\Construct\agent\versions\<version>\ (one folder whatever the
-    channel), installs the VS Code extension it carries where VS Code is installed (a
+    package, checks its SHA-256 against the manifest, puts it into
+    %LOCALAPPDATA%\Construct\agent\app\ (the one folder the agent always runs from,
+    whatever the version or channel; the version it replaces waits in previous\ until
+    the new one passed its self-test), installs the VS Code extension it carries where VS Code is installed (a
     failure there fails the install), lets it start with Windows and starts it. The agent's window then runs
     the one-time upgrade of an old install, or the first-run setup.
 
@@ -137,8 +138,15 @@ function Install-ConstructAgentPackage {
     }
     $version = [string]$manifest.version
     New-Item -ItemType Directory -Force -Path $agentHome | Out-Null
-    $target = Join-Path $agentHome ("versions\" + $version)
-    if (-not (Test-Path -LiteralPath (Join-Path $target 'construct-agent.exe'))) {
+    $app = Join-Path $agentHome 'app'
+    $installPath = Join-Path $agentHome 'install.json'
+    $previous = $null
+    if (Test-Path -LiteralPath $installPath) { try { $previous = (Get-Content -Raw -LiteralPath $installPath | ConvertFrom-Json).current } catch { $previous = $null } }
+    if ($previous -eq $version) { $previous = $null }
+    $appVersion = $null
+    try { $appVersion = (Get-Content -Raw -LiteralPath (Join-Path $app '.version') -ErrorAction Stop).Trim() } catch { $appVersion = $null }
+    if ($appVersion -ne $version -or -not (Test-Path -LiteralPath (Join-Path $app 'construct-agent.exe'))) {
+        $incoming = Join-Path $agentHome 'app.incoming'
         $work = Join-Path ([IO.Path]::GetTempPath()) ('construct-agent-' + [Guid]::NewGuid().ToString('n'))
         New-Item -ItemType Directory -Path $work | Out-Null
         try {
@@ -148,23 +156,33 @@ function Install-ConstructAgentPackage {
             $oldPP = $ProgressPreference; $ProgressPreference = 'SilentlyContinue'
             try { Invoke-WebRequest -UseBasicParsing -Uri $url -OutFile $zip -TimeoutSec 300 } finally { $ProgressPreference = $oldPP }
             if ((Get-FileHash -Algorithm SHA256 -LiteralPath $zip).Hash.ToLowerInvariant() -ne [string]$entry.sha256) { throw 'The agent package does not match the SHA-256 in the channel manifest.' }
-            $partial = "$target.partial"
-            if (Test-Path -LiteralPath $partial) { Remove-Item -Recurse -Force -LiteralPath $partial }
+            if (Test-Path -LiteralPath $incoming) { Remove-Item -Recurse -Force -LiteralPath $incoming }
             Add-Type -AssemblyName System.IO.Compression.FileSystem
-            [IO.Compression.ZipFile]::ExtractToDirectory($zip, $partial)
-            if (-not (Test-Path -LiteralPath (Join-Path $partial 'construct-agent.exe'))) { throw 'The agent package has no construct-agent.exe.' }
-            if (Test-Path -LiteralPath $target) { Remove-Item -Recurse -Force -LiteralPath $target }
-            Move-Item -LiteralPath $partial -Destination $target
+            [IO.Compression.ZipFile]::ExtractToDirectory($zip, $incoming)
+            if (-not (Test-Path -LiteralPath (Join-Path $incoming 'construct-agent.exe'))) { throw 'The agent package has no construct-agent.exe.' }
+            [IO.File]::WriteAllText((Join-Path $incoming '.version'), $version)
         } finally {
             Remove-Item -Recurse -Force -LiteralPath $work -ErrorAction SilentlyContinue
         }
+        # Before app\ changes: VS Code refusing the extension leaves the install as it was.
+        Install-ConstructVsCodeExtension -Folder $incoming
+        # No agent runs (a running one is handed over below). What app\ held stays in previous\ for the way back while
+        # the new version is on trial; an install from before app\ keeps its versions\ folder for that instead. The agent
+        # removes both once the new version passed its self-test.
+        if (Test-Path -LiteralPath $app) {
+            $aside = if ($previous) { Join-Path $agentHome 'previous' } else { Join-Path $agentHome 'app.failed' }
+            if (Test-Path -LiteralPath $aside) { Remove-Item -Recurse -Force -LiteralPath $aside }
+            for ($try = 1; ; $try++) {
+                try { Move-Item -LiteralPath $app -Destination $aside; break }
+                catch { if ($try -ge 40) { throw "The agent's folder is still in use: $($_.Exception.Message)" }; Start-Sleep -Milliseconds 250 }
+            }
+        }
+        Move-Item -LiteralPath $incoming -Destination $app
+    } else {
+        Install-ConstructVsCodeExtension -Folder $app
     }
-    Install-ConstructVsCodeExtension -Folder $target
+    $target = $app
 
-    $installPath = Join-Path $agentHome 'install.json'
-    $previous = $null
-    if (Test-Path -LiteralPath $installPath) { try { $previous = (Get-Content -Raw -LiteralPath $installPath | ConvertFrom-Json).current } catch { $previous = $null } }
-    if ($previous -eq $version) { $previous = $null }
     $state = [ordered]@{ current = $version; previous = $previous; pending = [bool]$previous } | ConvertTo-Json
     [IO.File]::WriteAllText($installPath, $state, (New-Object Text.UTF8Encoding($false)))
     # The channel this install came from, unless the agent has its own settings already.
@@ -199,7 +217,9 @@ if ($running) {
     $current = $null
     try { $current = [string](Get-Content -Raw -LiteralPath (Join-Path $agentHome 'install.json') | ConvertFrom-Json).current } catch { $current = $null }
     if ($current -match '^[A-Za-z0-9.+_-]+$' -and $current -notin @('.', '..')) {
-        $folder = Join-Path $agentHome ('versions\' + $current)
+        # app\, or for an install from before app\ its version's folder.
+        $folder = Join-Path $agentHome 'app'
+        if (-not (Test-Path -LiteralPath (Join-Path $folder 'construct.vsix'))) { $folder = Join-Path $agentHome ('versions\' + $current) }
         if (Test-Path -LiteralPath (Join-Path $folder 'construct.vsix')) { Install-ConstructVsCodeExtension -Folder $folder }
     }
     # The window first: an update restarts the agent, and the new version opens again what was open.

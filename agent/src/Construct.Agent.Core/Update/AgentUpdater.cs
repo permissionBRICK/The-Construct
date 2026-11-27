@@ -26,11 +26,13 @@ public interface IAgentLauncher
 
 /// <summary>
 /// The agent updating itself (12.1, 12.2, S20): it reads its channel's manifest, downloads its own
-/// package, checks the SHA-256 the manifest names, unpacks it beside the running version and, when
-/// the agent is idle, switches: <c>install.json</c> names the new version as current and pending and
-/// the running one as previous, the new one is started and this one stops. The new one confirms itself
-/// with a self-test at start (<see cref="StartupAsync"/>); when that fails it starts the previous one
-/// again. Nothing here installs an engine or a VM; "update everything" asks them.
+/// package, checks the SHA-256 the manifest names, unpacks it into <c>next/</c> and, when the agent is
+/// idle, switches: <c>install.json</c> names the new version as current and pending and the running one
+/// as previous, the copy in <c>next/</c> is started and this agent stops. That copy moves itself into
+/// <c>app/</c> once this one has exited and starts the agent there (<see cref="InstallStartedCopyAsync"/>),
+/// so the agent always runs from one path. The new version confirms itself with a self-test at start
+/// (<see cref="StartupAsync"/>); when that fails it starts the previous one again, which moves back into
+/// <c>app/</c> the same way. Nothing here installs an engine or a VM; "update everything" asks them.
 /// </summary>
 public sealed class AgentUpdater : IAsyncDisposable
 {
@@ -77,6 +79,8 @@ public sealed class AgentUpdater : IAsyncDisposable
         _stop = stop;
         _changed = changed;
         _repository = repository;
+        // A version whose move into app/ failed is not installed automatically again (each try would restart the agent).
+        _autoFailedVersion = install.Read().Failed;
     }
 
     /// <summary>The installed version this process runs as; null for a development build.</summary>
@@ -293,7 +297,7 @@ public sealed class AgentUpdater : IAsyncDisposable
         {
             if (_lifetime.IsCancellationRequested || _offer is null || !_work.IsCompleted) return false;
             if (string.Equals(_autoFailedVersion, _offer.Version, StringComparison.Ordinal)) return false;
-            if (surfacesOpen && Directory.Exists(_install.DirectoryOf(_offer.Version))) return false;
+            if (surfacesOpen && _install.StagedVersion() == _offer.Version) return false;
             offer = _offer;
             _state = "waiting";
             _error = null;
@@ -324,22 +328,28 @@ public sealed class AgentUpdater : IAsyncDisposable
         {
             if (!await WaitUntilIdleAsync(automatic, ct).ConfigureAwait(false)) { Set("idle"); return; }
             Set("downloading");
-            var target = _install.DirectoryOf(package.Version);
-            if (!Directory.Exists(target))
+            if (_install.StagedVersion() != package.Version)
             {
-                Directory.CreateDirectory(_install.VersionsDirectory);
-                var download = Path.Combine(_install.VersionsDirectory, ".download-" + Guid.NewGuid().ToString("n")[..8]);
+                Directory.CreateDirectory(_options.DataDirectory);
+                var download = Path.Combine(_options.DataDirectory, ".download-" + Guid.NewGuid().ToString("n")[..8]);
                 try
                 {
                     await DownloadCheckedAsync(package, download, ct).ConfigureAwait(false);
                     Set("installing");
-                    var partial = target + ".partial";
-                    if (Directory.Exists(partial)) Directory.Delete(partial, recursive: true);
-                    ZipFile.ExtractToDirectory(download, partial);
-                    var executable = Path.Combine(partial, _install.ExecutableName);
-                    if (!File.Exists(executable)) throw new AgentFailure(502, "package-invalid", $"The package has no {_install.ExecutableName}.");
-                    if (!OperatingSystem.IsWindows()) File.SetUnixFileMode(executable, File.GetUnixFileMode(executable) | UnixFileMode.UserExecute);
-                    Directory.Move(partial, target);
+                    try
+                    {
+                        _install.Stage(partial =>
+                        {
+                            ZipFile.ExtractToDirectory(download, partial);
+                            var executable = Path.Combine(partial, _install.ExecutableName);
+                            if (File.Exists(executable) && !OperatingSystem.IsWindows())
+                                File.SetUnixFileMode(executable, File.GetUnixFileMode(executable) | UnixFileMode.UserExecute);
+                        }, package.Version);
+                    }
+                    catch (InvalidDataException ex) when (ex.Message.StartsWith("The package has no", StringComparison.Ordinal))
+                    {
+                        throw new AgentFailure(502, "package-invalid", ex.Message);
+                    }
                 }
                 finally
                 {
@@ -360,7 +370,7 @@ public sealed class AgentUpdater : IAsyncDisposable
             _install.Write(new InstallState(package.Version, Running, Pending: true));
             // The surfaces open now open again in the new version (finding 5), the window first so the pop-out shows over it.
             var surfaces = (OpenSurfaces?.Invoke() ?? []).Where(s => s is "pop" or "win").ToArray();
-            await _launcher.LaunchAsync(_install.ExecutableOf(package.Version), surfaces, ct).ConfigureAwait(false);
+            await _launcher.LaunchAsync(_install.NextExecutable, surfaces, ct).ConfigureAwait(false);
             _stop();
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -526,33 +536,77 @@ public sealed class AgentUpdater : IAsyncDisposable
     /// Starts the agent with <paramref name="startAndSelfTest"/> (the host comes up and answers its own
     /// health route). For the version the last switch made current and pending, a failure there writes
     /// the previous version back as current, starts it with <paramref name="launcher"/> and returns false;
-    /// a pass confirms the version, prunes older ones and calls <paramref name="confirmed"/> with the
-    /// version's directory (what follows the agent: the VS Code extension). Any other start just runs.
+    /// a pass confirms the version and calls <paramref name="confirmed"/> with <c>app/</c> (what follows the
+    /// agent: the VS Code extension). Once no version is on trial, only <c>app/</c> is kept (<see cref="AgentInstall.Clean"/>).
     /// </summary>
     public static async Task<bool> StartupAsync(AgentInstall install, string? running, Func<Task> startAndSelfTest, IAgentLauncher launcher,
-        Func<Task>? waitForPrevious = null, Action<string>? confirmed = null, CancellationToken ct = default)
+        Func<Task>? waitForPrevious = null, Action<string>? confirmed = null, Action<string>? log = null, CancellationToken ct = default)
     {
         var state = install.Read();
         var trial = state.Pending && running is not null && running == state.Current;
+        var previous = trial ? install.PreviousExecutable(state) : null;
         if (trial && waitForPrevious is not null) await waitForPrevious().ConfigureAwait(false);
         try
         {
             await startAndSelfTest().ConfigureAwait(false);
         }
-        catch (Exception) when (trial && state.Previous is not null)
+        catch (Exception ex) when (previous is not null)
         {
+            log?.Invoke($"{running} failed its self-test ({ex.GetType().Name}: {ex.Message}); starting {state.Previous} again");
             install.Write(new InstallState(state.Previous, null));
-            await launcher.LaunchAsync(install.ExecutableOf(state.Previous), [], ct).ConfigureAwait(false);
+            await launcher.LaunchAsync(previous, [], ct).ConfigureAwait(false);
             return false;
         }
 
         if (trial)
         {
-            install.Write(state with { Pending = false });
-            install.Prune();
-            confirmed?.Invoke(install.DirectoryOf(running!));
+            install.Write(state with { Previous = null, Pending = false, Failed = null });
+            log?.Invoke($"{running} passed its self-test");
+            confirmed?.Invoke(install.AppDirectory);
         }
 
+        if (running is not null && !install.Read().Pending && !install.Clean())
+        {
+            // The copy that installed this version may still be exiting: try once more in a while.
+            _ = Task.Run(async () =>
+            {
+                await Task.Delay(TimeSpan.FromSeconds(30), CancellationToken.None).ConfigureAwait(false);
+                if (!install.Read().Pending) install.Clean();
+            }, CancellationToken.None);
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// A copy started anywhere in the agent's directory but <c>app/</c> (<c>next/</c> after an update, <c>previous/</c> on the
+    /// way back, an old <c>versions/&lt;v&gt;/</c> after an update from before <c>app/</c>, or what an installer unpacked):
+    /// it never runs as the agent. Once the agent that ran from <c>app/</c> has exited (<paramref name="waitForPrevious"/>), it
+    /// moves into <c>app/</c> and starts the agent there with the <paramref name="surfaces"/> that were open. When the move
+    /// fails, <c>app/</c> keeps what it had, <c>install.json</c> goes back to it (the version is marked failed so automatic
+    /// updates do not retry it) and that agent starts again.
+    /// </summary>
+    /// <returns>False when nothing could be started: the caller then runs this copy itself.</returns>
+    public static async Task<bool> InstallStartedCopyAsync(AgentInstall install, string executable, IReadOnlyList<string> surfaces,
+        IAgentLauncher launcher, Func<Task>? waitForPrevious, Action<string> log, CancellationToken ct = default)
+    {
+        if (waitForPrevious is not null) await waitForPrevious().ConfigureAwait(false);
+        var source = Path.GetDirectoryName(Path.GetFullPath(executable))!;
+        try
+        {
+            install.InstallIntoApp(source);
+            log($"moved {source} into {install.AppDirectory}");
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            log($"could not move {source} into {install.AppDirectory}: {ex.Message}");
+            var state = install.Read();
+            if (state.Pending && state.Previous is not null)
+                install.Write(new InstallState(state.Previous, null, Pending: false, Failed: state.Current));
+            if (!File.Exists(install.AppExecutable)) return false;
+        }
+
+        await launcher.LaunchAsync(install.AppExecutable, surfaces, ct).ConfigureAwait(false);
         return true;
     }
 
