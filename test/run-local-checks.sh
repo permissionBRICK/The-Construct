@@ -208,6 +208,7 @@ if runs service; then
   step bash test/provision-deferred-checkout.test.sh
   step bash test/install-sdks.test.sh
   step bash test/apt-wait.test.sh
+  step bash test/apt-primary-archive.test.sh
   step bash test/docker-registry-mirrors.test.sh
   step bash test/oom-guard.test.sh
   step bash test/setup-swap.test.sh
