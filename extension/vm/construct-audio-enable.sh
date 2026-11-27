@@ -105,8 +105,8 @@ fi
 # Find the installed claude-code extension(s). There can be more than one version
 # directory (a pending update); patch every copy that still contains the gate so the
 # active one is covered regardless of which VS Code loads.
-ANCHOR='remoteName)return!1'
-PATCHED='remoteName&&!1)return!1'
+ANCHOR='remoteName||this.isConfined())return!1'
+PATCHED='remoteName&&!1||this.isConfined())return!1'
 patched_any=0
 found_ext=0
 

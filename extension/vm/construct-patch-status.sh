@@ -31,8 +31,8 @@ partial_has_stock() {
 }
 
 # ── chat-mic speech gate (matches construct-audio-enable.sh constants) ──────────
-GATE_ANCHOR='remoteName)return!1'          # stock (unpatched)
-GATE_PATCHED='remoteName&&!1)return!1'      # neutralised
+GATE_ANCHOR='remoteName||this.isConfined())return!1'          # stock (unpatched)
+GATE_PATCHED='remoteName&&!1||this.isConfined())return!1'      # neutralised
 
 found_ext=0
 partial_stock=0; partial_patched=0
