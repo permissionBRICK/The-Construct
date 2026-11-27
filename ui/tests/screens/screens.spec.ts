@@ -247,6 +247,14 @@ test('a secret username can be added, revealed, edited, and cleared', async ({ p
   await row.getByRole('button', { name: 'Edit' }).click();
   const userField = row.getByLabel('Username of staging-db');
   await expect(userField).toHaveValue('staging-db-user');
+  // Revealed while editing, the actions move below the note instead of squeezing it to one letter per line.
+  await row.getByRole('button', { name: 'Show' }).click();
+  await expect(row.locator('code.reveal-user')).toHaveText('staging-db-user');
+  const shown = (await row.locator('.note').boundingBox())!;
+  expect(shown.width).toBeGreaterThan(80);
+  expect(shown.height).toBeLessThan(30);
+  await row.getByRole('button', { name: 'Hide' }).click();
+  await expect(row.locator('code.reveal-user')).toHaveCount(0);
   await expect(row.getByRole('button', { name: 'Save' })).toBeDisabled();
   await userField.fill('');
   await expect(row.getByRole('button', { name: 'Save' })).toBeEnabled();

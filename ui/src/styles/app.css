@@ -195,8 +195,10 @@ html[data-surf="alone"] body { background: transparent; }
 .app .tb.secrets tr.open td { border-bottom: 0; }
 .app .tb.secrets tr.open td.e svg { transform: rotate(180deg); }
 .app .tb.secrets tr.more-row td { height: auto; padding: 0 0 12px; white-space: normal; }
-.app .tb .sx { display: flex; align-items: flex-start; gap: 14px; }
-.app .tb .sx .smeta { flex: 1; min-width: 0; display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 10px; padding-top: 5px; }
+/* the note keeps at least 240px; when a revealed value or the edit fields make the actions wider than the rest,
+   they move below the note instead of squeezing it to one letter per line */
+.app .tb .sx { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 8px 14px; }
+.app .tb .sx .smeta { flex: 1 1 240px; min-width: 0; display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 10px; padding-top: 5px; }
 .app .tb .sx .note { margin: 0; min-width: 0; color: var(--fg); overflow-wrap: anywhere; }
 .app .tb .sx .acts { margin-left: auto; }
 .app .tb.secrets .confirm .in { width: 170px; }
