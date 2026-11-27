@@ -169,12 +169,12 @@ public sealed class VaultCoreTests
         var prompt = VaultPrompts.AutoApprove("dev", entry, request);
         Assert.Equal("Key vault — auto-approve secret", prompt.Title);
         Assert.Equal("The VM “dev” asks to auto-approve this secret:\n  • pushover — Pushover app token\n\n" +
-                     "Agents on all your VMs could then read it at any time without asking you, and no VM is scrubbed of it any more.\n" +
+                     "Agents on all your VMs could then read it at any time without asking you, and scrubs would redact it only from agent logs.\n" +
                      "Reason given: “notify jobs”\nRequested by root@dev", prompt.Message);
         Assert.Equal("Auto-approve", prompt.Action);
 
         var replace = request with { Op = "add", Description = "Rotated" };
-        const string Turns = "\n\nIt also becomes auto-approved: agents on all your VMs read it without asking you, and no VM is scrubbed of it.";
+        const string Turns = "\n\nIt also becomes auto-approved: agents on all your VMs read it without asking you, and scrubs redact it only from agent logs.";
         Assert.Equal("The VM “dev” wants to replace the value of:\n  • pushover — Pushover app token\n\nNew description: Rotated" + Turns +
                      "\nReason given: “notify jobs”\nRequested by root@dev", VaultPrompts.Replace("dev", entry, replace).Message);
         Assert.DoesNotContain("auto-approved", VaultPrompts.Replace("dev", entry with { AutoApprove = true }, replace).Message);

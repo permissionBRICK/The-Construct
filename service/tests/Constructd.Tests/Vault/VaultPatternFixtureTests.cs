@@ -1,4 +1,5 @@
 using System.Text.Json.Nodes;
+using System.Text.RegularExpressions;
 using Constructd.Core.Logic;
 
 namespace Constructd.Tests.Vault;
@@ -33,5 +34,15 @@ public sealed class VaultPatternFixtureTests
             Assert.True(VaultProtocol.IsAgentLog(c!["path"]!.GetValue<string>()) == c["agentLog"]!.GetValue<bool>(), c["path"]!.GetValue<string>()));
         Assert.All(fixture["databases"]!.AsArray(), c =>
             Assert.Equal(c!["database"]!.GetValue<string>(), VaultProtocol.DatabaseFor(c["path"]!.GetValue<string>())));
+    }
+
+    [Fact]
+    public void A_logs_only_scan_reaches_every_agent_log()
+    {
+        // The roots are shell globs: * stays within one directory, and a root covers everything below it.
+        var roots = VaultProtocol.AgentLogRoots.Select(r => new Regex("^" + Regex.Escape(r).Replace(@"\*", "[^/]*", StringComparison.Ordinal) + "(/|$)")).ToArray();
+        var logs = Fixture()["agentLogs"]!.AsArray().Where(c => c!["agentLog"]!.GetValue<bool>()).Select(c => c!["path"]!.GetValue<string>()).ToArray();
+        Assert.NotEmpty(logs);
+        Assert.All(logs, path => Assert.True(roots.Any(r => r.IsMatch(path)), path));
     }
 }

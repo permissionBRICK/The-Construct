@@ -119,6 +119,14 @@ public static partial class VaultProtocol
     // Agent transcripts, session stores and harness logs are scrubbed without asking; every other
     // hit is the user's decision. Keep in sync with docs/key-vault.md.
     public static bool IsAgentLog(string path) => AgentLog().IsMatch(path);
+    // Where a logs-only scan searches: the agent data directories that hold every IsAgentLog path, as shell globs the
+    // guest expands. Other files under them (an agent's own settings) are found too and kept.
+    public static readonly IReadOnlyList<string> AgentLogRoots =
+    [
+        "/root/.claude", "/root/.codex", "/root/.local/share/opencode", "/root/.t3/userdata",
+        "/home/*/.claude", "/home/*/.codex", "/home/*/.local/share/opencode", "/home/*/.t3/userdata",
+        "/tmp/claude-*",
+    ];
     // SQLite keeps recent pages in side files; the scrub works on the database they belong to.
     public static string DatabaseFor(string path) => SqliteSide().Replace(path, "");
 

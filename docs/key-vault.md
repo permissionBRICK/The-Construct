@@ -6,7 +6,7 @@ read a value only after you approve it in the Companion: for a number of uses, f
 or both. When the access ends, the Companion searches that VM for every copy of the value. Agent
 logs are redacted automatically. Any other file is listed for you, and you decide per file.
 Less sensitive secrets can be [auto-approved](#auto-approved-secrets): agents then read them without
-asking you, and VMs are not scrubbed of them.
+asking you, and only the agent logs are scrubbed of them.
 
 VMs on a host service (remote Hyper-V or Proxmox) use a copy of the same vault kept on that host,
 so they work while your PC is off, and you can approve from a paired phone. See
@@ -81,9 +81,9 @@ $ construct secret release github-token staging-db
 | `list`, `status` | no | All secrets with descriptions (never values) / only those this VM holds now |
 | `request <name>… [--uses N] [--for 2h] [--reason …]` | yes, once for all names | Pre-approves access. Without `--uses`/`--for` it asks for one hour. |
 | `get <name> [--username\|--json]` | only without a lease | Prints the value (or username) and counts one use. Without a lease it asks for a single use, unless the secret is auto-approved. |
-| `release <name>…` | no | Ends this VM's access to the named secrets. The scrub starts a few seconds later. |
+| `release <name>…` | no | Ends this VM's access to the named secrets. The scrub starts a few seconds later (for an auto-approved secret, of the agent logs only). |
 | `add <name> --description … [--username …] [--for 2h]` | no | Stores a secret the agent created, read from stdin or `--file`. This VM holds it for an hour (or `--for`), then it is scrubbed. |
-| `add <name> … --auto-approve` | no | Stores it auto-approved: no lease, no scrub. |
+| `add <name> … --auto-approve` | no | Stores it auto-approved: no lease, and scrubs redact it only from agent logs. |
 | `add <name> … --replace` | yes | Overwrites an existing secret's value. VMs that saw the old value are scrubbed of it. The secret keeps its auto-approve setting; with `--auto-approve` your approval switches it on too. |
 | `delete <name>` | yes | Removes a secret from the vault. |
 | `auto-approve <name> on` | yes | Switches auto-approve on. |
@@ -142,17 +142,23 @@ For an auto-approved secret:
 - `request` grants it at once without a lease, and the activity lists that. A request for several
   secrets asks you only about the others. If you deny those, the agent can still read the
   auto-approved ones.
-- VMs are not scrubbed of it. A lease that was approved before you switched auto-approve on ends
-  without a scrub, and scrubs of it that were still waiting are dropped.
+- Only the agent logs are scrubbed of it: a value an agent echoed by mistake should not stay in a
+  transcript, but every other file on the VM may keep it. The scrub runs an hour after the VM's
+  last `get` of it, or a few seconds after a `release`, and searches only the agent data
+  directories (`.claude`, `.codex`, `.local/share/opencode`, `.t3/userdata` under `/root` and every
+  `/home/<user>`, and `/tmp/claude-*`). It redacts what it finds in the [agent logs](#scrubbing-a-vm)
+  and keeps every other file without asking you. The activity lists only what it redacted.
+- A lease that was approved before you switched auto-approve on ends with the same scrub of the
+  agent logs, and so do scrubs of it that were still waiting.
 - `construct secret list` shows it as `auto-approved`, and `status` lists it as readable.
 
-Switching auto-approve off does not scrub VMs that read the secret while it was on. Revoke or
+Switching auto-approve off does not scrub the rest of the VMs that read the secret while it was on. Revoke or
 replace the value if that matters. The setting syncs with your hosts like the rest of the entry, so
 hosted VMs follow it too.
 
 ## Scrubbing a VM
 
-When a lease ends, the Companion scrubs that VM (unless the secret is [auto-approved](#auto-approved-secrets)): a few seconds after a release or revocation, at
+When a lease ends, the Companion scrubs that VM (only its agent logs if the secret is [auto-approved](#auto-approved-secrets)): a few seconds after a release or revocation, at
 once on expiry, and one minute after the last use (the command that used it may still be
 running). The VM must be online with the Companion connected. Otherwise the scrub waits, and
 the **Access** tab lists it. A failed scrub is retried five minutes later. If the same VM holds
@@ -438,7 +444,8 @@ responses/<id>.json   {"v":1,"id","status":"ok|denied|notFound|exists|invalid|er
 `autoApprove` is a boolean: required for the `autoApprove` operation, optional for `add`
 (true stores the secret auto-approved). Items of `list` and `status` carry `autoApprove`.
 `auto` names the secrets of a `request` that were granted without a lease, and those of a
-`release` that are not scrubbed. `add` and `autoApprove` answer with the secret's setting in
+`release` that are scrubbed only from the agent logs. A host service also names the latter in
+`logScrub`. `add` and `autoApprove` answer with the secret's setting in
 `autoApprove`. A `get` of an auto-approved secret without a lease answers with `"lease":null`.
 
 The Companion's local API (`http://127.0.0.1:<port>`, bearer token from `endpoint.json`) has three

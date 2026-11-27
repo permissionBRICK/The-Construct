@@ -85,7 +85,8 @@ public sealed partial class VaultHostService
     }
 
     // One scan per VM at a time, for every cleanup that is due — unless that VM holds the same value
-    // again: that lease's own end scrubs it. A secret that became auto-approved meanwhile is not scrubbed.
+    // again: that lease's own end scrubs it. A secret that is auto-approved by now is scrubbed from the agent
+    // logs only. Whole-VM cleanups go first; the logs-only ones of that VM wait for the next scan.
     private async Task ScheduleAsync(string owner, DateTimeOffset now, CancellationToken ct)
     {
         var cleanups = await store.ListAsync<VaultCleanup>(owner, ct).ConfigureAwait(false);
@@ -93,18 +94,16 @@ public sealed partial class VaultHostService
         var leases = await store.ListAsync<VaultLease>(owner, ct).ConfigureAwait(false);
         var entries = await EntriesAsync(owner, ct).ConfigureAwait(false);
         var jobs = await store.ListAsync<VaultScrubJob>(owner, ct).ConfigureAwait(false);
-        var ready = new List<VaultCleanup>();
-        foreach (var cleanup in cleanups.Where(c => c.DueAt <= now))
-            if (Live(entries, cleanup.Copy.Name) is { AutoApprove: true }) await store.DeleteAsync<VaultCleanup>(cleanup.Id, ct).ConfigureAwait(false);
-            else ready.Add(cleanup);
-        foreach (var group in ready.GroupBy(c => c.Vm, StringComparer.OrdinalIgnoreCase))
+        foreach (var group in cleanups.Where(c => c.DueAt <= now).GroupBy(c => c.Vm, StringComparer.OrdinalIgnoreCase))
         {
             if (jobs.Any(j => j.Step == "scan" && Ownership.SameName(j.Vm, group.Key))) continue;
             var due = group.Where(c => !(ActiveLease(leases, c.Vm, c.Copy.Name, now) is not null && Live(entries, c.Copy.Name)?.Payload == c.Copy.Payload)).ToArray();
             if (due.Length == 0) continue;
-            var items = due.Select(c => c.Copy).DistinctBy(c => (c.Name, c.Payload)).ToArray();
-            await store.SaveAsync(new VaultScrubJob(NewId(), owner, due[0].Vm, "scan", "scan", items, [], null, now, now, null, []), ct).ConfigureAwait(false);
-            foreach (var cleanup in due) await store.DeleteAsync<VaultCleanup>(cleanup.Id, ct).ConfigureAwait(false);
+            var whole = due.Where(c => !c.LogsOnly && Live(entries, c.Copy.Name) is not { AutoApprove: true }).ToArray();
+            var batch = whole.Length > 0 ? whole : due;
+            var items = batch.Select(c => c.Copy).DistinctBy(c => (c.Name, c.Payload)).ToArray();
+            await store.SaveAsync(new VaultScrubJob(NewId(), owner, batch[0].Vm, "scan", "scan", items, [], null, now, now, null, [], LogsOnly: whole.Length == 0), ct).ConfigureAwait(false);
+            foreach (var cleanup in batch) await store.DeleteAsync<VaultCleanup>(cleanup.Id, ct).ConfigureAwait(false);
         }
     }
 
@@ -161,14 +160,17 @@ public sealed partial class VaultHostService
                     if (unscannable.Length == job.Items.Count || patterns.All(p => p.Count == 0))
                     {
                         await store.DeleteAsync<VaultScrubJob>(job.Id, ct).ConfigureAwait(false);
-                        await RecordAsync(vm.Owner, vm.Name, $"{string.Join(", ", unscannable)} is too short to search for; not scrubbed.", true, ct).ConfigureAwait(false);
+                        await TooShortAsync(vm, job, unscannable, ct).ConfigureAwait(false);
                         continue;
                     }
                     var list = new JsonArray();
                     for (var i = 0; i < patterns.Length; i++)
                         foreach (var pattern in patterns[i]) list.Add(new JsonObject { ["index"] = i, ["pattern"] = VaultProtocol.B64(pattern) });
                     await store.SaveAsync(job with { DeliveredAt = now, Unscannable = unscannable }, ct).ConfigureAwait(false);
-                    result.Add(new JsonObject { ["id"] = job.Id, ["step"] = "scan", ["names"] = names, ["patterns"] = list, ["files"] = new JsonArray() });
+                    var scan = new JsonObject { ["id"] = job.Id, ["step"] = "scan", ["names"] = names, ["patterns"] = list, ["files"] = new JsonArray() };
+                    // A guest that does not know roots scans the whole VM; ClassifyAsync keeps what is not an agent log either way.
+                    if (job.LogsOnly) scan["roots"] = new JsonArray(VaultProtocol.AgentLogRoots.Select(r => (JsonNode)r).ToArray());
+                    result.Add(scan);
                     continue;
                 }
                 var files = new JsonArray();
@@ -241,8 +243,14 @@ public sealed partial class VaultHostService
         finally { gate.Release(); }
     }
 
+    // An auto-approved secret's scrub runs after every spell of reads: one warning per use would only be noise.
+    private Task TooShortAsync(Vm vm, VaultScrubJob job, IReadOnlyList<string> unscannable, CancellationToken ct) =>
+        unscannable.Count == 0 || job.LogsOnly ? Task.CompletedTask
+            : RecordAsync(vm.Owner, vm.Name, $"{string.Join(", ", unscannable)} is too short to search for; not scrubbed.", true, ct);
+
     // SQLite side files fold into their database; agent logs become a redact job at once, every other
-    // file waits for the user.
+    // file waits for the user. A logs-only scan keeps every other file without asking: the secret is
+    // auto-approved, so it may live on the VM.
     private async Task ClassifyAsync(Vm vm, VaultScrubJob job, JsonObject body, string names, DateTimeOffset now, CancellationToken ct)
     {
         var hits = body["hits"] as JsonArray ?? [];
@@ -265,9 +273,8 @@ public sealed partial class VaultHostService
             target.Indexes.UnionWith(indexes);
         }
         var agent = targets.Values.Where(t => VaultProtocol.IsAgentLog(t.Path)).OrderBy(t => t.Path, StringComparer.Ordinal).ToArray();
-        var other = targets.Values.Where(t => !VaultProtocol.IsAgentLog(t.Path)).OrderBy(t => t.Path, StringComparer.Ordinal).ToArray();
-        if (job.Unscannable.Count > 0)
-            await RecordAsync(vm.Owner, vm.Name, $"{string.Join(", ", job.Unscannable)} is too short to search for; not scrubbed.", true, ct).ConfigureAwait(false);
+        var other = job.LogsOnly ? [] : targets.Values.Where(t => !VaultProtocol.IsAgentLog(t.Path)).OrderBy(t => t.Path, StringComparer.Ordinal).ToArray();
+        await TooShortAsync(vm, job, job.Unscannable, ct).ConfigureAwait(false);
         if (agent.Length > 0)
             await store.SaveAsync(new VaultScrubJob(NewId(), vm.Owner, vm.Name, "apply", "agent", job.Items,
                 agent.Select(t => new VaultScrubFile(t.Path, t.PathB64, "redact", t.Indexes.ToArray(), t.Type)).ToArray(), job.Id, now, now, null, []), ct).ConfigureAwait(false);
@@ -280,7 +287,7 @@ public sealed partial class VaultHostService
         }
         if (other.Length > 0)
             await RecordAsync(vm.Owner, vm.Name, $"{VaultRules.Files(other.Length)} on the VM still {(other.Length == 1 ? "holds" : "hold")} {names}; choose keep, redact or delete for each.", true, ct).ConfigureAwait(false);
-        if (targets.Count == 0 && scannable.Count > 0)
+        if (targets.Count == 0 && scannable.Count > 0 && !job.LogsOnly)
             await RecordAsync(vm.Owner, vm.Name, $"Scanned the VM: no copies of {names} found.", false, ct).ConfigureAwait(false);
     }
 

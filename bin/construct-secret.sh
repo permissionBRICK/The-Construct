@@ -67,6 +67,10 @@ API_TIMEOUT="${CONSTRUCT_SERVICE_TIMEOUT_SEC:-20}"
 GUEST_SCRIPTS="${CONSTRUCT_REPO_DIR:-/opt/construct/repo}/companion/src/Construct.Companion.Core/Vault/GuestScripts"
 # VaultProtocol.ScanRoots and .ScanMaxFileBytes (companion/src/Construct.Companion.Core/Vault).
 SCAN_ROOTS="${CONSTRUCT_VAULT_SCAN_ROOTS:-/root /home /tmp /var/tmp /var/log /etc /opt /srv}"
+# The roots of the scan being rendered: SCAN_ROOTS, or the job's own when
+# SCRUB_OWN_ROOTS is true (see scrub_scan).
+SCRUB_ROOTS=()
+SCRUB_OWN_ROOTS=false
 SCAN_MAX_BYTES=268435456
 
 MAX_TEXT=300
@@ -134,8 +138,9 @@ Commands:
                      byte-exact), never from an argument. This VM gets a lease.
   delete, rm         Ask the user to delete a secret from the vault.
   auto-approve       on: ask the user to auto-approve a secret (agents on all
-                     their VMs then read it without asking, and no VM is
-                     scrubbed of it). off: require approval again, at once.
+                     their VMs then read it without asking, and VMs are
+                     scrubbed of it only in their agent logs). off: require
+                     approval again, at once.
   ask                Ask the user to enter a secret the vault does not hold
                      yet (an account, a token only they have). Answers at
                      once; the user pastes the value on one of their devices.
@@ -179,7 +184,8 @@ How to use it (agents):
     redacted automatically, any other file that contains one needs the user's
     decision.
   * Secrets that `list` shows as "auto-approved" need no request: get them
-    whenever needed. They are never scrubbed.
+    whenever needed. Only the agent logs are scrubbed of them, an hour after
+    the last get (or right after a release); other files keep them.
   * Need a credential only the user has? Ask for it once, then go on with
     other work and check `construct secret list` later:
       construct secret ask jira-token --description "Jira API token for the release notes" --reason "publish v1.4"
@@ -748,7 +754,7 @@ op_request() {
   lease="$(lease_text "$(resp_str '.lease.usesLeft')" "$(resp_str '.lease.expiresAt')" "")"
   if (( ${#leased[@]} > 0 )); then printf 'Approved: %s%s\n' "$(join_names "${leased[@]}")" "${lease:+ — ${lease}}"; fi
   if (( ${#auto[@]} > 0 )); then
-    printf 'Auto-approved: %s — no lease needed, get it at any time; not scrubbed\n' "$(join_names "${auto[@]}")"
+    printf 'Auto-approved: %s — no lease needed, get it at any time\n' "$(join_names "${auto[@]}")"
   fi
   if (( ${#missing[@]} > 0 )); then warn "not approved: $(join_names "${missing[@]}")"; fi
 }
@@ -781,10 +787,11 @@ op_get() {
 
 op_release() {
   round_trip release "${OPT_WAIT:-60}"
-  local -a released=() auto=() scrubbed=()
+  local -a released=() auto=() scrubbed=() logs=()
   local n
   mapfile -t released < <(resp_list '.names')
   mapfile -t auto < <(resp_list '.auto')
+  mapfile -t logs < <(resp_list '.logScrub')
   if (( ${#released[@]} == 0 )); then printf 'Nothing to release.\n'; return 0; fi
   printf 'Released: %s\n' "$(join_names "${released[@]}")"
   for n in "${released[@]}"; do
@@ -792,6 +799,9 @@ op_release() {
   done
   if (( ${#scrubbed[@]} > 0 )); then
     warn "${PEER} now scrubs $(join_names "${scrubbed[@]}") from this VM (agent logs are redacted automatically; other files that contain a value need the user's decision)"
+  fi
+  if (( ${#logs[@]} > 0 )); then
+    warn "${PEER} now redacts $(join_names "${logs[@]}") from this VM's agent logs (auto-approved: other files keep it)"
   fi
 }
 
@@ -801,7 +811,7 @@ op_add() {
   if [[ "${R_REPLACE}" == true ]]; then wait_default=600; fi
   round_trip add "${OPT_WAIT:-${wait_default}}"
   if [[ "$(resp_str '.autoApprove')" == "true" ]]; then
-    printf 'Stored %s in the key vault, auto-approved: agents get it without asking, and VMs are not scrubbed of it.\n' "${name}"
+    printf 'Stored %s in the key vault, auto-approved: agents get it without asking, and only agent logs are scrubbed of it.\n' "${name}"
     return 0
   fi
   if [[ "${R_AUTO}" == true ]]; then
@@ -827,7 +837,7 @@ op_auto_approve() {
   if [[ "${R_AUTO}" == true ]]; then wait_default=600; fi
   round_trip autoApprove "${OPT_WAIT:-${wait_default}}"
   if [[ "$(resp_str '.autoApprove')" == "true" ]]; then
-    printf '%s is auto-approved: agents get it without asking, and VMs are not scrubbed of it.\n' "${name}"
+    printf '%s is auto-approved: agents get it without asking, and only agent logs are scrubbed of it.\n' "${name}"
   else
     printf "%s needs the user's approval again.\n" "${name}"
   fi
@@ -877,7 +887,11 @@ render_guest_script() {
       dir) value="$(shell_quote "${SPOOL}")" ;;
       maxSize) value="$(shell_quote "${SCAN_MAX_BYTES}")" ;;
       roots)
-        read -r -a roots <<<"${SCAN_ROOTS}"
+        if [[ "${SCRUB_OWN_ROOTS}" == true ]]; then
+          roots=(${SCRUB_ROOTS[@]+"${SCRUB_ROOTS[@]}"})
+        else
+          read -r -a roots <<<"${SCAN_ROOTS}"
+        fi
         value=""
         for root in ${roots[@]+"${roots[@]}"}; do value="${value:+${value} }$(shell_quote "${root}")"; done
         ;;
@@ -899,9 +913,36 @@ post_job() {
   return 1
 }
 
+# Expand the shell globs a job sends as its roots ("/home/*/.claude"); only absolute
+# ones count, and a glob that matches nothing drops out. No word splitting: a
+# matched path with spaces stays one root.
+expand_roots() {
+  local pattern root IFS=
+  local -a found=()
+  shopt -s nullglob
+  for pattern in "$@"; do
+    [[ "${pattern}" == /* ]] || continue
+    # shellcheck disable=SC2206 # the glob is the point
+    for root in ${pattern}; do found+=("${root}"); done
+  done
+  shopt -u nullglob
+  (( ${#found[@]} == 0 )) || printf '%s\0' "${found[@]}"
+}
+
 scrub_scan() {
   local i="$1" id="$2" script="${WORK}/vault-scan.sh" out="${WORK}/scan.out" body="${WORK}/scan.json"
+  local -a globs=()
   : >"${out}"
+  # A logs-only scan (an auto-approved secret) names the agent data directories to
+  # search; none of them existing means nothing to search, not the whole VM.
+  SCRUB_ROOTS=() SCRUB_OWN_ROOTS=false
+  # shellcheck disable=SC2016 # jq variables
+  if jq -e --argjson i "${i}" '.jobs[$i].roots | type == "array"' "${JOBS}" >/dev/null 2>&1; then
+    # shellcheck disable=SC2016 # jq variables
+    mapfile -t globs < <(jq -r --argjson i "${i}" '.jobs[$i].roots[] | strings | select(test("^/[^\n]*$"))' "${JOBS}")
+    mapfile -d '' -t SCRUB_ROOTS < <(expand_roots ${globs[@]+"${globs[@]}"})
+    SCRUB_OWN_ROOTS=true
+  fi
   if render_guest_script vault-scan "${script}"; then
     # shellcheck disable=SC2016 # jq variables
     jq -r --argjson i "${i}" '.jobs[$i].patterns // [] | .[]

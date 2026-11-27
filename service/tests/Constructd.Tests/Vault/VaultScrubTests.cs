@@ -106,6 +106,55 @@ public sealed class VaultScrubTests
     }
 
     [Fact]
+    public async Task An_auto_approved_secret_is_scrubbed_from_the_agent_logs_and_every_other_file_keeps_it()
+    {
+        using var h = await VaultHarness.CreateAsync();
+        await h.PutEntriesAsync(h.Entry("jira-token", "jira_secret_value_1", autoApprove: true), h.Entry("pin", "1234", autoApprove: true));
+        await h.AnswerAsync(h.Request("get", ["jira-token"]));
+        await h.AnswerAsync(h.Request("get", ["pin"]));
+        h.App.Clock.Advance(TimeSpan.FromHours(1));
+        await h.Vault.TickAsync(default);
+        Assert.True((await h.HeartbeatAsync())["vaultScrub"]!.GetValue<bool>());
+
+        // The scan searches only the agent data directories.
+        var scan = (await JobsAsync(h)).Single()!;
+        Assert.Equal("scan", scan["step"]!.GetValue<string>());
+        Assert.Equal(VaultProtocol.AgentLogRoots, scan["roots"]!.AsArray().Select(r => r!.GetValue<string>()));
+        var index = scan["patterns"]!.AsArray().First(p => Text(p!["pattern"]) == "jira_secret_value_1")!["index"]!.GetValue<int>();
+        await PostAsync(h, scan["id"]!.GetValue<string>(), new
+        {
+            step = "scan", complete = true,
+            hits = new object[]
+            {
+                new { path = B64("/root/.claude/projects/-root-repo/abc.jsonl"), indexes = new[] { index }, size = 2048, type = "text" },
+                // An agent's own settings, or a file an older guest's whole-VM scan found: kept without asking.
+                new { path = B64("/root/.claude/settings.json"), indexes = new[] { index }, size = 300, type = "text" },
+                new { path = B64("/root/repo/.env"), indexes = new[] { index }, size = 30, type = "text" },
+            },
+        });
+        Assert.Empty((await h.Bob.GetFromJsonAsync<JsonObject>("/api/v1/vault/files"))!["files"]!.AsArray());
+        var agent = (await JobsAsync(h)).Single()!;
+        Assert.Equal("apply", agent["step"]!.GetValue<string>());
+        Assert.Null(agent["roots"]);
+        var target = agent["files"]!.AsArray().Single()!;
+        Assert.Equal("/root/.claude/projects/-root-repo/abc.jsonl", Text(target["path"]));
+        await PostAsync(h, agent["id"]!.GetValue<string>(), new { step = "apply", results = new[] { new { path = target["path"]!.GetValue<string>(), status = "ok", count = 1, detail = "" } } });
+
+        var activity = await ActivityAsync(h);
+        Assert.Contains("Redacted jira-token from 1 file of agent logs.", activity);
+        Assert.DoesNotContain(activity, a => a.Contains("choose keep", StringComparison.Ordinal) || a.Contains("too short", StringComparison.Ordinal));
+
+        // A scan that finds nothing stays out of the activity: it runs after every spell of reads.
+        await h.AnswerAsync(h.Request("get", ["jira-token"]));
+        h.App.Clock.Advance(TimeSpan.FromHours(1));
+        await h.Vault.TickAsync(default);
+        var quiet = (await JobsAsync(h)).Single()!;
+        await PostAsync(h, quiet["id"]!.GetValue<string>(), new { step = "scan", complete = true, hits = Array.Empty<object>() });
+        Assert.DoesNotContain(await ActivityAsync(h), a => a.StartsWith("Scanned the VM", StringComparison.Ordinal));
+        Assert.Empty(await JobsAsync(h));
+    }
+
+    [Fact]
     public async Task Keep_redact_failures_and_an_incomplete_scan_are_recorded()
     {
         using var h = await VaultHarness.CreateAsync();
