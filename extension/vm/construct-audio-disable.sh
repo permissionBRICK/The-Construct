@@ -22,8 +22,8 @@ set -u
 
 REC_PATH="/usr/local/bin/rec"
 ARECORD_PATH="/usr/local/bin/arecord"
-ANCHOR='remoteName)return!1'
-PATCHED='remoteName&&!1)return!1'
+ANCHOR='remoteName||this.isConfined())return!1'
+PATCHED='remoteName&&!1||this.isConfined())return!1'
 SELF_PORT="${CONSTRUCT_TUNNEL_SELF_PORT:-0}"
 VM_BASE="${CONSTRUCT_VM_PORT_BASE:-8767}"
 VM_COUNT="${CONSTRUCT_VM_PORT_COUNT:-8}"

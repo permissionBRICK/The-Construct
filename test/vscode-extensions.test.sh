@@ -75,7 +75,7 @@ os.makedirs(os.path.join(ext_dir, folder))
 json.dump({"publisher": publisher, "name": name, "version": offer[1], "engines": {"vscode": offer[2]}},
           open(os.path.join(ext_dir, folder, "package.json"), "w"))
 with open(os.path.join(ext_dir, folder, "extension.js"), "w") as f:
-    f.write("q({includePartialMessages:!le.env.remoteName});if(!x.env.remoteName)return!1;")
+    f.write("q({includePartialMessages:!le.env.remoteName});if(!x.env.remoteName||this.isConfined())return!1;")
 entries = [e for e in entries if e["identifier"]["id"] != ident]
 entries.append({"identifier": {"id": ident}, "version": offer[1], "relativeLocation": folder,
                 "location": {"$mid": 1, "path": os.path.join(ext_dir, folder), "scheme": "file"},

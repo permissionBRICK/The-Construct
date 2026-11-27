@@ -43,9 +43,9 @@ status_of() {
 }
 
 # A stock build with both gates present.
-STOCK='a={includePartialMessages:!le.env.remoteName,x:1};function f(){if(t.env.remoteName)return!1;}'
+STOCK='a={includePartialMessages:!le.env.remoteName,x:1};function f(){if(t.env.remoteName||this.isConfined())return!1;}'
 # Both gates neutralised the way the enable scripts leave them.
-PATCHED='a={includePartialMessages:!le.env.remoteName||!0,x:1};function f(){if(t.env.remoteName&&!1)return!1;}'
+PATCHED='a={includePartialMessages:!le.env.remoteName||!0,x:1};function f(){if(t.env.remoteName&&!1||this.isConfined())return!1;}'
 
 # ── stock detection ─────────────────────────────────────────────────────────────
 h="$(make_home "$STOCK")"
