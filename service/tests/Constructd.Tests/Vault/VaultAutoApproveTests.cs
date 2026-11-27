@@ -7,7 +7,10 @@ using Constructd.Core.Logic;
 
 namespace Constructd.Tests.Vault;
 
-/// <summary>Auto-approved secrets: read without the user's approval, never scrubbed, and switched on only with the user's yes.</summary>
+/// <summary>
+/// Auto-approved secrets: read without the user's approval, scrubbed only from agent logs, and switched on only with the
+/// user's yes.
+/// </summary>
 public sealed class VaultAutoApproveTests
 {
     private static string[] Strings(JsonNode? array) => array!.AsArray().Select(n => n!.GetValue<string>()).ToArray();
@@ -42,7 +45,10 @@ public sealed class VaultAutoApproveTests
         Assert.Equal("po-token-123", VaultHarness.Secret(read));
         Assert.Null(read["lease"]);
         Assert.Empty(await LeasesAsync(h));
-        Assert.Empty(await CleanupsAsync(h));
+        // No lease, but the agent logs are scrubbed an hour after the last read.
+        var cleanup = Assert.Single(await CleanupsAsync(h));
+        Assert.Equal(("dev", "pushover", true), (cleanup.Vm, cleanup.Copy.Name, cleanup.LogsOnly));
+        Assert.Equal(h.App.Clock.UtcNow + TimeSpan.FromHours(1), cleanup.DueAt);
         Assert.Equal(events, (await h.ActivityAsync()).Length);
         Assert.Contains("Access to pushover auto-approved.", await h.ActivityAsync());
     }
@@ -72,7 +78,67 @@ public sealed class VaultAutoApproveTests
     }
 
     [Fact]
-    public async Task Leases_on_a_secret_that_became_auto_approved_end_without_a_scrub()
+    public async Task Every_read_moves_the_log_scrub_and_a_release_brings_it_forward()
+    {
+        using var h = await VaultHarness.CreateAsync();
+        await h.PutEntriesAsync(h.Entry("pushover", "po-token-123", autoApprove: true, at: 1000), h.Entry("db", "pw-123456"));
+        await h.AnswerAsync(h.Request("get", ["pushover"]));
+        h.App.Clock.Advance(TimeSpan.FromMinutes(50));
+        await h.AnswerAsync(h.Request("get", ["pushover"]));
+        h.App.Clock.Advance(TimeSpan.FromMinutes(50));
+        await h.Vault.TickAsync(default);
+        // 100 minutes after the first read, 50 after the last: not due yet.
+        Assert.Empty(await h.App.Service<IVaultStore>().ListAsync<VaultScrubJob>("bob", default));
+        Assert.Equal(h.App.Clock.UtcNow + TimeSpan.FromMinutes(10), Assert.Single(await CleanupsAsync(h)).DueAt);
+
+        // A new value: the old one the VM read stays queued, and a release brings both forward.
+        await h.PutEntriesAsync(h.Entry("pushover", "po-token-456", autoApprove: true, at: 2000));
+        await h.AnswerAsync(h.Request("get", ["pushover"]));
+        Assert.Equal(2, (await CleanupsAsync(h)).Count);
+        var released = await h.AnswerAsync(h.Request("release", ["pushover", "db"]));
+        Assert.Equal("Released.", released["message"]!.GetValue<string>());
+        Assert.Equal(["pushover"], Strings(released["names"]));
+        Assert.Equal(["pushover"], Strings(released["auto"]));
+        Assert.Equal(["pushover"], Strings(released["logScrub"]));
+        Assert.Contains("Released pushover (auto-approved); scrubbing the agent logs.", await h.ActivityAsync());
+        var cleanups = await CleanupsAsync(h);
+        Assert.Equal(2, cleanups.Count);
+        Assert.All(cleanups, c => Assert.Equal((h.App.Clock.UtcNow + TimeSpan.FromSeconds(5), true), (c.DueAt, c.LogsOnly)));
+
+        h.App.Clock.Advance(TimeSpan.FromSeconds(6));
+        await h.Vault.TickAsync(default);
+        var job = Assert.Single(await h.App.Service<IVaultStore>().ListAsync<VaultScrubJob>("bob", default));
+        Assert.True(job.LogsOnly);
+        Assert.Equal(["po-token-123", "po-token-456"], job.Items.Select(i => VaultCrypto.OpenEntry(h.Key, i.Name, i.UpdatedAt, i.Payload).Secret).Order());
+        Assert.Empty(await CleanupsAsync(h));
+
+        // Nothing read, nothing leased: a release of a secret that needs approval still ends nothing.
+        Assert.Equal("Nothing to release.", (await h.AnswerAsync(h.Request("release", ["db"])))["message"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public async Task A_whole_vm_scrub_goes_before_the_log_scrubs_of_that_vm()
+    {
+        using var h = await VaultHarness.CreateAsync();
+        await h.PutEntriesAsync(h.Entry("pushover", "po-token-123", autoApprove: true), h.Entry("db", "pw-123456"));
+        await h.ApprovedAsync(h.Request("request", ["db"]));
+        await h.AnswerAsync(h.Request("get", ["pushover"]));
+        await h.AnswerAsync(h.Request("release", ["db", "pushover"]));
+        h.App.Clock.Advance(TimeSpan.FromSeconds(6));
+        await h.Vault.TickAsync(default);
+
+        var store = h.App.Service<IVaultStore>();
+        var whole = Assert.Single(await store.ListAsync<VaultScrubJob>("bob", default));
+        Assert.Equal((false, "db"), (whole.LogsOnly, whole.Items.Single().Name));
+        Assert.Equal("pushover", Assert.Single(await CleanupsAsync(h)).Copy.Name);
+        await store.DeleteAsync<VaultScrubJob>(whole.Id, default);
+        await h.Vault.TickAsync(default);
+        var logs = Assert.Single(await store.ListAsync<VaultScrubJob>("bob", default));
+        Assert.Equal((true, "pushover"), (logs.LogsOnly, logs.Items.Single().Name));
+    }
+
+    [Fact]
+    public async Task Leases_on_a_secret_that_became_auto_approved_end_with_a_log_scrub()
     {
         using var h = await VaultHarness.CreateAsync();
         await h.PutEntriesAsync(h.Entry("a-token", "value-aaaaaa", at: 1000), h.Entry("b-token", "value-bbbbbb", at: 1000),
@@ -94,17 +160,21 @@ public sealed class VaultAutoApproveTests
 
         var activity = await h.ActivityAsync();
         Assert.Contains("Released a-token; scrubbing the VM.", activity);
-        Assert.Contains("Released d-token (auto-approved, no scrub).", activity);
+        Assert.Contains("Released d-token (auto-approved); scrubbing the agent logs.", activity);
         Assert.Contains("Revoked access to c-token.", activity);
         Assert.Contains("Access to b-token expired.", activity);
         Assert.Empty(await LeasesAsync(h));
-        // Only a-token is scrubbed.
+        // Only a-token is scrubbed from the whole VM; the others wait for a scrub of the agent logs.
         var job = (await h.App.Service<IVaultStore>().ListAsync<VaultScrubJob>("bob", default)).Single();
         Assert.Equal(["a-token"], job.Items.Select(i => i.Name));
+        Assert.False(job.LogsOnly);
+        var cleanups = await CleanupsAsync(h);
+        Assert.Equal(["b-token", "c-token", "d-token"], cleanups.Select(c => c.Copy.Name).Order());
+        Assert.All(cleanups, c => Assert.True(c.LogsOnly));
     }
 
     [Fact]
-    public async Task A_due_scrub_of_a_secret_that_became_auto_approved_is_dropped()
+    public async Task A_due_scrub_of_a_secret_that_became_auto_approved_searches_only_the_agent_logs()
     {
         using var h = await VaultHarness.CreateAsync();
         await h.PutEntriesAsync(h.Entry("db", "pw-123456-long", at: 1000));
@@ -116,7 +186,8 @@ public sealed class VaultAutoApproveTests
         h.App.Clock.Advance(TimeSpan.FromSeconds(6));
         await h.Vault.TickAsync(default);
         Assert.Empty(await CleanupsAsync(h));
-        Assert.Empty(await h.App.Service<IVaultStore>().ListAsync<VaultScrubJob>("bob", default));
+        var job = Assert.Single(await h.App.Service<IVaultStore>().ListAsync<VaultScrubJob>("bob", default));
+        Assert.Equal((true, "db"), (job.LogsOnly, job.Items.Single().Name));
     }
 
     [Fact]
@@ -127,12 +198,13 @@ public sealed class VaultAutoApproveTests
         await h.ApprovedAsync(h.Request("request", ["auto", "plain"]));
         await h.PutEntriesAsync(h.Entry("auto", "value-aaaaaa", at: 2000, autoApprove: true));
 
-        // auto's old value was auto-approved: no scrub. plain's old value was not: scrubbed, although the new one is.
+        // auto's old value was auto-approved: only the agent logs. plain's old value was not: the whole VM, although the new one is.
         await h.PutEntriesAsync(h.Entry("auto", "value-a2a2a2", at: 3000, autoApprove: true), h.Entry("plain", "value-p2p2p2", at: 3000, autoApprove: true));
         Assert.Empty(await LeasesAsync(h));
-        var cleanup = (await CleanupsAsync(h)).Single();
-        Assert.Equal("plain", cleanup.Copy.Name);
-        Assert.Equal(("", "value-pppppp"), VaultCrypto.OpenEntry(h.Key, "plain", cleanup.Copy.UpdatedAt, cleanup.Copy.Payload));
+        var cleanups = (await CleanupsAsync(h)).OrderBy(c => c.Copy.Name).ToArray();
+        Assert.Equal([("auto", true), ("plain", false)], cleanups.Select(c => (c.Copy.Name, c.LogsOnly)));
+        Assert.Equal(("", "value-aaaaaa"), VaultCrypto.OpenEntry(h.Key, "auto", cleanups[0].Copy.UpdatedAt, cleanups[0].Copy.Payload));
+        Assert.Equal(("", "value-pppppp"), VaultCrypto.OpenEntry(h.Key, "plain", cleanups[1].Copy.UpdatedAt, cleanups[1].Copy.Payload));
     }
 
     [Fact]
@@ -161,7 +233,7 @@ public sealed class VaultAutoApproveTests
         Assert.NotNull(plain["lease"]);
         var id = await h.PendingAsync(h.Request("add", ["db"], new { secret = Convert.ToBase64String("pw-999999"u8.ToArray()), description = "DB", replace = true, autoApprove = true }));
         var approval = (await h.Bob.GetFromJsonAsync<JsonObject>("/api/v1/vault/approvals"))!["approvals"]!.AsArray().Single()!;
-        Assert.Contains("It also becomes auto-approved: agents on all your VMs read it without asking you, and no VM is scrubbed of it.", approval["message"]!.GetValue<string>());
+        Assert.Contains("It also becomes auto-approved: agents on all your VMs read it without asking you, and scrubs redact it only from agent logs.", approval["message"]!.GetValue<string>());
         Assert.Equal(HttpStatusCode.NoContent, await h.DecideAsync(id, "approve"));
         Assert.True((await h.PollAsync(id)).Body!["autoApprove"]!.GetValue<bool>());
         Assert.Empty(await LeasesAsync(h));

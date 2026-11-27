@@ -136,7 +136,7 @@ public sealed partial class VaultHostService
         if (Live(entries, name) is not { } entry) return new(NotFound(request, name), null);
         if (!HasKey(state, vm.Name)) return new(Locked(request), null);
         var lease = ActiveLease(await store.ListAsync<VaultLease>(vm.Owner, ct).ConfigureAwait(false), vm.Name, name, clock.UtcNow);
-        // An auto-approved secret is read without a lease: nothing to count, nothing to scrub.
+        // An auto-approved secret is read without a lease: nothing to count, and only its agent logs are scrubbed.
         if (lease is null && !entry.AutoApprove) return Ask(vm, request, VaultPrompts.Once(vm.Name, entry, request), [name], 1, (int)OnceTtl.TotalSeconds);
         return new(await ReadAsync(vm, request, lease, state, ct).ConfigureAwait(false), null);
     }
@@ -159,26 +159,40 @@ public sealed partial class VaultHostService
         var after = lease?.UsesLeft is { } left ? lease with { UsesLeft = left - 1 } : lease;
         if (after?.UsesLeft == 0) await EndAsync(after, clock.UtcNow + ExhaustedGrace, entries, ct).ConfigureAwait(false);
         else if (after != lease) await store.SaveAsync(after!, ct).ConfigureAwait(false);
+        // Like a lease that every read renews: the agent logs are scrubbed once the VM has stopped reading it a while.
+        if (lease is null && entry.AutoApprove) await QueueCleanupAsync(vm.Owner, vm.Name, Copy(entry), clock.UtcNow + AutoScrubAfter, true, ct).ConfigureAwait(false);
         var response = VaultProtocol.Response(request.Id, "ok", "");
         response["secret"] = Convert.ToBase64String(Encoding.UTF8.GetBytes(secret));
         response["username"] = username; response["lease"] = after is null ? null : VaultProtocol.Lease(after);
         return response;
     }
 
+    // An auto-approved name needs no lease to be released: its agent logs are scrubbed now instead of after the
+    // VM's last read (logScrub names them, so the CLI can say so).
     private async Task<JsonObject> ReleaseAsync(Vm vm, VaultRequest request, IReadOnlyList<VaultEntry> entries, CancellationToken ct)
     {
         var ended = new List<string>(); var scrubbed = new List<string>(); var auto = new List<string>();
+        var due = clock.UtcNow + ReleaseDelay;
         foreach (var lease in (await store.ListAsync<VaultLease>(vm.Owner, ct).ConfigureAwait(false))
                      .Where(l => Ownership.SameName(l.Vm, vm.Name) && request.Names.Contains(l.Name)).ToArray())
         {
-            var scrub = await EndAsync(lease, clock.UtcNow + ReleaseDelay, entries, ct).ConfigureAwait(false);
+            var scrub = await EndAsync(lease, due, entries, ct).ConfigureAwait(false);
             if (ended.Contains(lease.Name)) continue;
             ended.Add(lease.Name); (scrub ? scrubbed : auto).Add(lease.Name);
         }
+        foreach (var name in request.Names.Where(n => !ended.Contains(n) && Live(entries, n) is { AutoApprove: true }).Distinct(StringComparer.Ordinal))
+        {
+            await QueueCleanupAsync(vm.Owner, vm.Name, Copy(Live(entries, name)!), due, true, ct).ConfigureAwait(false);
+            ended.Add(name); auto.Add(name);
+        }
+        // Older values this VM read are due now as well.
+        foreach (var cleanup in (await store.ListAsync<VaultCleanup>(vm.Owner, ct).ConfigureAwait(false))
+                     .Where(c => Ownership.SameName(c.Vm, vm.Name) && auto.Contains(c.Copy.Name) && c.DueAt > due))
+            await store.SaveAsync(cleanup with { DueAt = due }, ct).ConfigureAwait(false);
         if (scrubbed.Count > 0) await RecordAsync(vm.Owner, vm.Name, $"Released {string.Join(", ", scrubbed)}; scrubbing the VM.", false, ct).ConfigureAwait(false);
-        if (auto.Count > 0) await RecordAsync(vm.Owner, vm.Name, $"Released {string.Join(", ", auto)} (auto-approved, no scrub).", false, ct).ConfigureAwait(false);
+        if (auto.Count > 0) await RecordAsync(vm.Owner, vm.Name, $"Released {string.Join(", ", auto)} (auto-approved); scrubbing the agent logs.", false, ct).ConfigureAwait(false);
         var response = VaultProtocol.Response(request.Id, "ok", ended.Count == 0 ? "Nothing to release." : "Released.");
-        response["names"] = Names(ended); response["auto"] = Names(auto);
+        response["names"] = Names(ended); response["auto"] = Names(auto); response["logScrub"] = Names(auto);
         return response;
     }
 

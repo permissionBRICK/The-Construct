@@ -517,6 +517,9 @@ ok "auto release: only the others are scrubbed" sh -c "grep -q 'scrubs plain fro
 answer '{v:1, id:.id, status:"ok", names:.names, auto:.names}'
 run release npm-read
 ok "auto release: no scrub notice when nothing is scrubbed" test ! -s "${err}"
+answer '{v:1, id:.id, status:"ok", names:.names, auto:.names, logScrub:.names}'
+run release npm-read
+ok "auto release: the agent logs are redacted" grep -q 'now redacts npm-read from this VM.s agent logs (auto-approved: other files keep it)' "${err}"
 
 answer '{v:1, id:.id, status:"ok", names:.names, autoApprove:true}'
 printf 'npm_readonly_value\n' | run add npm-read --description "read-only npm" --auto-approve
@@ -1058,6 +1061,23 @@ ok "_scrub render: an apostrophe is quoted as '\\''" \
   grep -qxF "roots=('/tmp/it'\\''s' '/srv')" "${capture}/rendered.sh"
 ok "_scrub render: ... and reaches the script intact" \
   test "$(sed -n '3,$p' "${capture}/vars" | tr '\n' '|')" = "/tmp/it's|/srv|"
+
+# A logs-only scan sends its own roots as globs: expanded here, one root per
+# match (spaces and all), relative ones and globs without a match dropped.
+ag="${tmp}/agent-roots"
+mkdir -p "${ag}/home/alice/.claude" "${ag}/home/bob smith/.claude" "${ag}/home/carol"
+hs_reset
+hs_answer 1 200 "{\"jobs\":[{\"id\":\"job-logs\",\"step\":\"scan\",\"patterns\":[],
+  \"roots\":[\"${ag}/home/*/.claude\",\"${ag}/tmp/claude-*\",\"relative/.claude\",\"${ag}/root/.codex\",7]}]}"
+hs_answer 2 204
+CONSTRUCT_REPO_DIR="${fake}" SCRUB_CAPTURE="${capture}" scrub
+ok "_scrub roots: the job's globs replace the default roots" \
+  test "$(sed -n '3,$p' "${capture}/vars" | tr '\n' '|')" = "${ag}/home/alice/.claude|${ag}/home/bob smith/.claude|${ag}/root/.codex|"
+hs_reset
+hs_answer 1 200 "{\"jobs\":[{\"id\":\"job-none\",\"step\":\"scan\",\"patterns\":[],\"roots\":[\"${ag}/none/*\"]}]}"
+hs_answer 2 204
+CONSTRUCT_REPO_DIR="${fake}" SCRUB_CAPTURE="${capture}" scrub
+ok "_scrub roots: no match searches nothing, not the whole VM" grep -qx 'roots=()' "${capture}/rendered.sh"
 
 hs_reset
 hs_answer 1 200 "{\"jobs\":[{\"id\":\"job-broken\",\"step\":\"apply\",\"files\":[{\"path\":\"$(pb /x/y)\",\"action\":\"redact\",\"patterns\":[\"$(pb "${k1}")\"]}]}]}"

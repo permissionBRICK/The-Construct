@@ -82,7 +82,7 @@ public static class VaultPrompts
 
     public static VaultPrompt Replace(string vm, VaultEntry entry, VaultRequest request) =>
         Build("Key vault — replace secret", vm, "wants to replace the value of", [entry], [new("New description", request.Description)],
-            request.AutoApprove == true && !entry.AutoApprove ? "It also becomes auto-approved: agents on all your VMs read it without asking you, and no VM is scrubbed of it." : null,
+            request.AutoApprove == true && !entry.AutoApprove ? "It also becomes auto-approved: agents on all your VMs read it without asking you, and scrubs redact it only from agent logs." : null,
             request, "Replace");
 
     public static VaultPrompt Delete(string vm, VaultEntry entry, VaultRequest request) =>
@@ -90,7 +90,7 @@ public static class VaultPrompts
 
     public static VaultPrompt AutoApprove(string vm, VaultEntry entry, VaultRequest request) =>
         Build("Key vault — auto-approve secret", vm, "asks to auto-approve this secret", [entry], [],
-            "Agents on all your VMs could then read it at any time without asking you, and no VM is scrubbed of it any more.", request, "Auto-approve");
+            "Agents on all your VMs could then read it at any time without asking you, and scrubs would redact it only from agent logs.", request, "Auto-approve");
 
     private static VaultPrompt Build(string title, string vm, string lead, IReadOnlyList<VaultEntry> entries, IReadOnlyList<VaultPromptFact> facts, string? note,
         VaultRequest request, string action) =>

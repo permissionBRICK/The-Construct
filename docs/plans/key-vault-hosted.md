@@ -110,7 +110,7 @@ leases, sync or pair other devices.
 |---|---|
 | `POST /vms/{name}/vault/requests` | The request document of the guest spool contract (`op`, `names`, `uses`, `ttl`, `all`, `replace`, `autoApprove`, `reason`, `description`, `username`, `secret` base64, `deadline`). Ops that need no user answer reply `200` with the response document at once. Otherwise `202 {id}`. |
 | `GET /vms/{name}/vault/requests/{id}?wait=25` | Long poll, at most 25 s: `200` + response document when decided, `204` while still pending, `404` unknown or expired. |
-| `GET /vms/{name}/vault/scrubs` | Due scrub jobs for this VM: `{jobs:[{id, step:"scan"\|"apply", patterns:[{index, pattern(base64)}], names:[…], files:[{path(base64), action}]}]}` |
+| `GET /vms/{name}/vault/scrubs` | Due scrub jobs for this VM: `{jobs:[{id, step:"scan"\|"apply", patterns:[{index, pattern(base64)}], names:[…], files:[{path(base64), action}], roots?:[…]}]}`. `roots` (shell globs) replaces the default scan roots of a logs-only scan. |
 | `POST /vms/{name}/vault/scrubs/{id}` | `{step:"scan", hits:[{path(base64), indexes:[…], size, type}], complete:true}` or `{step:"apply", results:[{path(base64), status, count, detail}]}` |
 
 Response documents are identical to the guest spool contract (`status` ok / denied / notFound /
@@ -167,9 +167,14 @@ vault (see the user guide), with these differences:
   Companion." `list` and `status` work while locked.
 - `add` needs `K` as well, to encrypt the payload. `delete` needs approval but no `K` (it writes a
   tombstone). `autoApprove` re-seals the payload, so it needs `K` too; switching on needs approval.
-- Auto-approved secrets: `request` grants them at once without a lease (no `K` needed), a `get`
-  without a lease reads them at once (needs `K`), and no lease end queues a scrub of them; due
-  cleanups of a secret that is auto-approved by then are dropped.
+- Auto-approved secrets: `request` grants them at once without a lease (no `K` needed), and a `get`
+  without a lease reads them at once (needs `K`). Each such read queues (or moves) a logs-only
+  cleanup of that value for one hour later; a `release` of the name makes it due in five seconds,
+  and a lease end on an auto-approved value queues one too. A due cleanup of a secret that is
+  auto-approved by then is logs-only as well. A logs-only scan job sends `roots`, the agent data
+  directories, and keeps every hit that is not an agent log without asking; an older guest that
+  ignores `roots` scans the whole VM, with the same result. A VM's whole-VM cleanups are scanned
+  before its logs-only ones.
 - A scrub job keeps its own copy of the payload, so deleting or changing an entry cannot lose
   what has to be searched for. The patterns are computed when the job is delivered, which needs
   `K`: a locked VM's scrub waits until it is unlocked again.

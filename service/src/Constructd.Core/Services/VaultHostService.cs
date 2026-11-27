@@ -51,7 +51,9 @@ public sealed partial class VaultHostService(IVaultStore store, IVmRepository vm
     public static readonly TimeSpan DefaultTtl = TimeSpan.FromHours(1), OnceTtl = TimeSpan.FromMinutes(10),
         ReleaseDelay = TimeSpan.FromSeconds(5), ExhaustedGrace = TimeSpan.FromMinutes(1), RetryDelay = TimeSpan.FromMinutes(5),
         DefaultWait = TimeSpan.FromMinutes(10), MaxWait = TimeSpan.FromHours(24), PickupGrace = TimeSpan.FromMinutes(2),
-        RedeliverAfter = TimeSpan.FromMinutes(30), Tick = TimeSpan.FromSeconds(10), StateCheck = TimeSpan.FromSeconds(30);
+        RedeliverAfter = TimeSpan.FromMinutes(30), Tick = TimeSpan.FromSeconds(10), StateCheck = TimeSpan.FromSeconds(30),
+        // A read of an auto-approved secret takes no lease; its agent logs are scrubbed this long after the VM's last read.
+        AutoScrubAfter = DefaultTtl;
     public const int ActivityLimit = 100, MaxPendingPerVm = 10, MaxDevices = 50, MaxEntries = 1000, MaxPayloadChars = 90000, MaxWriteAttempts = 5;
     public const string LockedMessage = "The key vault is locked for this VM: start or connect it from your PC's Construct Companion.";
     public const string NotSetUpMessage = "The key vault is not set up on this host yet: open the Key Vault in your PC's Construct Companion.";
@@ -355,34 +357,40 @@ public sealed partial class VaultHostService(IVaultStore store, IVmRepository vm
     }
 
     // Ends a lease and queues a scrub of the value that VM saw (one per VM, secret and value). An auto-approved
-    // secret is never scrubbed: false then (the activity texts say so).
+    // secret is scrubbed from the agent logs only: false then (the activity texts say so).
     private async Task<bool> EndAsync(VaultLease lease, DateTimeOffset due, IReadOnlyList<VaultEntry>? entries, CancellationToken ct)
     {
         await store.DeleteAsync<VaultLease>(lease.Id, ct).ConfigureAwait(false);
         entries ??= await EntriesAsync(lease.Owner, ct).ConfigureAwait(false);
         var entry = Live(entries, lease.Name);
+        var auto = entry is { AutoApprove: true };
         // The value the lease was granted on, not one that replaced it since: that one the VM never saw.
         var seen = lease.Seen ?? (entry is null ? null : Copy(entry));
-        if (entry is not { AutoApprove: true } && seen is not null) await QueueCleanupAsync(lease.Owner, lease.Vm, seen, due, ct).ConfigureAwait(false);
-        return entry is not { AutoApprove: true };
+        if (seen is not null) await QueueCleanupAsync(lease.Owner, lease.Vm, seen, due, auto, ct).ConfigureAwait(false);
+        return !auto;
     }
 
-    // Every lease on a secret ends, and each VM is scrubbed of the old value it saw, unless that one was auto-approved.
+    // Every lease on a secret ends, and each VM is scrubbed of the old value it saw (only its agent logs, if that one
+    // was auto-approved).
     private async Task EndLeasesAsync(string owner, VaultEntry old, DateTimeOffset due, CancellationToken ct)
     {
         foreach (var lease in (await store.ListAsync<VaultLease>(owner, ct).ConfigureAwait(false)).Where(l => l.Name == old.Name))
         {
             await store.DeleteAsync<VaultLease>(lease.Id, ct).ConfigureAwait(false);
-            if (!old.AutoApprove) await QueueCleanupAsync(owner, lease.Vm, lease.Seen ?? Copy(old), due, ct).ConfigureAwait(false);
+            await QueueCleanupAsync(owner, lease.Vm, lease.Seen ?? Copy(old), due, old.AutoApprove, ct).ConfigureAwait(false);
         }
     }
 
-    private async Task QueueCleanupAsync(string owner, string vm, VaultSecretCopy copy, DateTimeOffset due, CancellationToken ct)
+    // One cleanup per VM, secret and value: a later end moves the one already waiting, and a whole-VM scrub stays one.
+    private async Task QueueCleanupAsync(string owner, string vm, VaultSecretCopy copy, DateTimeOffset due, bool logsOnly, CancellationToken ct)
     {
         foreach (var same in (await store.ListAsync<VaultCleanup>(owner, ct).ConfigureAwait(false))
                      .Where(c => Ownership.SameName(c.Vm, vm) && c.Copy.Name == copy.Name && c.Copy.Payload == copy.Payload))
+        {
+            logsOnly &= same.LogsOnly;
             await store.DeleteAsync<VaultCleanup>(same.Id, ct).ConfigureAwait(false);
-        await store.SaveAsync(new VaultCleanup(NewId(), owner, vm, copy, due), ct).ConfigureAwait(false);
+        }
+        await store.SaveAsync(new VaultCleanup(NewId(), owner, vm, copy, due, logsOnly), ct).ConfigureAwait(false);
     }
 
     // ── the record-backed vault (plan 9.1, 9.6) ────────────────────────────────
@@ -500,7 +508,7 @@ public sealed partial class VaultHostService(IVaultStore store, IVmRepository vm
                 continue;
             }
             await store.DeleteAsync<VaultLease>(lease.Id, ct).ConfigureAwait(false);
-            await QueueCleanupAsync(state.Owner, lease.Vm, seen, now + ReleaseDelay, ct).ConfigureAwait(false);
+            await QueueCleanupAsync(state.Owner, lease.Vm, seen, now + ReleaseDelay, false, ct).ConfigureAwait(false);
             await RecordAsync(state.Owner, lease.Vm, $"Access to {lease.Name} ended: {(current is null ? "it was deleted" : "its value changed")}; scrubbing the VM.", false, ct).ConfigureAwait(false);
         }
     }

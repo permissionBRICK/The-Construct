@@ -38,7 +38,7 @@ public sealed record VaultProvenance(string Kind, string? Vm = null, string? Dev
 /// One synchronized entry. <see cref="Payload"/> is <c>base64(nonce||tag||ciphertext)</c> of
 /// <c>{"username","secret","autoApprove"}</c> under <c>K</c> with the AAD <c>entry:&lt;name&gt;:&lt;updatedAt&gt;</c>;
 /// a tombstone (<see cref="Deleted"/>) has none. <see cref="UpdatedAt"/> is in Unix milliseconds.
-/// <see cref="AutoApprove"/>: VMs read it without the user's approval and are never scrubbed of it. The host
+/// <see cref="AutoApprove"/>: VMs read it without the user's approval, and a scrub of it redacts only agent logs. The host
 /// decides by this plain copy (it may lack <c>K</c>); PCs trust only the sealed one. For a record-backed vault
 /// <see cref="Revision"/> is the record's store revision (the base of the next write) and <see cref="Provenance"/>
 /// who wrote it.
@@ -75,8 +75,11 @@ public sealed record VaultSecretCopy(string Name, string Payload, long UpdatedAt
     public override string ToString() => $"VaultSecretCopy {{ Name = {Name} }}";
 }
 
-/// <summary>A finished lease whose value must still be scrubbed from that VM, once due.</summary>
-public sealed record VaultCleanup(string Id, string Owner, string Vm, VaultSecretCopy Copy, DateTimeOffset DueAt) : IVaultRecord;
+/// <summary>
+/// A finished lease (or a read of an auto-approved secret) whose value must still be scrubbed from that VM, once due.
+/// <see cref="LogsOnly"/>: only the agent logs are searched and redacted; every other file keeps the value.
+/// </summary>
+public sealed record VaultCleanup(string Id, string Owner, string Vm, VaultSecretCopy Copy, DateTimeOffset DueAt, bool LogsOnly = false) : IVaultRecord;
 
 /// <summary>A file an apply step works on. <see cref="Indexes"/> point into the job's items.</summary>
 public sealed record VaultScrubFile(string Path, string PathB64, string Action, IReadOnlyList<int> Indexes, string Type);
@@ -85,11 +88,12 @@ public sealed record VaultScrubFile(string Path, string PathB64, string Action, 
 /// A scrub job for one VM. <c>scan</c> searches for <see cref="Items"/>; <c>apply</c> redacts or deletes
 /// <see cref="Files"/>. Kind: <c>scan</c>, <c>agent</c> (agent logs, redacted without asking) or
 /// <c>decision</c> (files the user chose to redact or delete). Patterns are computed when the job is
-/// delivered, which needs <c>K</c>.
+/// delivered, which needs <c>K</c>. A <see cref="LogsOnly"/> scan searches only the agent data directories, and a file
+/// it finds outside the agent logs is kept without asking.
 /// </summary>
 public sealed record VaultScrubJob(string Id, string Owner, string Vm, string Step, string Kind, IReadOnlyList<VaultSecretCopy> Items,
     IReadOnlyList<VaultScrubFile> Files, string? Origin, DateTimeOffset CreatedAt, DateTimeOffset NotBefore, DateTimeOffset? DeliveredAt,
-    IReadOnlyList<string> Unscannable) : IVaultRecord;
+    IReadOnlyList<string> Unscannable, bool LogsOnly = false) : IVaultRecord;
 
 /// <summary>A file outside the agent logs that holds a secret; it waits for the user's keep/redact/delete.</summary>
 public sealed record VaultFileDecision(string Id, string Owner, string Vm, string Path, string PathB64, IReadOnlyList<int> Indexes,
