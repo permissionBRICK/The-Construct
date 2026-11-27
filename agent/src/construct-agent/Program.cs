@@ -94,29 +94,50 @@ switch (command)
             return 1;
         }
 
-        var running = install.RunningVersion(Environment.ProcessPath);
-        platform.SetStartWithOs(autostart == "on", running is not null ? install.ExecutableOf(running) : Environment.ProcessPath!);
+        // An installed agent's unit names app/, whichever copy turned it on.
+        var place = install.PlaceOf(Environment.ProcessPath);
+        platform.SetStartWithOs(autostart == "on", place == AgentInstall.Place.Elsewhere ? Environment.ProcessPath! : install.AppExecutable);
         Console.WriteLine(autostart == "on" ? $"Installed {platform.UnitPath}; the agent starts with the session." : "Removed the user unit.");
         return 0;
     }
 
     default:
     {
+        var shellLog = Path.Combine(options.DataDirectory, "shell.log");
+        void Note(string line)
+        {
+            Console.WriteLine(line);
+            ShellLog.Note(shellLog, line);
+        }
+
+        async Task WaitForPrevious()
+        {
+            for (var i = 0; i < 120 && await Repair.RunningAsync(options, CancellationToken.None) is not null; i++) await Task.Delay(250);
+        }
+
+        // A copy in next/, previous/ or an old versions/<v>/ never runs as the agent: it moves into app/ and starts it there
+        // (under the systemd unit the unit is pointed at app/ and restarted, which also ends this process).
+        if (install.PlaceOf(Environment.ProcessPath) == AgentInstall.Place.Staged)
+        {
+            PrivateFiles.EnsureDirectory(options.DataDirectory);
+            if (await AgentUpdater.InstallStartedCopyAsync(install, Environment.ProcessPath!, [], platform, WaitForPrevious, line => Note("install: " + line)))
+                return 0;
+            // Nothing in app/ to start (the move of a first version failed): this copy runs as the agent, as before app/ existed.
+        }
+
+        Note($"start {options.Version} from {Environment.ProcessPath}");
         // A version the last update switched to proves itself here; when it does not, the previous one starts again (12.2).
         AgentHost? started = null;
-        var ok = await AgentUpdater.StartupAsync(install, install.RunningVersion(Environment.ProcessPath), async () =>
+        var ok = await AgentUpdater.StartupAsync(install, install.RunningVersion(Environment.ProcessPath, options.Version), async () =>
         {
             started = AgentHost.Create(options);
             await started.StartAsync();
             await started.SelfTestAsync();
-        }, platform, waitForPrevious: async () =>
-        {
-            for (var i = 0; i < 120 && await Repair.RunningAsync(options, CancellationToken.None) is not null; i++) await Task.Delay(250);
-        }, confirmed: directory => _ = VsCodeExtension.InstallAsync(directory));
+        }, platform, waitForPrevious: WaitForPrevious, confirmed: directory => _ = VsCodeExtension.InstallAsync(directory), log: Note);
         if (!ok)
         {
             if (started is not null) await started.DisposeAsync();
-            Console.Error.WriteLine("This version failed its self-test; the previous version was started again.");
+            Note("exit: the self-test failed; the previous version was started again");
             return 1;
         }
 
@@ -124,12 +145,18 @@ switch (command)
         Console.WriteLine($"construct-agent {options.Version} on {host.BaseUrl} (device {host.Agent.DeviceId}); token in {options.EndpointPath}");
         // Not disposed: ProcessExit fires after Main returns, and a throw there would exit non-zero (the systemd unit restarts on failure).
         var stop = new CancellationTokenSource();
+        string? signal = null;
         Console.CancelKeyPress += (_, e) =>
         {
             e.Cancel = true;
+            signal ??= "Ctrl+C";
             stop.Cancel();
         };
-        AppDomain.CurrentDomain.ProcessExit += (_, _) => stop.Cancel();
+        AppDomain.CurrentDomain.ProcessExit += (_, _) =>
+        {
+            signal ??= "a stop signal (SIGTERM, e.g. systemctl stop)";
+            stop.Cancel();
+        };
         try
         {
             await host.App.WaitForShutdownAsync(stop.Token);
@@ -138,6 +165,7 @@ switch (command)
         {
         }
 
+        Note("exit: " + (host.StopReason ?? signal ?? "the host stopped without a recorded reason"));
         return 0;
     }
 }

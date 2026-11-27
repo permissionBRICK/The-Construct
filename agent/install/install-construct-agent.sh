@@ -4,7 +4,8 @@
 #   install-construct-agent.sh [--channel stable|nightly|<https manifest URL>] [--package ZIP --version X.Y.Z+sha] [--no-start]
 #
 # Reads the channel manifest, downloads the agentLinux package, checks its SHA-256 against the manifest,
-# unpacks it into the agent's directory (versions/<version>/), installs the VS Code extension it carries
+# puts it into the agent's directory as app/ (the one path the agent always runs from; the version it replaces
+# waits in previous/ until the new one passed its self-test), installs the VS Code extension it carries
 # where VS Code is installed (a failure there fails the install), records it as current in install.json and
 # starts it: as the systemd user unit when systemd runs the session, else in its own session. With
 # --package a local zip is installed instead (the hash check is then the caller's). The agent updates
@@ -61,13 +62,14 @@ fi
 [[ -n "$version" ]] || { echo "--package needs --version." >&2; exit 2; }
 [[ "$version" =~ ^[A-Za-z0-9.+_-]+$ ]] || { echo "Unusable version: $version" >&2; exit 2; }
 
-target="$home/versions/$version"
-if [[ ! -x "$target/construct-agent" ]]; then
-  rm -rf "$target.partial"; mkdir -p "$target.partial"
-  python3 -c 'import sys, zipfile; zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])' "$package" "$target.partial"
-  chmod +x "$target.partial/construct-agent"
-  rm -rf "$target"; mv "$target.partial" "$target"
-fi
+target="$home/app.incoming"
+mkdir -p "$home"
+rm -rf "$target.partial"; mkdir -p "$target.partial"
+python3 -c 'import sys, zipfile; zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])' "$package" "$target.partial"
+[[ -f "$target.partial/construct-agent" ]] || { echo "The agent package has no construct-agent." >&2; exit 1; }
+chmod +x "$target.partial/construct-agent"
+printf '%s' "$version" > "$target.partial/.version"
+rm -rf "$target"; mv "$target.partial" "$target"
 
 # The VS Code extension the package carries, where VS Code is installed; VS Code refusing it fails the install.
 if command -v code >/dev/null 2>&1; then
@@ -84,6 +86,15 @@ if [[ -f "$home/endpoint.json" ]]; then
   sleep 2
 fi
 previous="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("current") or "")' "$home/install.json" 2>/dev/null || true)"
+[[ "$previous" == "$version" ]] && previous=""
+# app/ is free now. What it held stays in previous/ for the way back while the new version is on trial; reinstalling the
+# same version replaces it. An install from before app/ keeps its versions/ folder for the way back instead; the agent
+# removes both once the new version passed its self-test.
+if [[ -d "$home/app" ]]; then
+  if [[ -n "$previous" ]]; then aside="$home/previous"; else aside="$home/app.failed"; fi
+  rm -rf "$aside"; mv "$home/app" "$aside"
+fi
+mv "$target" "$home/app"
 python3 - "$home/install.json" "$version" "$previous" <<'PY'
 import json, os, sys
 path, current, previous = sys.argv[1:4]
@@ -96,9 +107,9 @@ os.replace(path + '.tmp', path)
 PY
 
 if command -v systemctl >/dev/null && systemctl --user show-environment >/dev/null 2>&1; then
-  "$target/construct-agent" autostart on
+  "$home/app/construct-agent" autostart on
   if $start; then systemctl --user restart construct-agent.service; fi
 elif $start; then
-  setsid "$target/construct-agent" run </dev/null >/dev/null 2>&1 &
+  setsid "$home/app/construct-agent" run </dev/null >/dev/null 2>&1 &
 fi
-echo "Installed the Construct agent $version in $target."
+echo "Installed the Construct agent $version in $home/app."

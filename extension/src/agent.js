@@ -35,9 +35,14 @@ function parseEndpoint(doc) {
   return { port, token, pid: Number.isInteger(doc.pid) ? doc.pid : null, startedAt: typeof doc.startedAt === "string" ? doc.startedAt : null };
 }
 
-/** The installed agent's executable from install.json's `current`, or null. */
+/**
+ * The installed agent's executable: app/ (the one folder the agent runs from, whatever its version), or for an install
+ * made before app/ the folder of install.json's `current` under versions/; null when neither is there.
+ */
 function installedExecutable(home, platform = process.platform, deps = {}) {
   const exists = deps.exists || fs.existsSync;
+  const app = join(platform, home, "app", executableName(platform));
+  if (exists(app)) return app;
   const install = readJson(join(platform, home, "install.json"), deps.readFile);
   const current = install && typeof install.current === "string" ? install.current : "";
   if (!current || !VERSION_RE.test(current) || current === "." || current === "..") return null;

@@ -5,7 +5,8 @@
 
 .DESCRIPTION
     Reads the channel manifest, downloads the agentWindows package, checks its SHA-256 against the
-    manifest, unpacks it into %LOCALAPPDATA%\Construct\agent\versions\<version>\, records it as current
+    manifest, puts it into %LOCALAPPDATA%\Construct\agent\app\ (the one folder the agent always runs from; the
+    version it replaces waits in previous\ until the new one passed its self-test), records it as current
     in install.json, installs the VS Code extension it carries (construct.vsix) where VS Code is installed,
     lets it start with Windows and starts it in the tray. With -Package a local zip is
     installed instead (the hash check is then the caller's: the Windows installer of the whole product
@@ -89,31 +90,41 @@ try {
         } catch { }
     }
 
-    $target = Join-Path $home_ "versions\$Version"
-    if (-not (Test-Path -LiteralPath (Join-Path $target 'construct-agent.exe'))) {
-        $partial = "$target.partial"
-        if (Test-Path -LiteralPath $partial) { Remove-Item -Recurse -Force -LiteralPath $partial }
-        Add-Type -AssemblyName System.IO.Compression.FileSystem
-        [IO.Compression.ZipFile]::ExtractToDirectory($Package, $partial)
-        if (-not (Test-Path -LiteralPath (Join-Path $partial 'construct-agent.exe'))) { throw 'The package has no construct-agent.exe.' }
-        if (Test-Path -LiteralPath $target) { Remove-Item -Recurse -Force -LiteralPath $target }
-        Move-Item -LiteralPath $partial -Destination $target
-    }
-    Install-ConstructVsCodeExtension -Folder $target
+    $app = Join-Path $home_ 'app'
+    $partial = Join-Path $home_ 'app.incoming'
+    if (Test-Path -LiteralPath $partial) { Remove-Item -Recurse -Force -LiteralPath $partial }
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    [IO.Compression.ZipFile]::ExtractToDirectory($Package, $partial)
+    if (-not (Test-Path -LiteralPath (Join-Path $partial 'construct-agent.exe'))) { throw 'The package has no construct-agent.exe.' }
+    [IO.File]::WriteAllText((Join-Path $partial '.version'), $Version)
+    # Before app\ changes: VS Code refusing the extension leaves the install as it was.
+    Install-ConstructVsCodeExtension -Folder $partial
 
     $installPath = Join-Path $home_ 'install.json'
     $previous = $null
     if (Test-Path -LiteralPath $installPath) { try { $previous = (Get-Content -Raw -LiteralPath $installPath | ConvertFrom-Json).current } catch { } }
     if ($previous -eq $Version) { $previous = $null }
+    # app\ is free now (the agent stopped above). What it held stays in previous\ for the way back while the new version
+    # is on trial; reinstalling the same version replaces it. An install from before app\ keeps its versions\ folder
+    # for the way back instead; the agent removes both once the new version passed its self-test.
+    if (Test-Path -LiteralPath $app) {
+        $aside = if ($previous) { Join-Path $home_ 'previous' } else { Join-Path $home_ 'app.failed' }
+        if (Test-Path -LiteralPath $aside) { Remove-Item -Recurse -Force -LiteralPath $aside }
+        for ($try = 1; ; $try++) {
+            try { Move-Item -LiteralPath $app -Destination $aside; break }
+            catch { if ($try -ge 40) { throw "app\ is still in use: $($_.Exception.Message)" }; Start-Sleep -Milliseconds 250 }
+        }
+    }
+    Move-Item -LiteralPath $partial -Destination $app
     # With a previous version the new one is on trial: its first start self-tests and goes back when it fails (12.2).
     $state = [ordered]@{ current = $Version; previous = $previous; pending = [bool]$previous } | ConvertTo-Json
     [IO.File]::WriteAllText($installPath, $state, (New-Object Text.UTF8Encoding($false)))
 
-    $exe = Join-Path $target 'construct-agent.exe'
+    $exe = Join-Path $app 'construct-agent.exe'
     # Start with Windows: the current user's Run value, as the agent's own setting writes it.
     Set-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name 'ConstructAgent' -Value "`"$exe`" --background"
     if (-not $NoStart) { Start-Process -FilePath $exe -ArgumentList '--background' }
-    Write-Host "Installed the Construct agent $Version in $target."
+    Write-Host "Installed the Construct agent $Version in $app."
 } finally {
     Remove-Item -Recurse -Force -LiteralPath $work -ErrorAction SilentlyContinue
 }

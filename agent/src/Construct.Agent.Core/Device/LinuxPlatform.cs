@@ -76,13 +76,15 @@ public sealed class LinuxPlatform : IDevicePlatform, IAgentLauncher
     }
 
     /// <summary>
-    /// Starts an installed version. Under the systemd unit the unit is pointed at it and restarted (a
-    /// child started here would end with the unit's process group); otherwise it starts in its own session.
+    /// Starts an installed version. Under the systemd unit, or with the unit enabled (an installer started the copy that
+    /// moved into <c>app/</c>), the unit is pointed at it and restarted: a child started under the unit would end with its
+    /// process group, and one started beside an enabled unit would run outside it. Otherwise it starts in its own session.
     /// The console host has no surfaces to open again.
     /// </summary>
     public Task LaunchAsync(string executable, IReadOnlyList<string> surfaces, CancellationToken ct)
     {
-        if (Environment.GetEnvironmentVariable("INVOCATION_ID") is { Length: > 0 } && File.Exists(UnitPath) && Find("systemctl") is { } systemctl)
+        if (File.Exists(UnitPath) && Find("systemctl") is { } systemctl
+            && (Environment.GetEnvironmentVariable("INVOCATION_ID") is { Length: > 0 } || Succeeds(systemctl, "--user", "is-enabled", "--quiet", UnitName)))
         {
             File.WriteAllText(UnitPath, Unit(executable));
             Run(systemctl, "--user", "daemon-reload");
@@ -122,6 +124,21 @@ public sealed class LinuxPlatform : IDevicePlatform, IAgentLauncher
         foreach (var argument in arguments) start.ArgumentList.Add(argument);
         using var process = Process.Start(start)!;
         process.WaitForExit(TimeSpan.FromSeconds(30));
+    }
+
+    private static bool Succeeds(string file, params string[] arguments)
+    {
+        var start = new ProcessStartInfo(file) { UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true };
+        foreach (var argument in arguments) start.ArgumentList.Add(argument);
+        try
+        {
+            using var process = Process.Start(start)!;
+            return process.WaitForExit(TimeSpan.FromSeconds(30)) && process.ExitCode == 0;
+        }
+        catch (System.ComponentModel.Win32Exception)
+        {
+            return false;
+        }
     }
 
     private static void Detached(string file, params string[] arguments)

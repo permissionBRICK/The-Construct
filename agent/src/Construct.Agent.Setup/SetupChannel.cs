@@ -34,7 +34,7 @@ public static partial class SetupChannel
 
     public static bool IsRepository(string repository) => RepositoryPattern().IsMatch(repository);
 
-    /// <summary>A version as install.ps1 accepts it, which is also its folder name under <c>versions\</c>.</summary>
+    /// <summary>A version as install.ps1 accepts it.</summary>
     public static bool IsVersion(string? version) => version is not null and not "." and not ".." && VersionPattern().IsMatch(version);
 
     /// <summary>The manifest of a channel; null for anything but <c>stable</c>, <c>nightly</c> or an https URL.</summary>

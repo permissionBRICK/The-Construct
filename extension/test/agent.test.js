@@ -50,7 +50,16 @@ test("a health answer counts only for the agent the token file names", () => {
   assert.ok(!agent.healthMatches(null, e));
 });
 
-test("the installed executable comes from install.json's current version only", t => {
+test("the installed executable is the one in app/, whatever its version", t => {
+  const home = tempHome(t);
+  installVersion(home, "1.0.0");
+  const exe = path.join(home, "app", "construct-agent");
+  fs.mkdirSync(path.dirname(exe), { recursive: true, mode: 0o700 });
+  fs.writeFileSync(exe, "#!/bin/sh\n", { mode: 0o700 });
+  assert.equal(agent.installedExecutable(home, "linux"), exe);
+});
+
+test("an install from before app/ is found by install.json's current version only", t => {
   const home = tempHome(t);
   assert.equal(agent.installedExecutable(home, "linux"), null);
   const exe = installVersion(home, "1.2.0+abc");

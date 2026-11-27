@@ -3,18 +3,17 @@ using Construct.Agent.Update;
 namespace Construct.Agent.Tests;
 
 /// <summary>
-/// Windows 11 remembers a tray icon's taskbar place per executable path, and each update runs the agent from a new
-/// <c>versions/</c> directory (FatPC 2026-11-22): the new version's entry gets the choice made for the previous one.
+/// Windows 11 remembers a tray icon's taskbar place per executable path. The agent always runs from <c>app\</c>, so the
+/// place is given once, on the first start there: the one the version before had (an old <c>versions\</c> folder, the old
+/// Companion), else the taskbar; after that the user's choice is never touched.
 /// </summary>
 public sealed class TrayIconCarryOverTests
 {
-    private static readonly string Versions = Path.Combine(Path.GetTempPath(), "agent", "versions");
-    private static readonly string Old = Exe("1.0.0+aaa");
-    private static readonly string Previous = Exe("1.0.0+bbb");
-    private static readonly string Current = Exe("1.0.0+ccc");
+    private static readonly string Agent = Path.Combine(Path.GetTempPath(), "agent");
+    private static readonly string Self = Path.Combine(Agent, "app", "construct-agent.exe");
+    private static readonly string Old = Path.Combine(Agent, "versions", "1.0.0+aaa", "construct-agent.exe");
+    private static readonly string Before = Path.Combine(Agent, "versions", "1.0.0+bbb", "construct-agent.exe");
     private static readonly string Companion = Path.Combine(Path.GetTempPath(), "Programs", "ConstructCompanion", "ConstructCompanion.exe");
-
-    private static string Exe(string version) => Path.Combine(Versions, version, "construct-agent.exe");
 
     private sealed class Settings(params TrayIconEntry[] entries) : ITrayIconSettings
     {
@@ -33,65 +32,50 @@ public sealed class TrayIconCarryOverTests
         public int? PromotedOf(string id) => Entries.Single(e => e.Id == id).Promoted;
     }
 
-    private static TrayIconCarryOver.Outcome Apply(Settings settings, string? previous = null, params string[] onDisk) =>
-        TrayIconCarryOver.Apply(settings, Current, Versions, previous, path => onDisk.Contains(path) || path == Current);
-
     [Fact]
-    public void The_new_version_gets_the_previous_versions_place_and_entries_of_removed_versions_go()
+    public void A_fresh_install_goes_on_the_taskbar()
     {
-        var settings = new Settings(new("old", Old, 1), new("prev", Previous, 1), new("comp", Companion, 1), new("self", Current, null),
-            new("other", @"C:\Program Files\Other\other.exe", null));
+        var settings = new Settings(new("self", Self, null), new("other", @"C:\Program Files\Other\other.exe", 0));
 
-        var outcome = Apply(settings, Previous, Previous);
-
-        Assert.Equal(TrayIconCarryOver.Outcome.Changed, outcome);
+        Assert.Equal(TrayIconCarryOver.Outcome.Changed, TrayIconCarryOver.Apply(settings, Self, Agent));
         Assert.Equal(1, settings.PromotedOf("self"));
-        // The version pruned from disk loses its entry; the previous version, the old Companion and other apps keep theirs.
-        Assert.Equal(["prev", "comp", "self", "other"], settings.Entries.Select(e => e.Id));
+        Assert.Equal(0, settings.PromotedOf("other"));
     }
 
     [Fact]
-    public void A_place_kept_in_the_overflow_is_carried_too()
+    public void The_move_from_version_folders_takes_the_place_the_version_before_had_and_drops_their_entries()
     {
-        var settings = new Settings(new("old", Old, 1), new("prev", Previous, 0), new("self", Current, null));
+        var settings = new Settings(new("old", Old, 1), new("before", Before, 0), new("comp", Companion, 1), new("self", Self, null));
 
-        Assert.Equal(TrayIconCarryOver.Outcome.Changed, Apply(settings, Previous, Previous, Old));
+        Assert.Equal(TrayIconCarryOver.Outcome.Changed, TrayIconCarryOver.Apply(settings, Self, Agent, Before));
+
+        // The user kept the version before in the overflow: so does app\.
         Assert.Equal(0, settings.PromotedOf("self"));
+        Assert.Equal(["comp", "self"], settings.Entries.Select(e => e.Id));
     }
 
     [Fact]
-    public void A_choice_made_for_this_version_stays()
+    public void Without_the_version_before_an_earlier_taskbar_place_wins()
     {
-        var settings = new Settings(new("prev", Previous, 1), new("self", Current, 0));
+        var settings = new Settings(new("old", Old, 0), new("comp", Companion, 1), new("self", Self, null));
 
-        Assert.Equal(TrayIconCarryOver.Outcome.Unchanged, Apply(settings, Previous, Previous));
-        Assert.Equal(0, settings.PromotedOf("self"));
-    }
+        TrayIconCarryOver.Apply(settings, Self, Agent);
 
-    [Fact]
-    public void Before_windows_has_an_entry_for_this_version_nothing_changes()
-    {
-        var settings = new Settings(new("old", Old, 1), new("prev", Previous, 1));
-
-        Assert.Equal(TrayIconCarryOver.Outcome.NotYet, Apply(settings, Previous));
-        Assert.Equal(2, settings.Entries.Count);
-    }
-
-    [Fact]
-    public void The_first_start_after_the_move_from_the_companion_takes_the_companions_place()
-    {
-        var settings = new Settings(new("comp", Companion, 1), new("self", Current, null));
-
-        Assert.Equal(TrayIconCarryOver.Outcome.Changed, Apply(settings));
         Assert.Equal(1, settings.PromotedOf("self"));
     }
 
     [Fact]
-    public void Without_an_earlier_choice_the_entry_is_left_to_windows()
+    public void A_place_the_user_already_chose_is_kept()
     {
-        var settings = new Settings(new("prev", Previous, null), new("comp", Companion, 0), new("self", Current, null));
+        var settings = new Settings(new("before", Before, 1), new("self", Self, 0));
 
-        Assert.Equal(TrayIconCarryOver.Outcome.Unchanged, Apply(settings, Previous, Previous));
-        Assert.Null(settings.PromotedOf("self"));
+        Assert.Equal(TrayIconCarryOver.Outcome.Unchanged, TrayIconCarryOver.Apply(settings, Self, Agent, Before));
+        Assert.Equal(0, settings.PromotedOf("self"));
+    }
+
+    [Fact]
+    public void Before_Windows_has_an_entry_for_the_icon_it_asks_again()
+    {
+        Assert.Equal(TrayIconCarryOver.Outcome.NotYet, TrayIconCarryOver.Apply(new Settings(new TrayIconEntry("before", Before, 1)), Self, Agent, Before));
     }
 }

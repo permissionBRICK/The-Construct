@@ -178,7 +178,8 @@ $downloadAt = [array]::IndexOf($run.Calls, ($run.Calls | Where-Object { $_ -like
 Assert ($quitAt -lt $downloadAt) 'the Companion quits before the package is installed'
 Assert ($run.Calls -contains 'web https://github.com/permissionBRICK/The-Construct/releases/download/host-abc/construct-agent-win-x64.zip') 'the package comes from the manifest release'
 $agentHome = Join-Path $world 'local/Construct/agent'
-Assert (Test-Path (Join-Path $agentHome 'versions/2.0.0+abc/construct-agent.exe')) 'the package is unpacked into versions/<version>'
+Assert (Test-Path (Join-Path $agentHome 'app/construct-agent.exe')) 'the package is put into app/'
+Assert ((Get-Content -Raw (Join-Path $agentHome 'app/.version')).Trim() -eq '2.0.0+abc') 'app/ names its version'
 Assert ((Get-Content -Raw (Join-Path $agentHome 'install.json') | ConvertFrom-Json).current -eq '2.0.0+abc') 'install.json names it current'
 Assert ((Get-Content -Raw (Join-Path $agentHome 'device.json') | ConvertFrom-Json).channel -eq 'nightly') 'the device follows the nightly channel'
 Assert (@($run.Calls | Where-Object { $_ -like 'registry set ConstructAgent *--background' }).Count -eq 1) 'the agent starts with Windows'
@@ -197,7 +198,7 @@ Assert ($run.Output -match 'VS Code is not installed') "no VS Code is no failure
 $world = New-World 'vscode' @{ companion = $true; code = 'ok' }
 $run = Invoke-World $world (Join-Path $repo 'install.ps1')
 Assert ($run.Code -eq 0) "install.ps1 with VS Code succeeds: $($run.Output)"
-$vsix = Join-Path $world 'local/Construct/agent/versions/2.0.0+abc/construct.vsix'
+$vsix = Join-Path $world 'local/Construct/agent/app.incoming/construct.vsix'
 $codeAt = [array]::IndexOf($run.Calls, "code --install-extension $vsix --force")
 $startAt = [array]::IndexOf($run.Calls, ($run.Calls | Where-Object { $_ -like 'start *construct-agent.exe*' } | Select-Object -First 1))
 Assert ($codeAt -ge 0) "VS Code installs the package's extension: $($run.Calls -join ' | ')"
@@ -216,7 +217,7 @@ Assert (-not (Test-Path (Join-Path $world 'local/Construct/agent/install.json'))
 $world = New-World 'agent-installer' @{ code = 'ok'; arguments = @('-Package', $zip, '-Version', '3.0.0', '-NoStart') }
 $run = Invoke-World $world (Join-Path $repo 'agent/install/Install-ConstructAgent.ps1')
 Assert ($run.Code -eq 0) "Install-ConstructAgent.ps1 succeeds: $($run.Output)"
-Assert (@($run.Calls | Where-Object { $_ -match '^code --install-extension .*3\.0\.0.construct\.vsix --force$' }).Count -eq 1) "it installs the extension: $($run.Calls -join ' | ')"
+Assert (@($run.Calls | Where-Object { $_ -match '^code --install-extension .*app\.incoming.construct\.vsix --force$' }).Count -eq 1) "it installs the extension: $($run.Calls -join ' | ')"
 $world = New-World 'agent-installer-fail' @{ code = 'fail'; arguments = @('-Package', $zip, '-Version', '3.0.0', '-NoStart') }
 $run = Invoke-World $world (Join-Path $repo 'agent/install/Install-ConstructAgent.ps1')
 Assert ($run.Code -ne 0 -and $run.Output -match 'did not install the Construct extension') "and fails when VS Code refuses it: $($run.Output)"
@@ -227,7 +228,7 @@ $run = Invoke-World $world (Join-Path $repo 'install.ps1')
 Assert ($run.Code -ne 0 -and $run.Output -match 'does not match the SHA-256') "a mismatch fails: $($run.Output)"
 Assert (@($run.Calls | Where-Object { $_ -like 'start *ConstructCompanion.exe --background' }).Count -eq 1) 'the Companion is started again'
 Assert (-not ($run.Calls -contains 'registry remove ConstructCompanion')) 'its autostart stays'
-Assert (-not (Test-Path (Join-Path $world 'local/Construct/agent/versions/2.0.0+abc'))) 'nothing is installed'
+Assert (-not (Test-Path (Join-Path $world 'local/Construct/agent/app'))) 'nothing is installed'
 
 # ---- install.ps1: an agent that does not come up counts as a failure too ----
 $world = New-World 'nostart' @{ companion = $true; agentStarts = $false }
@@ -319,7 +320,7 @@ foreach ($class in @('e', 'f')) {
         $installed = Join-Path $world 'local/The-Construct/permissionBRICK-The-Construct-rework/The-Construct-rework'
         Assert (Test-Path (Join-Path $installed 'install.ps1')) "the class $($class.ToUpper()) updater replaced the scripts folder with this release"
         if ($case.want -eq 'ok') {
-            Assert (Test-Path (Join-Path $world 'local/Construct/agent/versions/2.0.0+abc/construct-agent.exe')) "class $($class.ToUpper()): the agent is installed"
+            Assert (Test-Path (Join-Path $world 'local/Construct/agent/app/construct-agent.exe')) "class $($class.ToUpper()): the agent is installed"
             Assert ((Get-Content -Raw (Join-Path $installed '.construct-settings.json')) -match '"constructRef":\s*"rework"') "class $($class.ToUpper()): the marker advanced after the agent started"
             Assert ($run.Output -match 'Construct Companion: unchanged') "class $($class.ToUpper()): the Companion hook reports unchanged"
         } else {

@@ -15,49 +15,53 @@ public interface ITrayIconSettings
 }
 
 /// <summary>
-/// Windows 11 remembers per executable path whether a tray icon shows on the taskbar, and each update runs the agent from
-/// a new <c>versions/&lt;version&gt;/</c> directory: without help every update put the icon back into the overflow.
-/// Once Windows has an entry for this version's icon, the choice made for the previous version is
-/// copied to it (when there is none, a taskbar place any earlier version or the old Companion had), unless the user
-/// already chose for this version; entries of versions no longer on disk are removed. A fixed icon GUID (<c>NIF_GUID</c>)
+/// The tray icon's first place. Windows 11 remembers per executable path whether a tray icon shows on the taskbar, and the
+/// agent always runs from <c>app\</c>, so after the first start the place stays wherever the user puts it, across updates.
+/// That first start (the caller runs this once, then writes <see cref="DoneFile"/>) gives the icon a place the user has not
+/// chosen yet: the one an earlier install had (an agent from the old <c>versions\&lt;v&gt;\</c> folders, or the old
+/// Companion), else the taskbar; the entries of those earlier agent paths are removed. A fixed icon GUID (<c>NIF_GUID</c>)
 /// would be the documented way, but Windows binds such a GUID to one path unless every build is signed by one publisher.
 /// </summary>
 public static class TrayIconCarryOver
 {
     public const string CompanionExecutable = "ConstructCompanion.exe";
 
+    /// <summary>The file in the agent's directory that says the first place was given.</summary>
+    public const string DoneFile = "tray-placed";
+
     public enum Outcome
     {
         /// <summary>Windows has no entry for this executable yet: ask again in a moment.</summary>
         NotYet,
         Unchanged,
-        /// <summary>This version's entry got the earlier choice: the icon is added again so the taskbar reads it.</summary>
+        /// <summary>The entry got its first place: the icon is added again so the taskbar reads it.</summary>
         Changed,
     }
 
-    /// <param name="self">This process's executable.</param>
-    /// <param name="versionsDirectory">The agent's <c>versions/</c> directory.</param>
-    /// <param name="previous">The previous version's executable (<c>install.json</c>), when there is one.</param>
-    /// <param name="exists">Whether a file exists (the tests fake the disk).</param>
-    public static Outcome Apply(ITrayIconSettings settings, string self, string versionsDirectory, string? previous, Func<string, bool> exists)
+    /// <param name="self">This process's executable (in <c>app\</c>).</param>
+    /// <param name="agentDirectory">The agent's directory: entries of other executables in it are earlier installs.</param>
+    /// <param name="before">The executable of the version that ran before this one (an old <c>versions\&lt;v&gt;\</c>), whose choice comes first.</param>
+    public static Outcome Apply(ITrayIconSettings settings, string self, string agentDirectory, string? before = null)
     {
         var entries = settings.List();
         var own = entries.FirstOrDefault(e => Same(e.ExecutablePath, self));
         if (own is null) return Outcome.NotYet;
 
-        var root = versionsDirectory.TrimEnd('\\', '/') + Path.DirectorySeparatorChar;
-        var older = entries.Where(e => e != own && e.ExecutablePath is { } path && path.StartsWith(root, StringComparison.OrdinalIgnoreCase)).ToArray();
-        foreach (var gone in older.Where(e => !exists(e.ExecutablePath!)))
+        var root = agentDirectory.TrimEnd('\\', '/') + Path.DirectorySeparatorChar;
+        var older = entries.Where(e => e != own && e.ExecutablePath is { } path && path.Replace('/', '\\').StartsWith(root.Replace('/', '\\'), StringComparison.OrdinalIgnoreCase)).ToArray();
+        foreach (var gone in older)
         {
             try { settings.Delete(gone.Id); }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Security.SecurityException) { }
         }
 
         if (own.Promoted is not null) return Outcome.Unchanged;
-        var choice = previous is null ? null : older.FirstOrDefault(e => Same(e.ExecutablePath, previous))?.Promoted;
-        choice ??= older.Concat(entries.Where(e => string.Equals(Path.GetFileName(e.ExecutablePath?.Replace('\\', '/')), CompanionExecutable, StringComparison.OrdinalIgnoreCase)))
-            .Any(e => e.Promoted == 1) ? 1 : null;
-        if (choice is not { } value) return Outcome.Unchanged;
+        var companion = entries.Where(e => string.Equals(Path.GetFileName(e.ExecutablePath?.Replace('\\', '/')), CompanionExecutable, StringComparison.OrdinalIgnoreCase));
+        var earlier = older.Concat(companion).Select(e => e.Promoted).Where(p => p is not null).ToArray();
+        // The version that ran before decides; else any earlier taskbar place, else an earlier overflow place; a fresh
+        // install goes on the taskbar.
+        var value = (before is null ? null : older.FirstOrDefault(e => Same(e.ExecutablePath, before))?.Promoted)
+            ?? (earlier.Length == 0 || earlier.Contains(1) ? 1 : 0);
         settings.SetPromoted(own.Id, value);
         return Outcome.Changed;
     }

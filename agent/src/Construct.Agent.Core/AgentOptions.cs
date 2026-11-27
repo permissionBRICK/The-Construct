@@ -40,7 +40,10 @@ public sealed class AgentOptions
     /// <summary>The one-time upgrade's OS parts (11.6); null picks the default (no DPAPI: the old files cannot be opened).</summary>
     public Upgrade.IUpgradePlatform? Upgrade { get; init; }
 
-    public string Version { get; init; } =
+    public string Version { get; init; } = CurrentVersion;
+
+    /// <summary>This build's version as the channel manifest names it (<c>X.Y.Z+commit</c>), or <c>development</c>.</summary>
+    public static string CurrentVersion { get; } =
         typeof(AgentOptions).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion ?? "development";
 
     public string StatePath => Path.Combine(DataDirectory, "state.json");
