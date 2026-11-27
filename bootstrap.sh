@@ -71,6 +71,8 @@ step "Installing base packages"
 # apt-get that waits out apt's locks: Ubuntu's apt-daily timer may hold them right after a boot, and this runs on
 # every provision.
 . "$(dirname "${BASH_SOURCE[0]}")/bin/apt-wait.sh"
+# The installer's GeoIP country mirror (e.g. at.archive.ubuntu.com) can break on its own; use the primary archive.
+bash "$(dirname "${BASH_SOURCE[0]}")/bin/apt-primary-archive.sh"
 apt_get update
 # inotify-tools: the host's notification watcher blocks on `inotifywait` over its
 # long-lived SSH connection, so an agent's `construct notify` reaches the desktop the
